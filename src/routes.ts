@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
 import type { ClaimResponse, UpgradeResponse, BattleResponse } from './types.js';
-import { NotFoundError, InsufficientResourceError, InternalError } from './shared/errors.js';
+import { NotFoundError, InsufficientResourceError, InternalError, AppError } from './shared/errors.js';
 import { validatePlayerId, validateJson, createPlayerSchema } from './shared/validator.js';
 import { authMiddleware } from './shared/auth.js';
 import { createPlayer, getPlayer, getAllPlayers, updatePlayer } from './store.js';
 import { logger } from './shared/logger.js';
+import { rateLimit } from './shared/rate-limit.js';
+import { GAME, calculateProduction } from './shared/game-math.js';
 import type { z } from 'zod';
 
 const routes = new Hono();
@@ -21,6 +23,12 @@ function requirePlayer(id: string) {
 routes.post('/api/players', validateJson(createPlayerSchema), (c) => {
   const { nickname } = c.get('parsedBody') as z.infer<typeof createPlayerSchema>;
 
+  // 닉네임 중복 체크
+  const existing = getAllPlayers().find((p) => p.nickname === nickname);
+  if (existing) {
+    throw new AppError('이미 사용 중인 닉네임입니다.', 409, 'NICKNAME_CONFLICT');
+  }
+
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
   const apiKey = crypto.randomUUID();
@@ -30,7 +38,7 @@ routes.post('/api/players', validateJson(createPlayerSchema), (c) => {
     nickname,
     apiKey,
     electricity: 0,
-    electricityPerSecond: 1,
+    electricityPerSecond: GAME.BASE_ELECTRICITY_PER_SECOND,
     lastClaimedAt: now,
     createdAt: now,
     updatedAt: now,
@@ -49,22 +57,20 @@ routes.get('/api/players', (c) => {
 
 // ─── Claim ─────────────────────────────────────────
 
-routes.post('/api/players/:id/claim', validatePlayerId, authMiddleware, (c) => {
+routes.post('/api/players/:id/claim', validatePlayerId, rateLimit(1, 1000), authMiddleware, (c) => {
   const id = c.req.param('id');
   const player = requirePlayer(id);
 
-  const now = Date.now();
-  const lastClaimed = new Date(player.lastClaimedAt).getTime();
-  const maxIdleSeconds = 8 * 60 * 60;
-  const rawSeconds = Math.floor((now - lastClaimed) / 1000);
-  const elapsedSeconds = Math.min(rawSeconds, maxIdleSeconds);
+  const { elapsed: elapsedSeconds, produced, maxCapped } = calculateProduction(
+    player.lastClaimedAt,
+    player.electricityPerSecond,
+  );
 
   if (elapsedSeconds <= 0) {
     return c.json({ player, claimed: 0, elapsedSeconds: 0, maxCapped: false } as ClaimResponse);
   }
 
-  const produced = elapsedSeconds * player.electricityPerSecond;
-  const nowISO = new Date(now).toISOString();
+  const nowISO = new Date().toISOString();
 
   const updated = updatePlayer(id, {
     electricity: player.electricity + produced,
@@ -79,27 +85,24 @@ routes.post('/api/players/:id/claim', validatePlayerId, authMiddleware, (c) => {
     player: updated,
     claimed: produced,
     elapsedSeconds,
-    maxCapped: rawSeconds > maxIdleSeconds,
+    maxCapped,
   } as ClaimResponse);
 });
 
 routes.get('/api/players/:id/claim', validatePlayerId, (c) => {
   const player = requirePlayer(c.req.param('id'));
-  const now = Date.now();
-  const lastClaimed = new Date(player.lastClaimedAt).getTime();
-  const maxIdleSeconds = 8 * 60 * 60;
-  const rawSeconds = Math.max(0, Math.floor((now - lastClaimed) / 1000));
-  const elapsedSeconds = Math.min(rawSeconds, maxIdleSeconds);
-  const pending = elapsedSeconds * player.electricityPerSecond;
-
-  return c.json({ pending, elapsedSeconds, maxCapped: rawSeconds > maxIdleSeconds, electricityPerSecond: player.electricityPerSecond });
+  const { elapsed, produced: pending, maxCapped } = calculateProduction(
+    player.lastClaimedAt,
+    player.electricityPerSecond,
+  );
+  return c.json({ pending, elapsedSeconds: elapsed, maxCapped, electricityPerSecond: player.electricityPerSecond });
 });
 
 // ─── 업그레이드 ────────────────────────────────────
 
 routes.get('/api/players/:id/upgrade', validatePlayerId, (c) => {
   const player = requirePlayer(c.req.param('id'));
-  const cost = player.electricityPerSecond * 50;
+  const cost = player.electricityPerSecond * GAME.UPGRADE_COST_MULTIPLIER;
 
   return c.json({
     currentElectricityPerSecond: player.electricityPerSecond,
@@ -109,10 +112,10 @@ routes.get('/api/players/:id/upgrade', validatePlayerId, (c) => {
   });
 });
 
-routes.post('/api/players/:id/upgrade', validatePlayerId, authMiddleware, (c) => {
+routes.post('/api/players/:id/upgrade', validatePlayerId, rateLimit(2, 1000), authMiddleware, (c) => {
   const id = c.req.param('id');
   const player = requirePlayer(id);
-  const cost = player.electricityPerSecond * 50;
+  const cost = player.electricityPerSecond * GAME.UPGRADE_COST_MULTIPLIER;
 
   if (player.electricity < cost) {
     throw new InsufficientResourceError('전기', cost, player.electricity);
@@ -134,12 +137,10 @@ routes.post('/api/players/:id/upgrade', validatePlayerId, authMiddleware, (c) =>
 
 routes.get('/api/players/:id/idle-rewards', validatePlayerId, (c) => {
   const player = requirePlayer(c.req.param('id'));
-  const now = Date.now();
-  const lastClaimed = new Date(player.lastClaimedAt).getTime();
-  const maxIdleSeconds = 8 * 60 * 60;
-  const rawSeconds = Math.max(0, Math.floor((now - lastClaimed) / 1000));
-  const elapsedSeconds = Math.min(rawSeconds, maxIdleSeconds);
-  const pending = elapsedSeconds * player.electricityPerSecond;
+  const { elapsed: elapsedSeconds, produced: pending, maxCapped } = calculateProduction(
+    player.lastClaimedAt,
+    player.electricityPerSecond,
+  );
 
   const hours = Math.floor(elapsedSeconds / 3600);
   const minutes = Math.floor((elapsedSeconds % 3600) / 60);
@@ -149,14 +150,14 @@ routes.get('/api/players/:id/idle-rewards', validatePlayerId, (c) => {
     offlineTime: `${hours}h ${minutes}m ${seconds}s`,
     pendingReward: pending,
     electricityPerSecond: player.electricityPerSecond,
-    maxCapped: rawSeconds > maxIdleSeconds,
-    maxIdleHours: 8,
+    maxCapped,
+    maxIdleHours: GAME.MAX_IDLE_SECONDS / 3600,
   });
 });
 
 // ─── 전투 ──────────────────────────────────────────
 
-routes.post('/api/players/:id/battle', validatePlayerId, authMiddleware, (c) => {
+routes.post('/api/players/:id/battle', validatePlayerId, rateLimit(1, 3000), authMiddleware, (c) => {
   const id = c.req.param('id');
   const player = requirePlayer(id);
   const playerPower = player.electricityPerSecond * 10;
@@ -188,9 +189,10 @@ routes.get('/api/rankings', (c) => {
 
   const rankings = players
     .map((player) => {
-      const lastClaimed = new Date(player.lastClaimedAt).getTime();
-      const elapsedSeconds = Math.max(0, Math.floor((now - lastClaimed) / 1000));
-      const pending = elapsedSeconds * player.electricityPerSecond;
+      const { produced: pending } = calculateProduction(
+        player.lastClaimedAt,
+        player.electricityPerSecond,
+      );
       return {
         id: player.id,
         nickname: player.nickname,
