@@ -3,6 +3,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "build": "tsc",
     "start": "node dist/index.js"
   },
@@ -12,7 +14,9 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "@vitest/expect": "^4.1.10",
     "tsx": "^4.23.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }
