@@ -4,6 +4,7 @@ import { NotFoundError, InsufficientResourceError, InternalError } from './share
 import { validatePlayerId, validateJson, createPlayerSchema } from './shared/validator.js';
 import { authMiddleware } from './shared/auth.js';
 import { createPlayer, getPlayer, getAllPlayers, updatePlayer } from './store.js';
+import { logger } from './shared/logger.js';
 import type { z } from 'zod';
 
 const routes = new Hono();
@@ -72,6 +73,8 @@ routes.post('/api/players/:id/claim', validatePlayerId, authMiddleware, (c) => {
 
   if (!updated) throw new InternalError();
 
+  logger.info({ playerId: id, claimed: produced, elapsed: elapsedSeconds, event: 'claim' });
+
   return c.json({
     player: updated,
     claimed: produced,
@@ -122,6 +125,8 @@ routes.post('/api/players/:id/upgrade', validatePlayerId, authMiddleware, (c) =>
 
   if (!updated) throw new InternalError();
 
+  logger.info({ playerId: id, cost, newEps: updated.electricityPerSecond, event: 'upgrade' });
+
   return c.json({ player: updated, cost, newElectricityPerSecond: updated.electricityPerSecond } as UpgradeResponse);
 });
 
@@ -169,6 +174,8 @@ routes.post('/api/players/:id/battle', validatePlayerId, authMiddleware, (c) => 
 
   const updated = updatePlayer(id, { electricity: player.electricity + reward });
   if (!updated) throw new InternalError();
+
+  logger.info({ playerId: id, won, reward, enemy: enemyName, event: 'battle' });
 
   return c.json({ player: updated, won, reward, enemyName, enemyPower, playerPower } as BattleResponse);
 });

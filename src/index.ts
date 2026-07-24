@@ -5,8 +5,25 @@ import { secureHeaders } from 'hono/secure-headers';
 import { bodyLimit } from 'hono/body-limit';
 import routes from './routes.js';
 import { AppError } from './shared/errors.js';
+import { logger } from './shared/logger.js';
 
 const app = new Hono();
+
+// ─── 요청 로깅 미들웨어 ────────────────────────────
+
+app.use('*', async (c, next) => {
+  if (c.req.path === '/health' || c.req.path === '/ready') {
+    return next();
+  }
+  const start = Date.now();
+  await next();
+  logger.info({
+    method: c.req.method,
+    path: c.req.path,
+    status: c.res.status,
+    durationMs: Date.now() - start,
+  });
+});
 
 // ─── 보안 미들웨어 ─────────────────────────────────
 
@@ -38,7 +55,7 @@ app.onError((err, c) => {
     );
   }
 
-  console.error('[UNHANDLED_ERROR]', err);
+  logger.error(err);
   const message =
     process.env.NODE_ENV === 'production'
       ? '서버 내부 오류가 발생했습니다.'
@@ -57,19 +74,33 @@ app.notFound((c) => {
 
 app.get('/', (c) => c.text('Idle Game Server'));
 app.get('/health', (c) => c.json({ status: 'ok' }));
+
+let isReady = true;
+app.get('/ready', (c) => {
+  if (!isReady) {
+    return c.json({ status: 'not ready' }, 503);
+  }
+  return c.json({
+    status: 'ready',
+    uptime: Math.floor(process.uptime()),
+  });
+});
+
 app.route('/', routes);
 
 // ─── 서버 시작 ─────────────────────────────────────
 
 const server = serve({ fetch: app.fetch, port: 3000 }, (info) => {
-  console.log(`Server is running on http://localhost:${info.port}`);
+  logger.info(`Server running on http://localhost:${info.port}`);
 });
 
-// Graceful shutdown
+// ─── Graceful Shutdown ─────────────────────────────
+
 const shutdown = (signal: string) => {
-  console.log(`Received ${signal}, shutting down...`);
+  logger.info(`${signal} received, shutting down...`);
+  isReady = false;
   server.close(() => {
-    console.log('Server closed');
+    logger.info('Server closed');
     process.exit(0);
   });
 };
