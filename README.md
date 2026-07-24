@@ -1,13 +1,65 @@
 # Idle Game Server
 
-Hono + TypeScript 기반 방치형 게임 서버
+[![CI](https://github.com/<user>/idle-game-server/actions/workflows/ci.yml/badge.svg)](https://github.com/<user>/idle-game-server/actions/workflows/ci.yml)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
+Hono + TypeScript 기반 방치형(idle) 게임 서버입니다. 시간이 지남에 따라 자동으로 자원(전기)이 쌓이고, 모은 자원으로 업그레이드와 전투를 진행할 수 있습니다.
+
+## 기능
+
+- ⚡ **방치형 자원 생산** — 오프라인 상태에서도 전기가 자동 생산 (최대 8시간)
+- ⬆️ **업그레이드 시스템** — 전기를 소모하여 초당 생산량 증가
+- ⚔️ **전투 시스템** — 랜덤 적과 전투하여 추가 전리품 획득
+- 🏆 **랭킹 시스템** — 총 자산 기준 실시간 순위 경쟁
+- 🛡️ **입력값 검증** — Zod 기반 스키마 검증
+- 📝 **구조적 로깅** — Pino 로거로 모든 요청/게임 이벤트 기록
+- 🔄 **Graceful Shutdown** — 안전한 서버 종료
+- ✅ **Health Check** — `/health`, `/ready` 엔드포인트
 
 ## 기술 스택
 
-- **Runtime**: Node.js
-- **Framework**: Hono
-- **Language**: TypeScript
-- **Test**: Vitest
+| 구분 | 기술 |
+|------|------|
+| **Runtime** | Node.js 20+ |
+| **Framework** | Hono 4 |
+| **Language** | TypeScript 5 |
+| **Validation** | Zod |
+| **Logging** | Pino |
+| **Test** | Vitest |
+| **CI** | GitHub Actions |
+
+## 프로젝트 구조
+
+```
+idle-game-server/
+├── .github/
+│   └── workflows/
+│       └── ci.yml              # CI 파이프라인
+├── src/
+│   ├── __tests__/
+│   │   ├── routes.test.ts      # API 통합 테스트
+│   │   └── store.test.ts       # 저장소 단위 테스트
+│   ├── shared/
+│   │   ├── errors.ts           # 커스텀 에러 클래스
+│   │   └── validator.ts        # Zod 검증 미들웨어
+│   ├── index.ts                # 서버 엔트리포인트
+│   ├── logger.ts               # Pino 로거 설정
+│   ├── routes.ts               # API 라우트 정의
+│   ├── store.ts                # 인메모리 데이터 저장소
+│   └── types.ts                # TypeScript 타입 정의
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+## 환경 변수
+
+| 변수 | 기본값 | 설명 |
+|------|:---:|------|
+| `PORT` | `3000` | 서버 포트 |
+| `LOG_LEVEL` | `info` | 로그 레벨 (`debug`, `info`, `warn`, `error`) |
+| `NODE_ENV` | — | `production` 설정 시 에러 메시지 간소화 |
 
 ## 실행
 

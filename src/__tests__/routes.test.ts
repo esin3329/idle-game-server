@@ -2,14 +2,17 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { Hono } from 'hono';
 import routes from '../routes.js';
 import { createPlayer, deletePlayer, getAllPlayers } from '../store.js';
+import { AppError } from '../shared/errors.js';
 import type { Player } from '../types.js';
 
 const nowISO = new Date().toISOString();
+const NONEXISTENT_ID = '00000000-0000-0000-0000-000000000000';
 
 function makePlayer(overrides: Partial<Player> = {}): Player {
   return {
     id: crypto.randomUUID(),
     nickname: 'test',
+    apiKey: crypto.randomUUID(),
     electricity: 0,
     electricityPerSecond: 1,
     lastClaimedAt: nowISO,
@@ -29,8 +32,24 @@ beforeEach(() => {
 
 function createApp() {
   const app = new Hono();
+
+  app.onError((err, c) => {
+    if (err instanceof AppError) {
+      return c.json({ error: err.message, code: err.code }, err.status as 400 | 401 | 403 | 404 | 500);
+    }
+    if (err instanceof SyntaxError && err.message.includes('JSON')) {
+      return c.json({ error: '잘못된 JSON 형식입니다.', code: 'INVALID_JSON' }, 400);
+    }
+    return c.json({ error: err.message, code: 'INTERNAL_ERROR' }, 500);
+  });
+
+  app.notFound((c) => c.json({ error: 'Not found', code: 'ROUTE_NOT_FOUND' }, 404));
   app.route('/', routes);
   return app;
+}
+
+function authHeader(apiKey: string) {
+  return { Authorization: `Bearer ${apiKey}` };
 }
 
 describe('POST /api/players', () => {
@@ -86,29 +105,35 @@ describe('GET /api/players', () => {
 describe('GET /api/players/:id', () => {
   it('존재하지 않는 ID는 404를 반환해야 한다', async () => {
     const app = createApp();
-    const res = await app.request('/api/players/nonexistent', { method: 'GET' });
+    const res = await app.request(`/api/players/${NONEXISTENT_ID}`, { method: 'GET' });
     expect(res.status).toBe(404);
   });
 });
 
 describe('POST /api/players/:id/claim', () => {
-  it('존재하지 않는 플레이어는 404를 반환해야 한다', async () => {
+  it('인증 없이 요청하면 401을 반환해야 한다', async () => {
     const app = createApp();
-    const res = await app.request('/api/players/nonexistent/claim', { method: 'POST' });
-    expect(res.status).toBe(404);
+    const id = crypto.randomUUID(); // valid UUID
+    const player = makePlayer({ id });
+    createPlayer(player);
+
+    const res = await app.request(`/api/players/${id}/claim`, { method: 'POST' });
+    expect(res.status).toBe(401);
   });
 
   it('전기를 수집하면 electricity가 증가해야 한다', async () => {
     const app = createApp();
-    // 과거 시간으로 플레이어 생성
-    const pastTime = new Date(Date.now() - 10000).toISOString(); // 10초 전
+    const pastTime = new Date(Date.now() - 10000).toISOString();
     const player = makePlayer({ lastClaimedAt: pastTime });
     createPlayer(player);
 
-    const res = await app.request(`/api/players/${player.id}/claim`, { method: 'POST' });
+    const res = await app.request(`/api/players/${player.id}/claim`, {
+      method: 'POST',
+      headers: authHeader(player.apiKey),
+    });
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.claimed).toBeGreaterThanOrEqual(9); // 10초 * 1 = 10, 약간의 오차 허용
+    expect(body.claimed).toBeGreaterThanOrEqual(9);
     expect(body.elapsedSeconds).toBeGreaterThanOrEqual(9);
     expect(body.player.electricity).toBeGreaterThanOrEqual(9);
   });
@@ -130,15 +155,27 @@ describe('GET /api/players/:id/claim', () => {
 });
 
 describe('POST /api/players/:id/upgrade', () => {
+  it('인증 없이 요청하면 401을 반환해야 한다', async () => {
+    const app = createApp();
+    const player = makePlayer({ electricity: 0 });
+    createPlayer(player);
+
+    const res = await app.request(`/api/players/${player.id}/upgrade`, { method: 'POST' });
+    expect(res.status).toBe(401);
+  });
+
   it('전기가 부족하면 업그레이드에 실패해야 한다', async () => {
     const app = createApp();
     const player = makePlayer({ electricity: 0, electricityPerSecond: 1 });
     createPlayer(player);
 
-    const res = await app.request(`/api/players/${player.id}/upgrade`, { method: 'POST' });
+    const res = await app.request(`/api/players/${player.id}/upgrade`, {
+      method: 'POST',
+      headers: authHeader(player.apiKey),
+    });
     expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body.error).toBe('전기가 부족합니다.');
+    expect(body.error).toBe('전기이(가) 부족합니다.');
   });
 
   it('전기가 충분하면 업그레이드해야 한다', async () => {
@@ -146,19 +183,16 @@ describe('POST /api/players/:id/upgrade', () => {
     const player = makePlayer({ electricity: 100, electricityPerSecond: 1 });
     createPlayer(player);
 
-    const res = await app.request(`/api/players/${player.id}/upgrade`, { method: 'POST' });
+    const res = await app.request(`/api/players/${player.id}/upgrade`, {
+      method: 'POST',
+      headers: authHeader(player.apiKey),
+    });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.cost).toBe(50);
     expect(body.newElectricityPerSecond).toBe(2);
     expect(body.player.electricityPerSecond).toBe(2);
     expect(body.player.electricity).toBe(50);
-  });
-
-  it('존재하지 않는 플레이어는 404를 반환해야 한다', async () => {
-    const app = createApp();
-    const res = await app.request('/api/players/nonexistent/upgrade', { method: 'POST' });
-    expect(res.status).toBe(404);
   });
 });
 
@@ -179,10 +213,13 @@ describe('GET /api/players/:id/upgrade', () => {
 });
 
 describe('POST /api/players/:id/battle', () => {
-  it('존재하지 않는 플레이어는 404를 반환해야 한다', async () => {
+  it('인증 없이 요청하면 401을 반환해야 한다', async () => {
     const app = createApp();
-    const res = await app.request('/api/players/nonexistent/battle', { method: 'POST' });
-    expect(res.status).toBe(404);
+    const player = makePlayer();
+    createPlayer(player);
+
+    const res = await app.request(`/api/players/${player.id}/battle`, { method: 'POST' });
+    expect(res.status).toBe(401);
   });
 
   it('전투 후 electricity가 증가해야 한다 (승리 시)', async () => {
@@ -190,10 +227,13 @@ describe('POST /api/players/:id/battle', () => {
     const player = makePlayer({ electricity: 100, electricityPerSecond: 10 });
     createPlayer(player);
 
-    const res = await app.request(`/api/players/${player.id}/battle`, { method: 'POST' });
+    const res = await app.request(`/api/players/${player.id}/battle`, {
+      method: 'POST',
+      headers: authHeader(player.apiKey),
+    });
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.playerPower).toBe(100); // 10 * 10
+    expect(body.playerPower).toBe(100);
     expect(body.enemyName).toBeDefined();
     expect(body.enemyPower).toBeGreaterThan(0);
     if (body.won) {
@@ -206,21 +246,21 @@ describe('POST /api/players/:id/battle', () => {
 
   it('적 전투력이 플레이어보다 높으면 패배할 수 있다', async () => {
     const app = createApp();
-    // electricityPerSecond 0.1 → playerPower = 1, 적이 더 강할 확률 높음
+    // electricityPerSecond 0.1 → playerPower = 1
     const player = makePlayer({ electricity: 0, electricityPerSecond: 0.1 });
     createPlayer(player);
 
-    // 여러 번 테스트해서 패배 케이스도 확인 (확률적)
     let hasWon = false;
     let hasLost = false;
     for (let i = 0; i < 20; i++) {
-      const res = await app.request(`/api/players/${player.id}/battle`, { method: 'POST' });
+      const res = await app.request(`/api/players/${player.id}/battle`, {
+        method: 'POST',
+        headers: authHeader(player.apiKey),
+      });
       const body = await res.json();
       if (body.won) hasWon = true;
       else hasLost = true;
     }
-    // 확률적으로 둘 다 나올 수 있지만 반드시 그렇지는 않음
-    // 최소한 응답 형식만 검증
     expect(hasWon || hasLost).toBe(true);
   });
 });

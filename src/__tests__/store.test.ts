@@ -14,6 +14,7 @@ function makePlayer(overrides: Partial<Player> = {}): Player {
   return {
     id: crypto.randomUUID(),
     nickname: 'test',
+    apiKey: crypto.randomUUID(),
     electricity: 0,
     electricityPerSecond: 1,
     lastClaimedAt: now,

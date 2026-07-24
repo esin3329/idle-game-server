@@ -1,6 +1,7 @@
 export interface Player {
   id: string;
   nickname: string;
+  apiKey: string;
   electricity: number;
   electricityPerSecond: number;
   lastClaimedAt: string;

@@ -30,4 +30,5 @@ node_modules/
 .env
 *.db
 *.sqlite
+data.json
 dist/
