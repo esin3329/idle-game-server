@@ -5,27 +5,13 @@ import { secureHeaders } from 'hono/secure-headers';
 import { bodyLimit } from 'hono/body-limit';
 import routes from './routes.js';
 import { AppError } from './shared/errors.js';
-import logger from './logger.js';
 
 const app = new Hono();
 
-// ─── 요청 로깅 미들웨어 ────────────────────────────
-
-app.use('*', async (c, next) => {
-  const start = Date.now();
-  const { method, url } = c.req;
-  logger.info({ method, url }, '--> request');
-  await next();
-  const duration = Date.now() - start;
-  logger.info({ method, url, status: c.res.status, duration: `${duration}ms` }, '<-- response');
-});
-
 // ─── 보안 미들웨어 ─────────────────────────────────
 
-// 1. 보안 헤더
 app.use('*', secureHeaders());
 
-// 2. CORS
 app.use('*', cors({
   origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:5173'],
   allowMethods: ['GET', 'POST'],
@@ -33,7 +19,6 @@ app.use('*', cors({
   maxAge: 86400,
 }));
 
-// 3. Body 크기 제한 (50KB)
 app.use('*', bodyLimit({ maxSize: 50 * 1024 }));
 
 // ─── 에러 처리 ─────────────────────────────────────
@@ -53,7 +38,7 @@ app.onError((err, c) => {
     );
   }
 
-  logger.error(err, '[UNHANDLED_ERROR]');
+  console.error('[UNHANDLED_ERROR]', err);
   const message =
     process.env.NODE_ENV === 'production'
       ? '서버 내부 오류가 발생했습니다.'
@@ -68,42 +53,25 @@ app.notFound((c) => {
   );
 });
 
-// ─── 헬스 체크 ─────────────────────────────────────
-
-app.get('/health', (c) => c.json({ status: 'ok', uptime: process.uptime() }));
-app.get('/ready', (c) => c.json({ status: 'ok' }));
-
 // ─── 라우트 ────────────────────────────────────────
 
 app.get('/', (c) => c.text('Idle Game Server'));
+app.get('/health', (c) => c.json({ status: 'ok' }));
 app.route('/', routes);
 
-// ─── 서버 시작 + Graceful Shutdown ────────────────
+// ─── 서버 시작 ─────────────────────────────────────
 
-const server = serve(
-  { fetch: app.fetch, port: Number(process.env.PORT) || 3000 },
-  (info) => {
-    logger.info(`Server is running on http://localhost:${info.port}`);
-  },
-);
+const server = serve({ fetch: app.fetch, port: 3000 }, (info) => {
+  console.log(`Server is running on http://localhost:${info.port}`);
+});
 
-let shuttingDown = false;
-
-function shutdown(signal: string) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-  logger.info(`Received ${signal}, shutting down gracefully...`);
-
+// Graceful shutdown
+const shutdown = (signal: string) => {
+  console.log(`Received ${signal}, shutting down...`);
   server.close(() => {
-    logger.info('Server closed');
+    console.log('Server closed');
     process.exit(0);
   });
-
-  setTimeout(() => {
-    logger.warn('Forced shutdown after timeout');
-    process.exit(1);
-  }, 10000);
-}
-
+};
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
