@@ -6,8 +6,9 @@ import { bodyLimit } from 'hono/body-limit';
 import routes from './routes.js';
 import { AppError } from './shared/errors.js';
 import { logger } from './shared/logger.js';
+import { DEFAULT_PORT } from './config.js';
 
-const app = new Hono();
+const app = new Hono<{ Variables: { requestId: string; userId?: string } }>();
 
 // ─── 요청 로깅 미들웨어 ────────────────────────────
 
@@ -15,13 +16,21 @@ app.use('*', async (c, next) => {
   if (c.req.path === '/health' || c.req.path === '/ready') {
     return next();
   }
+
+  // Request ID: 클라이언트 제공 또는 자동 생성
+  const requestId = c.req.header('X-Request-Id') || crypto.randomUUID();
+  c.set('requestId', requestId);
+  c.res.headers.set('X-Request-Id', requestId);
+
   const start = Date.now();
   await next();
   logger.info({
+    requestId,
     method: c.req.method,
     path: c.req.path,
     status: c.res.status,
     durationMs: Date.now() - start,
+    ...(c.get('userId') ? { userId: c.get('userId') } : {}),
   });
 });
 
@@ -76,13 +85,31 @@ app.get('/', (c) => c.text('Idle Game Server'));
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
 let isReady = true;
-app.get('/ready', (c) => {
+let dbConnected = false;
+
+app.get('/ready', async (c) => {
   if (!isReady) {
     return c.json({ status: 'not ready' }, 503);
   }
+
+  // DB 연결 상태 확인
+  try {
+    if (process.env.DB_HOST) {
+      const { getPool } = await import('./db/connection.js');
+      const pool = getPool();
+      await pool.query('SELECT 1');
+      dbConnected = true;
+    }
+  } catch {
+    dbConnected = false;
+  }
+
   return c.json({
-    status: 'ready',
+    status: dbConnected ? 'ready' : 'degraded',
     uptime: Math.floor(process.uptime()),
+    checks: {
+      database: dbConnected ? 'connected' : 'disconnected',
+    },
   });
 });
 
@@ -90,7 +117,9 @@ app.route('/', routes);
 
 // ─── 서버 시작 ─────────────────────────────────────
 
-const server = serve({ fetch: app.fetch, port: 3000 }, (info) => {
+const PORT = parseInt(process.env.PORT || String(DEFAULT_PORT), 10);
+
+const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
   logger.info(`Server running on http://localhost:${info.port}`);
 });
 

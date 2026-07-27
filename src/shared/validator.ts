@@ -9,7 +9,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
  * :id 파라미터가 UUID 형식인지 검증하는 미들웨어
  */
 export async function validatePlayerId(c: Context, next: Next) {
-  const id = c.req.param('id');
+  const id = c.req.param('id')!;
   if (!UUID_REGEX.test(id)) {
     throw new BadRequestError('잘못된 플레이어 ID 형식입니다.');
   }

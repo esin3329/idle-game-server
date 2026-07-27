@@ -18,7 +18,7 @@ export class ForbiddenError extends AppError {
  * Bearer 토큰에서 apiKey 추출 → 플레이어 찾아서 context에 저장
  */
 export async function authMiddleware(c: Context, next: Next) {
-  const id = c.req.param('id');
+  const id = c.req.param('id')!;
   const authHeader = c.req.header('Authorization');
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {

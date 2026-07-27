@@ -24,7 +24,7 @@ export class BadRequestError extends AppError {
 }
 
 export class InsufficientResourceError extends AppError {
-  constructor(resource: string, required: number, current: number) {
+  constructor(resource: string, _required?: number, _current?: number) {
     super(
       `${resource}이(가) 부족합니다.`,
       400,

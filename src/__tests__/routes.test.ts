@@ -1,9 +1,22 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { existsSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { Hono } from 'hono';
+import { sign } from 'jsonwebtoken';
+
+// ─── 임시 디렉터리 + 주입 ───────────────────────────
+
+const tmpDir = mkdtempSync(join(homedir() || '/tmp', `idle-game-test-routes-`));
+
+import { setDataFilePath } from '../store.js';
 import routes from '../routes.js';
 import { createPlayer, deletePlayer, getAllPlayers } from '../store.js';
+import { clearRateLimits } from '../shared/rate-limit.js';
 import { AppError } from '../shared/errors.js';
 import type { Player } from '../types.js';
+
+setDataFilePath(join(tmpDir, 'data.json'));
 
 const nowISO = new Date().toISOString();
 const NONEXISTENT_ID = '00000000-0000-0000-0000-000000000000';
@@ -24,6 +37,7 @@ function makePlayer(overrides: Partial<Player> = {}): Player {
 
 // store 초기화
 beforeEach(() => {
+  clearRateLimits();
   const players = getAllPlayers();
   for (const p of players) {
     deletePlayer(p.id);
@@ -48,8 +62,11 @@ function createApp() {
   return app;
 }
 
-function authHeader(apiKey: string) {
-  return { Authorization: `Bearer ${apiKey}` };
+const JWT_SECRET = process.env.JWT_ACCESS_SECRET || 'dev-secret-change-in-production';
+
+function authToken(userId = 'test-user-id'): { Authorization: string; 'Idempotency-Key': string } {
+  const token = sign({ sub: userId, type: 'access' }, JWT_SECRET, { expiresIn: 3600 });
+  return { Authorization: `Bearer ${token}`, 'Idempotency-Key': crypto.randomUUID() };
 }
 
 describe('POST /api/players', () => {
@@ -113,11 +130,14 @@ describe('GET /api/players/:id', () => {
 describe('POST /api/players/:id/claim', () => {
   it('인증 없이 요청하면 401을 반환해야 한다', async () => {
     const app = createApp();
-    const id = crypto.randomUUID(); // valid UUID
+    const id = crypto.randomUUID();
     const player = makePlayer({ id });
     createPlayer(player);
 
-    const res = await app.request(`/api/players/${id}/claim`, { method: 'POST' });
+    const res = await app.request(`/api/players/${id}/claim`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+    });
     expect(res.status).toBe(401);
   });
 
@@ -129,7 +149,7 @@ describe('POST /api/players/:id/claim', () => {
 
     const res = await app.request(`/api/players/${player.id}/claim`, {
       method: 'POST',
-      headers: authHeader(player.apiKey),
+      headers: authToken(),
     });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -160,7 +180,10 @@ describe('POST /api/players/:id/upgrade', () => {
     const player = makePlayer({ electricity: 0 });
     createPlayer(player);
 
-    const res = await app.request(`/api/players/${player.id}/upgrade`, { method: 'POST' });
+    const res = await app.request(`/api/players/${player.id}/upgrade`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+    });
     expect(res.status).toBe(401);
   });
 
@@ -171,7 +194,7 @@ describe('POST /api/players/:id/upgrade', () => {
 
     const res = await app.request(`/api/players/${player.id}/upgrade`, {
       method: 'POST',
-      headers: authHeader(player.apiKey),
+      headers: authToken(),
     });
     expect(res.status).toBe(400);
     const body = await res.json();
@@ -185,7 +208,7 @@ describe('POST /api/players/:id/upgrade', () => {
 
     const res = await app.request(`/api/players/${player.id}/upgrade`, {
       method: 'POST',
-      headers: authHeader(player.apiKey),
+      headers: authToken(),
     });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -218,50 +241,91 @@ describe('POST /api/players/:id/battle', () => {
     const player = makePlayer();
     createPlayer(player);
 
-    const res = await app.request(`/api/players/${player.id}/battle`, { method: 'POST' });
+    const res = await app.request(`/api/players/${player.id}/battle`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+    });
     expect(res.status).toBe(401);
   });
 
-  it('전투 후 electricity가 증가해야 한다 (승리 시)', async () => {
+  it('승리 시 전기가 증가하고 보상을 받아야 한다', async () => {
     const app = createApp();
     const player = makePlayer({ electricity: 100, electricityPerSecond: 10 });
     createPlayer(player);
 
+    // Math.random 시퀀스: [적 변동 최소(0), 적 이름(0), 보상 비율 최소(0)]
+    // → enemyVariance = 0.8 (가장 약함), rewardRatio = 0.5 (최소)
+    const rand = vi.spyOn(Math, 'random');
+    rand.mockReturnValueOnce(0)  // enemy variance → 0.8
+          .mockReturnValueOnce(0)  // enemy name index → '좀비'
+          .mockReturnValueOnce(0); // reward ratio → 0.5
+
     const res = await app.request(`/api/players/${player.id}/battle`, {
       method: 'POST',
-      headers: authHeader(player.apiKey),
+      headers: authToken(),
     });
     expect(res.status).toBe(200);
     const body = await res.json();
+
+    expect(body.won).toBe(true);
     expect(body.playerPower).toBe(100);
-    expect(body.enemyName).toBeDefined();
-    expect(body.enemyPower).toBeGreaterThan(0);
-    if (body.won) {
-      expect(body.reward).toBeGreaterThan(0);
-      expect(body.player.electricity).toBeGreaterThan(100);
-    } else {
-      expect(body.reward).toBe(0);
-    }
+    expect(body.enemyPower).toBeLessThanOrEqual(80); // floor(100 * 0.8) = 80
+    expect(body.enemyName).toBe('좀비');
+    expect(body.reward).toBe(150); // floor(300 * 0.5) = 150
+    expect(body.player.electricity).toBe(250); // 100 + 150
+
+    rand.mockRestore();
   });
 
-  it('적 전투력이 플레이어보다 높으면 패배할 수 있다', async () => {
+  it('적 전투력이 높으면 패배하고 보상이 0이어야 한다', async () => {
     const app = createApp();
-    // electricityPerSecond 0.1 → playerPower = 1
-    const player = makePlayer({ electricity: 0, electricityPerSecond: 0.1 });
+    const player = makePlayer({ electricity: 100, electricityPerSecond: 10 });
     createPlayer(player);
 
-    let hasWon = false;
-    let hasLost = false;
-    for (let i = 0; i < 20; i++) {
-      const res = await app.request(`/api/players/${player.id}/battle`, {
-        method: 'POST',
-        headers: authHeader(player.apiKey),
-      });
-      const body = await res.json();
-      if (body.won) hasWon = true;
-      else hasLost = true;
-    }
-    expect(hasWon || hasLost).toBe(true);
+    // Math.random 시퀀스: [적 변동 최대(0.999), 적 이름(0.5), 보상 비율(무관)]
+    // → enemyVariance ≈ 1.2 (가장 강함), playerPower=100 < enemyPower=120
+    const rand = vi.spyOn(Math, 'random');
+    rand.mockReturnValueOnce(0.999)  // enemy variance → ~1.1998
+          .mockReturnValueOnce(0.5)    // enemy name
+          .mockReturnValueOnce(0);     // reward (ignored for loss)
+
+    const res = await app.request(`/api/players/${player.id}/battle`, {
+      method: 'POST',
+      headers: authToken(),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.won).toBe(false);
+    expect(body.playerPower).toBe(100);
+    expect(body.enemyPower).toBeGreaterThan(100);
+    expect(body.reward).toBe(0);
+    expect(body.player.electricity).toBe(100); // unchanged
+
+    rand.mockRestore();
+  });
+
+  it('응답에 필수 필드가 모두 포함되어야 한다', async () => {
+    const app = createApp();
+    const player = makePlayer({ electricity: 50, electricityPerSecond: 5 });
+    createPlayer(player);
+
+    const res = await app.request(`/api/players/${player.id}/battle`, {
+      method: 'POST',
+      headers: authToken(),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body).toHaveProperty('won');
+    expect(body).toHaveProperty('reward');
+    expect(body).toHaveProperty('enemyName');
+    expect(body).toHaveProperty('enemyPower');
+    expect(body).toHaveProperty('playerPower');
+    expect(body).toHaveProperty('player');
+    expect(body.enemyPower).toBeGreaterThanOrEqual(1);
+    expect(typeof body.enemyName).toBe('string');
+    expect(body.enemyName.length).toBeGreaterThan(0);
   });
 });
 
@@ -308,4 +372,143 @@ describe('GET /api/players/:id/idle-rewards', () => {
     expect(body.maxIdleHours).toBe(8);
     expect(body.offlineTime).toBeDefined();
   });
+});
+
+describe('비밀값 노출 방지', () => {
+  const SECRET_FIELDS = ['apiKey', 'lastClaimedAt', 'updatedAt'] as const;
+
+  function expectNoSecrets(body: Record<string, unknown>) {
+    for (const field of SECRET_FIELDS) {
+      expect(body).not.toHaveProperty(field);
+    }
+  }
+
+  it('POST /api/players 생성 시 apiKey를 포함해야 한다', async () => {
+    const app = createApp();
+    const res = await app.request('/api/players', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nickname: '비밀테스트' }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body).toHaveProperty('apiKey');
+    expect(typeof body.apiKey).toBe('string');
+    expect(body.apiKey.length).toBeGreaterThan(0);
+  });
+
+  it('GET /api/players/:id 응답에 비밀값이 없어야 한다', async () => {
+    const app = createApp();
+    const player = makePlayer();
+    createPlayer(player);
+
+    const res = await app.request(`/api/players/${player.id}`, { method: 'GET' });
+    expect(res.status).toBe(200);
+    expectNoSecrets(await res.json());
+  });
+
+  it('GET /api/players 목록 응답에 비밀값이 없어야 한다', async () => {
+    const app = createApp();
+    createPlayer(makePlayer());
+    createPlayer(makePlayer());
+
+    const res = await app.request('/api/players', { method: 'GET' });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.length).toBeGreaterThanOrEqual(2);
+    for (const p of body) {
+      expectNoSecrets(p);
+    }
+  });
+
+  it('POST .../claim 응답의 player에 비밀값이 없어야 한다', async () => {
+    const app = createApp();
+    const pastTime = new Date(Date.now() - 10000).toISOString();
+    const player = makePlayer({ lastClaimedAt: pastTime });
+    createPlayer(player);
+
+    const res = await app.request(`/api/players/${player.id}/claim`, {
+      method: 'POST',
+      headers: authToken(),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expectNoSecrets(body.player);
+  });
+
+  it('POST .../upgrade 응답의 player에 비밀값이 없어야 한다', async () => {
+    const app = createApp();
+    const player = makePlayer({ electricity: 100, electricityPerSecond: 1 });
+    createPlayer(player);
+
+    const res = await app.request(`/api/players/${player.id}/upgrade`, {
+      method: 'POST',
+      headers: authToken(),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expectNoSecrets(body.player);
+  });
+
+  it('POST .../battle 응답의 player에 비밀값이 없어야 한다', async () => {
+    const app = createApp();
+    const player = makePlayer({ electricity: 100, electricityPerSecond: 5 });
+    createPlayer(player);
+
+    const res = await app.request(`/api/players/${player.id}/battle`, {
+      method: 'POST',
+      headers: authToken(),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expectNoSecrets(body.player);
+  });
+
+  it('GET /api/rankings 응답에 apiKey가 없어야 한다', async () => {
+    const app = createApp();
+    const pastTime = new Date(Date.now() - 10000).toISOString();
+    createPlayer(makePlayer({ nickname: '랭커', electricity: 500, lastClaimedAt: pastTime }));
+    createPlayer(makePlayer({ nickname: '꼴찌', electricity: 10, lastClaimedAt: pastTime }));
+
+    const res = await app.request('/api/rankings', { method: 'GET' });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.length).toBeGreaterThanOrEqual(2);
+    for (const entry of body) {
+      expect(entry).not.toHaveProperty('apiKey');
+      expect(entry).not.toHaveProperty('lastClaimedAt');
+      expect(entry).not.toHaveProperty('updatedAt');
+    }
+  });
+});
+
+describe('데이터 격리', () => {
+  it('임시 디렉터리를 사용해야 한다', () => {
+    expect(tmpDir).toContain('idle-game-test-routes');
+    expect(existsSync(tmpDir)).toBe(true);
+  });
+
+  it('실제 data.json을 생성하거나 수정하지 않아야 한다', async () => {
+    const existedBefore = existsSync('data.json');
+    const contentBefore = existedBefore ? readFileSync('data.json', 'utf-8') : null;
+
+    const app = createApp();
+    const res = await app.request('/api/players', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nickname: '격리테스트' }),
+    });
+    expect(res.status).toBe(201);
+
+    if (existedBefore) {
+      expect(existsSync('data.json')).toBe(true);
+      expect(readFileSync('data.json', 'utf-8')).toBe(contentBefore);
+    } else {
+      expect(existsSync('data.json')).toBe(false);
+    }
+  });
+});
+
+afterAll(() => {
+  try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
 });

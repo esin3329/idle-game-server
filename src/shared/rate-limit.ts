@@ -1,7 +1,33 @@
 import type { Context, Next } from 'hono';
 import { AppError } from './errors.js';
 
-const store = new Map<string, { count: number; resetAt: number }>();
+interface Entry {
+  count: number;
+  resetAt: number;
+}
+
+const store = new Map<string, Entry>();
+
+/** 테스트 전용: 모든 rate limit 상태 초기화 */
+export function clearRateLimits(): void {
+  store.clear();
+}
+
+// 60초마다 만료된 엔트리 정리
+const CLEANUP_INTERVAL_MS = 60_000;
+const cleanupTimer = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of store) {
+    if (now > entry.resetAt) {
+      store.delete(key);
+    }
+  }
+}, CLEANUP_INTERVAL_MS);
+
+// Node.js 종료 시 타이머 해제 (테스트 환경에서 hang 방지)
+if (cleanupTimer.unref) {
+  cleanupTimer.unref();
+}
 
 export function rateLimit(maxRequests: number, windowMs: number) {
   return async (c: Context, next: Next) => {
