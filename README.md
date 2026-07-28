@@ -15,6 +15,7 @@ Hono + TypeScript + MySQL 기반 방치형(idle) 게임 서버 API
 - 🎁 **방치 보상** — 오프라인 시간에 비례한 보상 지급
 - 🔐 **JWT 인증** — 회원가입/로그인, Access/Refresh Token
 - 💰 **재화 지갑** — electricity, scrap 잔액 및 원장 추적
+- 🤖 **전투 시스템 (v2)** — 서버 권위 전투 세션, 4개 스테이지, 30개 강화 선택지, 단일 트랜잭션 보상
 
 ## 기술 스택
 
@@ -30,6 +31,165 @@ Hono + TypeScript + MySQL 기반 방치형(idle) 게임 서버 API
 | Test | Vitest |
 | CI | GitHub Actions |
 | Container | Docker Compose |
+
+### 운영자 관리
+
+```bash
+# 최초 운영자 생성 (CLI)
+OPERATOR_EMAIL=admin@example.com OPERATOR_PASSWORD=secure123 npm run db:seed-operator
+
+# 역할: user, operator, admin
+# - user: 일반 API만 접근
+# - operator: /admin API 접근 (고액 지급 제한)
+# - admin: 모든 권한 (고액 지급 가능)
+```
+
+### 권한 목록
+
+| 권한 | operator | admin |
+|---|---|---|
+| 사용자 조회·상세 | ✅ | ✅ |
+| 재화·아이템 지급 (<10,000) | ✅ | ✅ |
+| 재화·아이템 지급 (≥10,000) | ❌ | ✅ |
+| 제재 생성·철회 | ✅ | ✅ |
+| 보안 이벤트 조회·검토 | ✅ | ✅ |
+| 감사 로그 조회 | ✅ | ✅ |
+
+### 감사 로그
+
+```bash
+# 운영 감사 로그 조회
+curl -H "Authorization: Bearer <operatorToken>" \
+  "http://localhost:3000/admin/audit-logs?action=user_suspended&limit=50"
+
+# 보안 이벤트 조회
+curl -H "Authorization: Bearer <operatorToken>" \
+  "http://localhost:3000/admin/security-events?eventType=battle_rejected"
+
+# 사용자별 원장
+curl -H "Authorization: Bearer <operatorToken>" \
+  "http://localhost:3000/admin/users/:id/wallet-ledger?currency=scrap"
+```
+
+- 실시간 프레임 단위 서버 시뮬레이션
+- 파츠/장비/연구 시스템 (스냅샷 placeholder만 존재)
+- 파츠 강화·랜덤 옵션·제련
+- PvP, 멀티플레이
+- 매치메이킹
+- Redis 분산 Rate Limit (단일 인스턴스 in-memory로 충분)
+- 백그라운드 Worker (세션 만료 등 요청 시점 판정)
+- AI 기반 부정행위 탐지 (통계적 상한 + audit 로그로 충분)
+- 다중 API 서버 / 수평 확장 (단일 인스턴스 기준)
+- Unity 클라이언트 (서버 API만 구현)
+- WebSocket 실시간 동기화
+- 관리자 대시보드
+- 길드·친구·우편·출석·업적·시즌 (소셜/라이브 서비스)
+- 결제·상점·재화 구매
+
+## 백업
+
+```bash
+# 수동 백업
+DB_PASSWORD=changeme ./scripts/backup.sh
+
+# Docker Compose 환경
+DB_HOST=127.0.0.1 DB_PASSWORD=changeme ./scripts/backup.sh -o ./backups
+
+# cron 자동화 (매일 02:00 UTC)
+0 2 * * * cd /app && DB_PASSWORD=xxx ./scripts/backup.sh
+```
+
+## 복구
+
+```bash
+# 검증만 (--dry-run)
+./scripts/recover.sh --dry-run latest
+
+# 검증용 DB로 복구 (기본: idle_game_recovered)
+./scripts/recover.sh latest
+
+# 복구 중 쓰기 차단: docker-compose stop app
+# 복구 완료 후: docker-compose start app && curl /health/ready
+
+# 복구 검증
+mysql -e "SELECT COUNT(*) FROM players; SELECT COUNT(*) FROM currency_ledger;"
+curl http://localhost:3000/health/ready
+```
+
+백업: `--single-transaction` (InnoDB), 30일 보관, UTC timestamp, .tmp → rename, chmod 600
+복구: gzip 검증 → checksum 확인 → DROP 확인 → 복원 → 마이그레이션 → 검증
+
+### 최소 복구 리허설
+
+```bash
+# 1. 백업 생성
+./scripts/backup.sh
+
+# 2. dry-run 검증
+./scripts/recover.sh --dry-run latest
+
+# 3. 검증용 DB로 복구
+./scripts/recover.sh --target-db idle_game_recovery_test latest
+
+# 4. 복구 검증
+mysql -e "USE idle_game_recovery_test; SHOW TABLES; SELECT COUNT(*) FROM players;"
+
+# 5. healthcheck
+curl http://localhost:3000/health/ready
+```
+
+### 운영 DB 복구 전 체크리스트
+
+- [ ] 최신 백업 존재 확인 (`ls backups/*.sql.gz`)
+- [ ] `--dry-run` 으로 검증 완료
+- [ ] `docker-compose stop app` (API 쓰기 차단)
+- [ ] 복구 대상 DB 백업 (`./scripts/backup.sh`)
+- [ ] `integrity-check.sh` 실행 (복구 전 무결성 확인)
+- [ ] 복구 실행 (`./scripts/recover.sh latest`)
+- [ ] `integrity-check.sh` 재실행 (복구 후 무결성 확인)
+- [ ] `docker-compose start app` (API 재개)
+- [ ] `/health/ready` 확인
+- [ ] 핵심 API smoke test
+
+### 안전한 종료와 재시작
+
+```bash
+# Graceful shutdown (SIGTERM)
+docker-compose stop app      # 진행 중 요청 완료 후 종료 (10s timeout)
+
+# 재시작
+docker-compose start app     # DB 연결 복구, GET /battles/:id 로 세션 복원
+```
+
+### 비밀값 관리
+
+Production 필수 환경변수 (`validate-secrets.ts`로 검증):
+- `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` (dev-secret 사용 금지)
+- `DB_PASSWORD` / `MYSQL_ROOT_PASSWORD` (changeme 사용 금지)
+- `.env` 파일은 `.dockerignore`로 이미지 제외
+- 백업 파일은 `chmod 600` 적용
+
+## 이번 단계에서 제외한 기능
+
+- 실시간 프레임 단위 서버 시뮬레이션
+- 파츠/장비/연구 시스템 (스냅샷 placeholder만 존재)
+- 파츠 강화·랜덤 옵션·제련
+- PvP, 멀티플레이
+- 매치메이킹
+- Redis 분산 Rate Limit (단일 인스턴스 in-memory로 충분)
+- 백그라운드 Worker (세션 만료 등 요청 시점 판정)
+- AI 기반 부정행위 탐지 (통계적 상한 + audit 로그로 충분)
+- 다중 API 서버 / 수평 확장 (단일 인스턴스 기준)
+- Unity 클라이언트 (서버 API만 구현)
+- WebSocket 실시간 동기화
+- 관리자 대시보드
+- 길드·친구·우편·출석·업적·시즌 (소셜/라이브 서비스)
+- 결제·상점·재화 구매
+- 관리자 웹 UI
+- Prometheus·Grafana·ELK (별도 모니터링 스택)
+- 외부 상용 APM (Datadog/NewRelic 등)
+- 이메일·SMS 알림
+- 자동 백업 스케줄러 (cron 예시만 제공)
 
 ## 프로젝트 구조
 
@@ -195,6 +355,154 @@ POST /api/players/:id/battle
 ```bash
 GET /api/rankings   # totalWealth 기준 내림차순
 ```
+
+### 전투 (JWT 인증 필요)
+
+```bash
+POST /battles/start                       # 세션 생성
+  Body: { "stageCode": "stage_01_ruins" }
+
+GET  /battles/:sessionId                  # 세션 상태 + recovery
+
+POST /battles/:sessionId/progress         # 진행 이벤트
+  Body: { "sequence": 1, "killsDelta": 5, "coreEnergyDelta": 25, "bossId": "boss_0" }
+
+POST /battles/:sessionId/upgrades/select  # 강화 선택
+  Body: { "selectedUpgradeCode": "machine_gun_1" }
+
+POST /battles/:sessionId/finish           # 전투 종료
+  Body: { "totalKills": 245, "totalCoreEnergy": 480, "bossDefeated": ["boss_0"], "elapsedSeconds": 292 }
+
+POST /battles/:sessionId/abandon          # 포기 (보상 없음)
+
+GET  /stages                              # 스테이지 목록 + 플레이어 진행도
+```
+
+```
+
+## 전투 시스템 (v2)
+
+### 서버·클라이언트 책임 경계
+
+| 서버 (권위) | 클라이언트 |
+|---|---|
+| 세션 생성, 스탯 스냅샷, 콘텐츠 버전 | 스테이지 선택 요청 |
+| 이벤트 검증 (처치/core/보스 상한) | 전투 시뮬레이션, 이동/대시/궁극기 |
+| 강화 선택지 생성·저장·검증 | 3지선다 선택 |
+| 보상 계산, 단일 트랜잭션 지급 | 결과 확인 |
+| 위반 시 audit 로그 + 400/409 | — |
+
+클라이언트는 보상량, 결과 유형, 강화 선택지를 직접 결정할 수 없다.
+
+### 세션 생명주기
+
+```mermaid
+stateDiagram-v2
+    [*] --> active: POST /start
+    active --> active: POST /progress
+    active --> active: POST /upgrades/select
+    active --> completing: POST /finish (CAS)
+    completing --> completed: 보상 지급 성공
+    completing --> active: ROLLBACK (실패)
+    active --> abandoned: POST /abandon
+    active --> auto_abandoned: 만료 + POST /start
+    completed --> [*]
+    abandoned --> [*]
+    auto_abandoned --> [*]
+```
+
+### 결과 확정 트랜잭션
+
+```mermaid
+flowchart TD
+    A[POST /finish] --> B{CAS UPDATE<br/>status=active?}
+    B -->|실패| C[409 SESSION_NOT_ACTIVE]
+    B -->|성공| D[검증: 시간/처치/core/보스]
+    D -->|실패| E[400 + audit 로그]
+    D -->|통과| F[battleResults INSERT]
+    F --> G[walletBalances UPDATE]
+    G --> H[currencyLedger INSERT]
+    H --> I[itemLedger INSERT]
+    I --> J[playerRecords UPSERT]
+    J --> K[다음 스테이지 해금]
+    K --> L[COMMIT]
+    L --> M[200 reward]
+```
+
+### 이벤트 처리
+
+- progress 이벤트는 2~5초 간격 배치 전송
+- 각 이벤트는 `sequence` (1부터 단조증가) 필수
+- DB UNIQUE(battleSessionId, sequence)로 중복 차단
+- 프레임 단위 이벤트를 저장하지 않는다
+
+### core_energy와 레벨업
+
+- 각 스테이지의 `corePerKill` × kills만큼 core_energy 획득
+- `corePerLevel` 누적 시 레벨업 → 서버가 3개 강화 선택지 생성
+- 선택지는 세션 시드 기반 결정론적 생성, DB에 저장
+- 미선택 강화가 있으면 progress/finish 차단
+
+### 강화 선택지
+
+- 30개 강화, 13개 진화 그룹, 3티어 진화 (machine_gun_1 → _2 → _3)
+- 5개 카테고리: weapon, drone, armor, ultimate, utility
+- 가중치 랜덤 (weight), prerequisites, maxTier, enabled 필터
+- 같은 그룹 중복 제시 안 함, 서버가 제공한 선택지만 선택 가능
+
+### 보상
+
+| 유형 | 내용 |
+|---|---|
+| scrap | kills × scrapPerKill + stageRewards bonus |
+| blueprint | dropRate 확률, 최초 클리어 확정 |
+| part | MVP: null (파츠 시스템 구현 시) |
+| unlock | 최초 클리어 시 다음 스테이지 해금 |
+| record | 최고 처치/최단 시간 갱신 |
+
+모든 보상은 단일 DB 트랜잭션으로 처리된다.
+
+### 멱등성과 동시성
+
+| 메커니즘 | 적용 대상 |
+|---|---|
+| Idempotency-Key 헤더 | start, upgrades/select, finish, abandon |
+| DB UNIQUE(battleSessionId, sequence) | progress 이벤트 |
+| CAS UPDATE (WHERE status='active') | finish (단 하나만 성공) |
+| battleResults.battleSessionId UNIQUE | 이중 확정 방지 |
+| currencyLedger.idempotencyKey UNIQUE | 이중 입금 방지 |
+
+동시 finish 요청 시 CAS에 성공한 하나만 보상을 지급하고,
+다른 요청은 409 SESSION_NOT_ACTIVE로 거부된다.
+다른 사용자의 세션은 독립적이며 불필요하게 직렬화되지 않는다.
+
+### 세션 만료와 재접속
+
+- `expiresAt = startTime + durationSeconds + 120s` (BATTLE_POLICY)
+- 만료된 세션은 progress/upgrade/finish 거부 (400 SESSION_EXPIRED)
+- POST /start 시 만료 세션 자동 abandon 후 새 세션 생성
+- GET /battles/:sessionId로 클라이언트 재접속 시 상태 복원 가능
+- 별도 Worker 없이 요청 시점에 만료 판정
+
+### MVP 부정행위 방지 범위
+
+**보호됨 (서버 권위)**
+- 세션 생성, 스탯 스냅샷, 콘텐츠 버전
+- core_energy/kills 상한 검증 (스테이지 정의 + 메카 스탯 기반)
+- 보스 처치 타이밍·순서 검증
+- 강화 선택지 생성·저장·검증 (클라이언트 위조 불가)
+- 최종 보상량 계산 + 단일 트랜잭션 지급
+
+**경계 밖 (클라이언트 책임)**
+- 실시간 전투 시뮬레이션 (이동, 충돌, 프레임별 데미지)
+- 개별 적 처치 순서와 정확한 타이밍
+- 플레이어 컨트롤 (대시, 궁극기)
+
+**Unity 연동 예정**
+- 클라이언트가 progress로 2~5초 간격 누적 수치 보고
+- 서버는 통계적 상한 + sessionSeed 기반 재현 검증으로 확장 가능
+
+### 랭킹 (기존)
 
 ### 멱등성
 

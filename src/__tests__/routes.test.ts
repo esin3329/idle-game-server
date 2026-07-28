@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { Hono } from 'hono';
-import { sign } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 
 // ─── 임시 디렉터리 + 주입 ───────────────────────────
 
@@ -65,7 +65,7 @@ function createApp() {
 const JWT_SECRET = process.env.JWT_ACCESS_SECRET || 'dev-secret-change-in-production';
 
 function authToken(userId = 'test-user-id'): { Authorization: string; 'Idempotency-Key': string } {
-  const token = sign({ sub: userId, type: 'access' }, JWT_SECRET, { expiresIn: 3600 });
+  const token = jwt.sign({ sub: userId, type: 'access' }, JWT_SECRET, { expiresIn: 3600 });
   return { Authorization: `Bearer ${token}`, 'Idempotency-Key': crypto.randomUUID() };
 }
 

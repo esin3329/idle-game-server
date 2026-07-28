@@ -9,6 +9,8 @@
     "type-check": "tsc --noEmit",
     "start": "node dist/index.js",
     "db:seed": "tsx src/db/seed.ts",
+    "db:battle-seed": "tsx src/db/battle-seed.ts",
+    "db:seed-operator": "tsx src/db/seed-operator.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts",
     "db:import-json": "tsx src/db/import-json.ts",

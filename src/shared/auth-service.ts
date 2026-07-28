@@ -1,11 +1,11 @@
 import { compare, hash } from 'bcryptjs';
-import { sign, verify } from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 import { createHash } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { getDb } from '../db/connection.js';
-import { users, playerProfiles, walletBalances, refreshSessions } from '../db/schema.js';
+import { users, playerProfiles, walletBalances, refreshSessions, accountSanctions } from '../db/schema.js';
 import { AppError } from './errors.js';
-import { logger } from './logger.js';
+import { logger, auditLog } from './logger.js';
 
 const SALT_ROUNDS = 10;
 const ACCESS_EXPIRES = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
@@ -50,12 +50,12 @@ function parseExpiresSeconds(expiresIn: string): number {
   return parseInt(m[1], 10) * (M[m[2] as keyof typeof M] || 86400);
 }
 
-function issueTokens(userId: string): TokenPair {
+function issueTokens(userId: string, role: string = 'user'): TokenPair {
   const accessSec = parseExpiresSeconds(ACCESS_EXPIRES);
   const refreshSec = parseExpiresSeconds(REFRESH_EXPIRES);
   return {
-    accessToken: sign({ sub: userId, type: 'access' }, jwtSecret('JWT_ACCESS_SECRET'), { expiresIn: accessSec }),
-    refreshToken: sign({ sub: userId, type: 'refresh', jti: crypto.randomUUID() }, jwtSecret('JWT_REFRESH_SECRET'), { expiresIn: refreshSec }),
+    accessToken: jwt.sign({ sub: userId, type: 'access', role }, jwtSecret('JWT_ACCESS_SECRET'), { expiresIn: accessSec }),
+    refreshToken: jwt.sign({ sub: userId, type: 'refresh', role, jti: crypto.randomUUID() }, jwtSecret('JWT_REFRESH_SECRET'), { expiresIn: refreshSec }),
   };
 }
 
@@ -83,7 +83,7 @@ export async function registerUser(email: string, password: string, nickname: st
     throw err;
   });
 
-  const tokens = issueTokens(result.userId);
+  const tokens = issueTokens(result.userId, 'user');
   await storeRefreshSession(result.userId, tokens.refreshToken);
   return { userId: result.userId, playerId: result.playerId, tokens };
 }
@@ -95,12 +95,14 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
 
   const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (rows.length === 0) {
+    auditLog.warn({ email, event: 'login_failed', reason: 'unknown_email' }, `Login failed: ${email}`);
     throw new AppError('이메일 또는 비밀번호가 일치하지 않습니다.', 401, 'INVALID_CREDENTIALS');
   }
 
   const user = rows[0];
 
   if (!(await compare(password, user.passwordHash))) {
+    auditLog.warn({ userId: user.id, email, event: 'login_failed', reason: 'wrong_password' }, `Login failed (password): ${email}`);
     throw new AppError('이메일 또는 비밀번호가 일치하지 않습니다.', 401, 'INVALID_CREDENTIALS');
   }
 
@@ -108,11 +110,24 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
     throw new AppError('비활성화된 계정입니다.', 403, 'ACCOUNT_DISABLED');
   }
 
+  // 제재 확인: active suspension → 로그인 차단
+  const activeSanctions = await db.select().from(accountSanctions)
+    .where(and(eq(accountSanctions.userId, user.id), eq(accountSanctions.type, 'suspension'), eq(accountSanctions.status, 'active')))
+    .limit(1);
+  if (activeSanctions.length > 0) {
+    throw new AppError('제재된 계정입니다.', 403, 'ACCOUNT_SUSPENDED');
+  }
+
   const profiles = await db.select().from(playerProfiles).where(eq(playerProfiles.userId, user.id)).limit(1);
   const playerId = profiles.length > 0 ? profiles[0].playerId : '';
 
-  const tokens = issueTokens(user.id);
+  const tokens = issueTokens(user.id, user.role || 'user');
   await storeRefreshSession(user.id, tokens.refreshToken);
+
+  // 운영자 로그인 감사
+  if (user.role === 'operator' || user.role === 'admin') {
+    auditLog.warn({ operatorId: user.id, email, event: 'operator_login' }, `Operator login: ${email}`);
+  }
 
   logger.info({ userId: user.id, email, event: 'login' }, 'User logged in');
   return { userId: user.id, playerId, tokens };
@@ -126,9 +141,9 @@ export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
   const tokenHash = sha256(refreshToken);
 
   // 1. JWT 서명 검증
-  let payload: { sub: string; jti: string };
+  let payload: { sub: string; jti: string; role?: string };
   try {
-    payload = verify(refreshToken, jwtSecret('JWT_REFRESH_SECRET')) as { sub: string; jti: string };
+    payload = jwt.verify(refreshToken, jwtSecret('JWT_REFRESH_SECRET')) as { sub: string; jti: string; role?: string };
   } catch {
     throw new AppError('유효하지 않은 토큰입니다.', 401, 'INVALID_TOKEN');
   }
@@ -146,7 +161,7 @@ export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
   await db.update(refreshSessions).set({ revokedAt: now }).where(eq(refreshSessions.tokenHash, tokenHash));
 
   // 4. 새 토큰 발급 + 저장
-  const tokens = issueTokens(payload.sub);
+  const tokens = issueTokens(payload.sub, payload.role || 'user');
   await storeRefreshSession(payload.sub, tokens.refreshToken);
 
   return tokens;

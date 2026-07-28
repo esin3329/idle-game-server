@@ -1,6 +1,15 @@
 import type { Context, Next } from 'hono';
 import { AppError } from './errors.js';
 
+/**
+ * In-memory rate limiter (단일 인스턴스용 MVP)
+ *
+ * 향후 확장: Redis 기반 분산 rate limit
+ *   - redis.hincrby(`ratelimit:${key}`, 1)
+ *   - redis.expire(key, windowSec)
+ *   - TTL 기반 만료로 cleanup interval 불필요
+ */
+
 interface Entry {
   count: number;
   resetAt: number;
