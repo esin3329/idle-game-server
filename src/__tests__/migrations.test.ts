@@ -10,4 +10,13 @@ describe('Drizzle migrations', () => {
 
     expect(journal.entries.map(({ tag }) => tag)).toEqual(['0000_init', '0001_battle']);
   });
+
+  it('separates SQL statements for the Drizzle migrator', async () => {
+    for (const tag of ['0000_init', '0001_battle']) {
+      const migration = await readFile(resolve(`src/db/migrations/${tag}.sql`), 'utf8');
+      expect(migration.split('--> statement-breakpoint')).toHaveLength(
+        (migration.match(/CREATE TABLE/g) ?? []).length,
+      );
+    }
+  });
 });

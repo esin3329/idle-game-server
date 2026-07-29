@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS `players` (
   INDEX `idx_players_api_key` (`api_key`),
   INDEX `idx_players_electricity` (`electricity`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+--> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS `users` (
   `id` varchar(36) NOT NULL,
@@ -30,6 +31,8 @@ CREATE TABLE IF NOT EXISTS `users` (
   INDEX `idx_users_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--> statement-breakpoint
+
 CREATE TABLE IF NOT EXISTS `refresh_sessions` (
   `id` varchar(36) NOT NULL,
   `user_id` varchar(36) NOT NULL,
@@ -41,6 +44,8 @@ CREATE TABLE IF NOT EXISTS `refresh_sessions` (
   INDEX `idx_rs_user_id` (`user_id`),
   INDEX `idx_rs_expires_at` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS `wallet_balances` (
   `id` varchar(36) NOT NULL,
@@ -59,6 +64,8 @@ CREATE TABLE IF NOT EXISTS `wallet_balances` (
   UNIQUE KEY `uq_wb_user_currency` (`user_id`, `currency`),
   INDEX `idx_wb_user_id` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS `currency_ledger` (
   `id` varchar(36) NOT NULL,
@@ -80,6 +87,8 @@ CREATE TABLE IF NOT EXISTS `currency_ledger` (
   INDEX `idx_cl_user_id` (`user_id`),
   INDEX `idx_cl_created_at` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS `player_profiles` (
   `id` varchar(36) NOT NULL,

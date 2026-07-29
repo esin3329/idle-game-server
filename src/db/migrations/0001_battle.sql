@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS `stages` (
   INDEX `idx_stages_unlocked` (`unlocked`),
   INDEX `idx_stages_sequence` (`sequence`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+--> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS `stage_rewards` (
   `id` varchar(36) NOT NULL,
@@ -34,6 +35,8 @@ CREATE TABLE IF NOT EXISTS `stage_rewards` (
   PRIMARY KEY (`id`),
   INDEX `idx_sr_stage_id` (`stage_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS `mecha_stats` (
   `id` varchar(36) NOT NULL,
@@ -51,6 +54,8 @@ CREATE TABLE IF NOT EXISTS `mecha_stats` (
   UNIQUE KEY `uq_ms_player_id` (`player_id`),
   INDEX `idx_ms_player_id` (`player_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS `battle_sessions` (
   `id` varchar(36) NOT NULL,
@@ -80,6 +85,8 @@ CREATE TABLE IF NOT EXISTS `battle_sessions` (
   INDEX `idx_bs_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--> statement-breakpoint
+
 CREATE TABLE IF NOT EXISTS `player_records` (
   `id` varchar(36) NOT NULL,
   `player_id` varchar(36) NOT NULL,
@@ -96,6 +103,8 @@ CREATE TABLE IF NOT EXISTS `player_records` (
   INDEX `idx_pr_player_stage` (`player_id`, `stage_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--> statement-breakpoint
+
 CREATE TABLE IF NOT EXISTS `stage_bosses` (
   `id` varchar(36) NOT NULL,
   `stage_id` varchar(36) NOT NULL,
@@ -108,6 +117,8 @@ CREATE TABLE IF NOT EXISTS `stage_bosses` (
   PRIMARY KEY (`id`),
   INDEX `idx_sb_stage_id` (`stage_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS `battle_events` (
   `id` varchar(36) NOT NULL,
@@ -123,6 +134,8 @@ CREATE TABLE IF NOT EXISTS `battle_events` (
   INDEX `idx_be_session_id` (`battle_session_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--> statement-breakpoint
+
 CREATE TABLE IF NOT EXISTS `battle_upgrade_offers` (
   `id` varchar(36) NOT NULL,
   `battle_session_id` varchar(36) NOT NULL,
@@ -137,6 +150,8 @@ CREATE TABLE IF NOT EXISTS `battle_upgrade_offers` (
   UNIQUE KEY `uq_buo_session_level` (`battle_session_id`, `level`),
   INDEX `idx_buo_session_id` (`battle_session_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS `battle_results` (
   `id` varchar(36) NOT NULL,
@@ -157,6 +172,8 @@ CREATE TABLE IF NOT EXISTS `battle_results` (
   INDEX `idx_br_session_id` (`battle_session_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--> statement-breakpoint
+
 CREATE TABLE IF NOT EXISTS `player_stage_progress` (
   `id` varchar(36) NOT NULL,
   `player_id` varchar(36) NOT NULL,
@@ -173,6 +190,8 @@ CREATE TABLE IF NOT EXISTS `player_stage_progress` (
   UNIQUE KEY `uq_psp_player_stage` (`player_id`, `stage_id`),
   INDEX `idx_psp_player_stage` (`player_id`, `stage_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--> statement-breakpoint
 
 CREATE TABLE IF NOT EXISTS `item_ledger` (
   `id` varchar(36) NOT NULL,
