@@ -32,3 +32,5 @@ node_modules/
 *.sqlite
 data.json
 dist/
+data-*.json
+*.bak
