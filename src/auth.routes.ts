@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { validateJson } from './shared/validator.js';
+import { idempotencyGuard } from './shared/idempotency.js';
 import { registerUser, loginUser, refreshTokens, revokeRefreshToken } from './shared/auth-service.js';
 
-const authRoutes = new Hono<{ Variables: { parsedBody: { email?: string; password?: string; nickname?: string; refreshToken?: string } } }>();
+const authRoutes = new Hono<{ Variables: { parsedBody: { email?: string; password?: string; nickname?: string; refreshToken?: string }; idempotencyKey: string } }>();
 
 const registerSchema = z.object({
   email: z.string().email('올바른 이메일을 입력하세요.'),
@@ -22,7 +23,7 @@ const tokenSchema = z.object({
 
 // ─── POST /auth/register ────────────────────────────
 
-authRoutes.post('/auth/register', validateJson(registerSchema), async (c) => {
+authRoutes.post('/auth/register', idempotencyGuard, validateJson(registerSchema), async (c) => {
   const { email, password, nickname } = c.get('parsedBody') as z.infer<typeof registerSchema>;
   const result = await registerUser(email, password, nickname);
   return c.json(result, 201);

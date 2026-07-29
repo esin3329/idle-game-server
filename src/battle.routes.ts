@@ -18,7 +18,7 @@ import { getDb } from './db/connection.js';
 import { stages, playerStageProgress, playerRecords } from './db/schema.js';
 import { asc, eq } from 'drizzle-orm';
 
-const battleRoutes = new Hono<{ Variables: { userId: string } }>();
+const battleRoutes = new Hono<{ Variables: { userId: string; idempotencyKey: string } }>();
 
 // ─── GET /stages ─────────────────────────────────────
 // 스테이지 목록 조회 (간소 경로)
@@ -193,6 +193,7 @@ battleRoutes.get(
 battleRoutes.post(
   '/battles/:sessionId/progress',
   jwtAuth,
+  idempotencyGuard,
   rateLimit(5, 1000),
   bodyLimit({ maxSize: 4 * 1024 }),
   async (c) => {
@@ -222,6 +223,7 @@ battleRoutes.post(
   '/api/players/:id/battle/event',
   validatePlayerId,
   jwtAuth,
+  idempotencyGuard,
   rateLimit(5, 1000),
   async (c) => {
     const playerId = c.req.param('id')!;
