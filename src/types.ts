@@ -63,10 +63,29 @@ export interface WalletBalance {
   id: string;
   playerId: string;
   userId: string;
+  currency: string;
   electricity: number;
   electricityPerSecond: number;
+  scrap: number;
   balance: number;
   lastClaimedAt: string;
   createdAt: string;
   updatedAt: string;
+}
+
+/** 재화 원장 (currency_ledger) */
+export interface CurrencyLedger {
+  id: string;
+  playerId: string;
+  userId: string;
+  currency: string;
+  amount: number;
+  balanceAfter: number;
+  source: string;
+  reason: string;
+  referenceType: string;
+  referenceId: string;
+  idempotencyKey: string;
+  requestHash: string;
+  createdAt: string;
 }

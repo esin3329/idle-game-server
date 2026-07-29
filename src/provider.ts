@@ -4,7 +4,7 @@
  * DB_DRIVER=mysql → MySQL
  * 그 외          → JSON 파일 (기본값)
  */
-import type { PlayerRepository, AuthRepository } from './repository.js';
+import type { PlayerRepository, AuthRepository, WalletRepository } from './repository.js';
 
 // ─── PlayerRepository ─────────────────────────────
 
@@ -36,7 +36,8 @@ export async function getRepo(): Promise<PlayerRepository> {
     try {
       _repo = await loadMysqlRepo();
       const { getPool } = await import('./db/connection.js');
-      await getPool().query('SELECT 1');
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
+      await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(`MySQL unavailable (${msg}), falling back to JSON store. Set DB_DRIVER=json to suppress this warning.`);
@@ -77,7 +78,8 @@ export async function getAuthRepo(): Promise<AuthRepository> {
     try {
       _authRepo = await loadMysqlAuthRepo();
       const { getPool } = await import('./db/connection.js');
-      await getPool().query('SELECT 1');
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
+      await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
       _authRepoMode = 'mysql';
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -100,9 +102,61 @@ export function resetAuthRepo(): void {
   _authRepoMode = null;
 }
 
+// ─── WalletRepository ────────────────────────────
+
+async function loadJsonWalletRepo(): Promise<WalletRepository> {
+  const { jsonWalletRepo } = await import('./store-wallet.js');
+  return jsonWalletRepo;
+}
+
+async function loadMysqlWalletRepo(): Promise<WalletRepository> {
+  const { mysqlWalletRepo } = await import('./db/mysql-wallet.repository.js');
+  return mysqlWalletRepo;
+}
+
+let _walletRepo: WalletRepository | null = null;
+let _walletRepoMode: 'json' | 'mysql' | null = null;
+
+export async function getWalletRepo(): Promise<WalletRepository> {
+  if (!_walletRepo) {
+    if (process.env.DB_DRIVER === 'json') {
+      _walletRepo = await loadJsonWalletRepo();
+      _walletRepoMode = 'json';
+      return _walletRepo;
+    }
+
+    try {
+      _walletRepo = await loadMysqlWalletRepo();
+      const { getPool } = await import('./db/connection.js');
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
+      await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
+      _walletRepoMode = 'mysql';
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`MySQL unavailable for wallet repo (${msg}), falling back to JSON store.`);
+      _walletRepo = await loadJsonWalletRepo();
+      _walletRepoMode = 'json';
+    }
+  }
+  return _walletRepo;
+}
+
+/** 현재 Wallet 저장소 모드 반환 */
+export function getWalletRepoMode(): 'json' | 'mysql' {
+  return _walletRepoMode || 'json';
+}
+
+/** 테스트 전용: Wallet 저장소 재설정 */
+export function resetWalletRepo(): void {
+  _walletRepo = null;
+  _walletRepoMode = null;
+}
+
 /** 모든 저장소 일괄 리셋 (테스트 전용) */
 export function resetAllRepos(): void {
   _repo = null;
   _authRepo = null;
   _authRepoMode = null;
+  _walletRepo = null;
+  _walletRepoMode = null;
 }
