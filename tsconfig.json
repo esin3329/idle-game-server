@@ -15,5 +15,5 @@
     "rootDir": "./src",
     "outDir": "./dist"
   },
-  "exclude": ["node_modules", "dist", "vitest.config.ts", "drizzle.config.ts", "src/db", "src/shared/auth-service.ts", "src/shared/wallet.ts", "src/shared/jwt-auth.ts", "src/shared/idempotency.ts", "src/shared/validate-secrets.ts", "src/auth.routes.ts", "src/provider.ts", "src/__tests__/integration.test.ts", "src/__tests__/idempotency.test.ts"]
+  "exclude": ["node_modules", "dist", "vitest.config.ts", "drizzle.config.ts"]
 }

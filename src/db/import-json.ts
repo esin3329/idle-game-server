@@ -9,9 +9,9 @@
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { mysqlPlayerRepo } from './db/mysql.repository.js';
-import type { Player } from './types.js';
-import { logger } from './shared/logger.js';
+import { mysqlPlayerRepo } from './mysql.repository.js';
+import type { Player } from '../types.js';
+import { logger } from '../shared/logger.js';
 
 const DATA_FILE = process.env.DATA_FILE || join(process.cwd(), 'data.json');
 

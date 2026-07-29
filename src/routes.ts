@@ -46,7 +46,7 @@ routes.post('/api/players', validateJson(createPlayerSchema), (c) => {
     updatedAt: now,
   });
 
-  return c.json(player, 201);
+  return c.json(toPublicPlayerDto(player), 201);
 });
 
 routes.get('/api/players/:id', validatePlayerId, (c) => {

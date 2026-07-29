@@ -1,9 +1,8 @@
 import { eq } from 'drizzle-orm';
 import { getDb } from './connection.js';
-import { players, walletBalances, currencyLedger } from './schema.js';
+import { players, walletBalances } from './schema.js';
 import type { Player } from '../types.js';
 import type { PlayerRepository } from '../repository.js';
-import { logger } from '../shared/logger.js';
 
 /**
  * PlayerRepository 의 MySQL 구현체
@@ -97,18 +96,4 @@ export const mysqlPlayerRepo: PlayerRepository = {
   },
 };
 
-/** 원자적 잔액 증감 (SELECT FOR UPDATE + UPDATE) */
-export async function adjustBalance(
-  playerId: string,
-  currency: string,
-  amount: number,
-  idempotencyKey: string,
-  source: string,
-): Promise<{ balanceAfter: number; success: boolean }> {
-  const db = getDb();
-  const conn = await db.all();
-  // 트랜잭션 + row lock
-  // 실제 구현은 connection.beginTransaction() + SELECT FOR UPDATE
-  // 여기서는 간략히 커넥션 풀 기반으로 작성
-  return { balanceAfter: 0, success: false };
-}
+// adjustBalance는 wallet.ts에서 MySQL 트랜잭션으로 구현됨

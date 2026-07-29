@@ -8,9 +8,12 @@
  * 환경변수: OPERATOR_EMAIL, OPERATOR_PASSWORD (미설정 시 기본값)
  */
 import { hash } from 'bcryptjs';
-import { getDb } from './db/connection.js';
-import { users, operatorRoles, operatorPermissions, operatorRolePermissions } from './db/schema.js';
+import { getDb } from './connection.js';
+import { users, operatorRoles, operatorPermissions, operatorRolePermissions } from './schema.js';
 import { eq, and } from 'drizzle-orm';
+import type { InferSelectModel } from 'drizzle-orm';
+type OperatorRole = InferSelectModel<typeof operatorRoles>;
+type OperatorPermission = InferSelectModel<typeof operatorPermissions>;
 
 const db = getDb();
 
@@ -80,10 +83,10 @@ async function seedOperator() {
   };
 
   for (const [roleCode, permCodes] of Object.entries(rolePermMap)) {
-    const role = allRoles.find(r => r.code === roleCode);
+    const role: OperatorRole | undefined = allRoles.find((r: OperatorRole) => r.code === roleCode);
     if (!role) continue;
     for (const pc of permCodes) {
-      const perm = allPerms.find(p => p.code === pc);
+      const perm: OperatorPermission | undefined = allPerms.find((p: OperatorPermission) => p.code === pc);
       if (!perm) continue;
       const existing = await db.select().from(operatorRolePermissions)
         .where(and(eq(operatorRolePermissions.roleId, role.id), eq(operatorRolePermissions.permissionId, perm.id))).limit(1);

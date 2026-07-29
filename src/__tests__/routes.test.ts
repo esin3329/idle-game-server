@@ -383,7 +383,7 @@ describe('비밀값 노출 방지', () => {
     }
   }
 
-  it('POST /api/players 생성 시 apiKey를 포함해야 한다', async () => {
+  it('POST /api/players 생성 응답에 apiKey가 없어야 한다', async () => {
     const app = createApp();
     const res = await app.request('/api/players', {
       method: 'POST',
@@ -392,9 +392,7 @@ describe('비밀값 노출 방지', () => {
     });
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body).toHaveProperty('apiKey');
-    expect(typeof body.apiKey).toBe('string');
-    expect(body.apiKey.length).toBeGreaterThan(0);
+    expect(body).not.toHaveProperty('apiKey');
   });
 
   it('GET /api/players/:id 응답에 비밀값이 없어야 한다', async () => {

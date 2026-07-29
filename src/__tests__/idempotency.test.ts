@@ -4,7 +4,7 @@ import { idempotencyGuard } from '../shared/idempotency.js';
 import { AppError } from '../shared/errors.js';
 
 function createIdempotencyApp() {
-  const app = new Hono();
+  const app = new Hono<{ Variables: { idempotencyKey: string } }>();
 
   app.onError((err, c) => {
     if (err instanceof AppError) {

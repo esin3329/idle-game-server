@@ -7,11 +7,10 @@ import { logger } from './shared/logger.js';
 
 let dataFile = process.env.DATA_FILE || join(process.cwd(), 'data.json');
 const players = new Map<string, Player>();
-
-// 초기 로드
-_loadFromFile();
+let _initialized = false;
 
 // ─── 스키마 검증 ───────────────────────────────────
+// (_loadFromFile() 보다 먼저 선언되어야 함 — TDZ 방지)
 
 const REQUIRED_PLAYER_FIELDS: (keyof Player)[] = [
   'id', 'nickname', 'apiKey', 'electricity',
@@ -87,19 +86,31 @@ function _loadFromFile(): void {
   }
 }
 
+// ─── Lazy initialization ───────────────────────────
+// 모듈 로드 시점이 아닌, 첫 실제 접근 시에 dataFile을 읽는다.
+// 이렇게 하면 테스트에서 setDataFilePath() 호출 전에
+// 실제 data.json을 읽는 문제가 발생하지 않는다.
+
+function _ensureLoaded(): void {
+  if (!_initialized) {
+    _initialized = true;
+    _loadFromFile();
+  }
+}
+
 /**
  * 테스트 전용: 데이터 파일 경로를 변경하고 새 경로에서 재로드.
  * 프로덕션 코드에서 호출해서는 안 됨.
  */
 export function setDataFilePath(path: string): void {
   dataFile = path;
-  _loadFromFile();
+  _initialized = false;
+  _ensureLoaded();
 }
 
-// ─── 원자적 저장 (백업 + tmp + rename) ─────────────
+// ─── 원자적 저장 (tmp + rename, 실패 시 throw) ────
 
 function saveToFile(): void {
-  const bakFile = dataFile + '.bak';
   const tmpFile = dataFile + '.tmp';
 
   // 1. 직렬화 (Map → JSON)
@@ -139,16 +150,19 @@ function saveToFile(): void {
     throw new Error(`Failed to validate temp file: ${msg}`);
   }
 
-  // 4. 기존 파일을 백업으로 보존
+  // 4. 기존 파일을 백업으로 보존 (실패 시 throw — 숨기지 않음)
+  const bakFile = dataFile + '.bak';
   try {
     if (existsSync(dataFile)) {
       copyFileSync(dataFile, bakFile);
     }
   } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'Failed to create backup file');
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error({ operation: 'backup', dataFile, bakFile, err: msg }, 'Failed to create backup file');
+    throw new Error(`Failed to create backup file: ${msg}`);
   }
 
-  // 5. 임시 파일을 메인으로 승격 (원자적)
+  // 5. 임시 파일을 메인으로 승격 (원자적 rename — POSIX 원자성 보장)
   try {
     renameSync(tmpFile, dataFile);
   } catch (err) {
@@ -158,25 +172,30 @@ function saveToFile(): void {
     try { if (existsSync(tmpFile)) unlinkSync(tmpFile); } catch { /* best effort */ }
     throw new Error(`Failed to persist data: ${msg}`);
   }
+
 }
 
 // ─── CRUD ──────────────────────────────────────────
 
 export function createPlayer(player: Player): Player {
+  _ensureLoaded();
   players.set(player.id, player);
   saveToFile();
   return player;
 }
 
 export function getPlayer(id: string): Player | undefined {
+  _ensureLoaded();
   return players.get(id);
 }
 
 export function getAllPlayers(): Player[] {
+  _ensureLoaded();
   return Array.from(players.values());
 }
 
 export function updatePlayer(id: string, updates: Partial<Player>): Player | undefined {
+  _ensureLoaded();
   const player = players.get(id);
   if (!player) return undefined;
   // 보호: id, apiKey, createdAt 은 외부에서 덮어쓸 수 없음
@@ -188,6 +207,7 @@ export function updatePlayer(id: string, updates: Partial<Player>): Player | und
 }
 
 export function deletePlayer(id: string): boolean {
+  _ensureLoaded();
   const result = players.delete(id);
   if (result) saveToFile();
   return result;

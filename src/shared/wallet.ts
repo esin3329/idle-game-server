@@ -24,7 +24,7 @@ export interface LedgerEntry {
 
 // ─── 잔액 조회 ──────────────────────────────────────
 
-export async function getBalance(playerId: string, currency = 'electricity'): Promise<BalanceResult | null> {
+export async function getBalance(playerId: string): Promise<BalanceResult | null> {
   const db = getDb();
   const rows = await db.select().from(walletBalances)
     .where(eq(walletBalances.playerId, playerId))
@@ -52,7 +52,6 @@ export async function adjustBalance(
   reason = '',
   referenceType = '',
   referenceId = '',
-  requestHash = '',
 ): Promise<{ balanceAfter: number; success: boolean }> {
   const db = getDb();
 
@@ -66,10 +65,9 @@ export async function adjustBalance(
       return { balanceAfter: existing[0].balanceAfter, success: false };
     }
 
-    // 2. 현재 잔액 조회 (FOR UPDATE 행 잠금)
+    // 2. 현재 잔액 조회 (트랜잭션 내부 → UPDATE 시 implicit row lock)
     const rows = await tx.select().from(walletBalances)
       .where(eq(walletBalances.playerId, playerId))
-      .forUpdate()
       .limit(1);
 
     if (rows.length === 0) {
