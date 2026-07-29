@@ -6,7 +6,6 @@
  */
 import { getWalletRepo, getWalletRepoMode } from '../provider.js';
 import type { BalanceResult, LedgerEntry } from '../repository.js';
-import { logger } from './logger.js';
 
 /** 잔액 조회 */
 export async function getBalance(playerId: string): Promise<BalanceResult | null> {

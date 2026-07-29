@@ -62,7 +62,7 @@ export async function idempotencyGuard(c: Context<{ Variables: { idempotencyKey:
   // ─── 캐시 확인 ──────────────────────────────────
   const cached = cache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
-    return c.json(cached.body, cached.status);
+    return c.json(cached.body, cached.status as Parameters<typeof c.json>[1]);
   }
   if (cached) cache.delete(key); // 만료됨
 
