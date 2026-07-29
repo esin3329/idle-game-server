@@ -28,8 +28,10 @@ export interface WalletBalance {
   id: string;
   playerId: string;
   userId: string;
+  currency?: string;
   electricity: number;
   electricityPerSecond: number;
+  scrap?: number;
   balance: number;
   lastClaimedAt: string;
   createdAt: string;

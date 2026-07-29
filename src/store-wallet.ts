@@ -120,9 +120,39 @@ export const jsonWalletRepo: WalletRepository = {
       return { balanceAfter: existing.balanceAfter, success: false };
     }
 
-    const wallet = Array.from(wallets.values()).find((w) => w.playerId === playerId);
+    let wallet = Array.from(wallets.values()).find((w) => w.playerId === playerId);
     if (!wallet) {
-      throw new AppError('지갑을 찾을 수 없습니다.', 404, 'WALLET_NOT_FOUND');
+      // wallet 없으면 자동 생성 후 재시도 (개발/테스트 편의)
+      // store.ts에서 player 정보 조회하여 electricity 동기화
+      let initialElectricity = 0;
+      let initialEps = 1;
+      let initialLastClaimed = new Date().toISOString();
+      try {
+        const { getPlayer } = await import('./store.js');
+        const player = getPlayer(playerId);
+        if (player) {
+          initialElectricity = player.electricity;
+          initialEps = player.electricityPerSecond;
+          initialLastClaimed = player.lastClaimedAt;
+        }
+      } catch { /* best effort */ }
+
+      const newWallet: WalletBalance = {
+        id: crypto.randomUUID(),
+        playerId,
+        userId: playerId,
+        currency: 'electricity',
+        electricity: initialElectricity,
+        electricityPerSecond: initialEps,
+        scrap: 0,
+        balance: initialElectricity,
+        lastClaimedAt: initialLastClaimed,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      wallets.set(newWallet.id, newWallet);
+      saveMap(wallets, walletsFile, 'wallets');
+      return this.adjustBalance(params);
     }
 
     const currentBalance = currency === 'scrap' ? wallet.scrap : wallet.electricity;

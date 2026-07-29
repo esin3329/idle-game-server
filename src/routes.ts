@@ -9,9 +9,10 @@ import { validatePlayerId, validateJson, createPlayerSchema } from './shared/val
 import { getRepo } from './provider.js';
 import { logger } from './shared/logger.js';
 import { rateLimit } from './shared/rate-limit.js';
+import { adjustBalance, updateEps, updateLastClaimedAt } from './shared/wallet.js';
 import { GAME, calculateProduction } from './shared/game-math.js';
 
-const routes = new Hono<{ Variables: { parsedBody: { nickname: string }; player: Player } }>();
+const routes = new Hono<{ Variables: { parsedBody: { nickname: string }; player: Player; idempotencyKey: string } }>();
 
 // 공통: 플레이어 조회 (async, provider 경유)
 async function requirePlayer(id: string): Promise<Player> {
@@ -79,7 +80,14 @@ routes.post('/api/players/:id/claim', validatePlayerId, rateLimit(1, 1000), idem
   }
 
   const nowISO = new Date().toISOString();
+  const idempotencyKey = c.get('idempotencyKey');
 
+  // wallet_balances + currency_ledger (트랜잭션)
+  await adjustBalance(id, produced, 'claim', idempotencyKey, 'electricity', '방치 생산 수집', 'player', id);
+  // lastClaimedAt 갱신 (wallet)
+  await updateLastClaimedAt(id, new Date(nowISO));
+
+  // players 테이블 동기화
   const repo = await getRepo();
   const updated = await repo.updatePlayer(id, {
     electricity: player.electricity + produced,
@@ -129,6 +137,13 @@ routes.post('/api/players/:id/upgrade', validatePlayerId, rateLimit(2, 1000), id
   if (player.electricity < cost) {
     throw new InsufficientResourceError('전기', cost, player.electricity);
   }
+
+  const idempotencyKey = c.get('idempotencyKey');
+
+  // wallet_balances 차감 + 원장 기록 (트랜잭션)
+  await adjustBalance(id, -cost, 'upgrade', idempotencyKey, 'electricity', 'EPS 업그레이드 비용', 'player', id);
+  // wallet_balances EPS 갱신
+  await updateEps(id, player.electricityPerSecond + 1);
 
   const repo = await getRepo();
   const updated = await repo.updatePlayer(id, {
@@ -183,6 +198,13 @@ routes.post('/api/players/:id/battle', validatePlayerId, rateLimit(1, 3000), ide
   const reward = won
     ? Math.floor(baseReward * (GAME.BATTLE_REWARD_MIN_RATIO + Math.random() * (GAME.BATTLE_REWARD_MAX_RATIO - GAME.BATTLE_REWARD_MIN_RATIO)))
     : 0;
+
+  const idempotencyKey = c.get('idempotencyKey');
+
+  if (reward > 0) {
+    // wallet_balances 증가 + 원장 기록 (트랜잭션)
+    await adjustBalance(id, reward, 'battle', idempotencyKey, 'electricity', `전투 승리 (${enemyName})`, 'player', id);
+  }
 
   const repo = await getRepo();
   const updated = await repo.updatePlayer(id, { electricity: player.electricity + reward });

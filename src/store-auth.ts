@@ -94,7 +94,11 @@ export const jsonAuthRepo: AuthRepository = {
 
   async createWallet(wallet: WalletType): Promise<WalletType> {
     ensureLoaded();
-    const w: WalletBalance = { ...wallet };
+    const w: WalletBalance = {
+      ...wallet,
+      currency: wallet.currency ?? 'electricity',
+      scrap: wallet.scrap ?? 0,
+    } as WalletBalance;
     wallets.set(w.id, w);
     saveMap(wallets, walletsFile, 'wallets');
     return w;

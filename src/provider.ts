@@ -11,7 +11,25 @@ import type { PlayerRepository, AuthRepository, WalletRepository } from './repos
 async function loadJsonRepo(): Promise<PlayerRepository> {
   const { createPlayer, getPlayer, getAllPlayers, updatePlayer, deletePlayer } = await import('./store.js');
   return {
-    createPlayer: (p) => Promise.resolve(createPlayer(p)),
+    createPlayer: async (p) => {
+      const player = createPlayer(p);
+      // wallet_balances도 함께 생성 (adjustBalance 호환)
+      try {
+        const { jsonAuthRepo } = await import('./store-auth.js');
+        await jsonAuthRepo.createWallet({
+          id: crypto.randomUUID(),
+          playerId: p.id,
+          userId: p.id,
+          electricity: p.electricity,
+          electricityPerSecond: p.electricityPerSecond,
+          balance: p.electricity,
+          lastClaimedAt: p.lastClaimedAt,
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
+        });
+      } catch { /* best effort */ }
+      return player;
+    },
     getPlayer: (id) => Promise.resolve(getPlayer(id)),
     getAllPlayers: () => Promise.resolve(getAllPlayers()),
     updatePlayer: (id, u) => Promise.resolve(updatePlayer(id, u)),
