@@ -6,27 +6,30 @@ import { idempotencyGuard } from './shared/idempotency.js';
 import type { ClaimResponse, UpgradeResponse, BattleResponse } from './dto.js';
 import { NotFoundError, InsufficientResourceError, InternalError, AppError } from './shared/errors.js';
 import { validatePlayerId, validateJson, createPlayerSchema } from './shared/validator.js';
-import { createPlayer, getPlayer, getAllPlayers, updatePlayer } from './store.js';
+import { getRepo } from './provider.js';
 import { logger } from './shared/logger.js';
 import { rateLimit } from './shared/rate-limit.js';
 import { GAME, calculateProduction } from './shared/game-math.js';
 
 const routes = new Hono<{ Variables: { parsedBody: { nickname: string }; player: Player } }>();
 
-// 공통: 플레이어 조회
-function requirePlayer(id: string) {
-  const player = getPlayer(id);
+// 공통: 플레이어 조회 (async, provider 경유)
+async function requirePlayer(id: string): Promise<Player> {
+  const repo = await getRepo();
+  const player = await repo.getPlayer(id);
   if (!player) throw new NotFoundError('플레이어');
   return player;
 }
 
 // ─── 플레이어 ──────────────────────────────────────
 
-routes.post('/api/players', validateJson(createPlayerSchema), (c) => {
+routes.post('/api/players', validateJson(createPlayerSchema), async (c) => {
+  const repo = await getRepo();
   const { nickname } = c.get('parsedBody');
 
   // 닉네임 중복 체크
-  const existing = getAllPlayers().find((p) => p.nickname === nickname);
+  const allPlayers = await repo.getAllPlayers();
+  const existing = allPlayers.find((p) => p.nickname === nickname);
   if (existing) {
     throw new AppError('이미 사용 중인 닉네임입니다.', 409, 'NICKNAME_CONFLICT');
   }
@@ -35,7 +38,7 @@ routes.post('/api/players', validateJson(createPlayerSchema), (c) => {
   const id = crypto.randomUUID();
   const apiKey = crypto.randomUUID();
 
-  const player = createPlayer({
+  const player = await repo.createPlayer({
     id,
     nickname,
     apiKey,
@@ -49,20 +52,22 @@ routes.post('/api/players', validateJson(createPlayerSchema), (c) => {
   return c.json(toPublicPlayerDto(player), 201);
 });
 
-routes.get('/api/players/:id', validatePlayerId, (c) => {
-  return c.json(toPublicPlayerDto(requirePlayer(c.req.param('id')!)));
+routes.get('/api/players/:id', validatePlayerId, async (c) => {
+  const player = await requirePlayer(c.req.param('id')!);
+  return c.json(toPublicPlayerDto(player));
 });
 
-routes.get('/api/players', (c) => {
-  const players = getAllPlayers().map(toPublicPlayerDto);
+routes.get('/api/players', async (c) => {
+  const repo = await getRepo();
+  const players = (await repo.getAllPlayers()).map(toPublicPlayerDto);
   return c.json(players);
 });
 
 // ─── Claim ─────────────────────────────────────────
 
-routes.post('/api/players/:id/claim', validatePlayerId, rateLimit(1, 1000), idempotencyGuard, jwtAuth, (c) => {
+routes.post('/api/players/:id/claim', validatePlayerId, rateLimit(1, 1000), idempotencyGuard, jwtAuth, async (c) => {
   const id = c.req.param('id')!;
-  const player = requirePlayer(id);
+  const player = await requirePlayer(id);
 
   const { elapsed: elapsedSeconds, produced, maxCapped } = calculateProduction(
     player.lastClaimedAt,
@@ -75,7 +80,8 @@ routes.post('/api/players/:id/claim', validatePlayerId, rateLimit(1, 1000), idem
 
   const nowISO = new Date().toISOString();
 
-  const updated = updatePlayer(id, {
+  const repo = await getRepo();
+  const updated = await repo.updatePlayer(id, {
     electricity: player.electricity + produced,
     lastClaimedAt: nowISO,
   });
@@ -92,8 +98,8 @@ routes.post('/api/players/:id/claim', validatePlayerId, rateLimit(1, 1000), idem
   } satisfies ClaimResponse);
 });
 
-routes.get('/api/players/:id/claim', validatePlayerId, (c) => {
-  const player = requirePlayer(c.req.param('id')!);
+routes.get('/api/players/:id/claim', validatePlayerId, async (c) => {
+  const player = await requirePlayer(c.req.param('id')!);
   const { elapsed, produced: pending, maxCapped } = calculateProduction(
     player.lastClaimedAt,
     player.electricityPerSecond,
@@ -103,8 +109,8 @@ routes.get('/api/players/:id/claim', validatePlayerId, (c) => {
 
 // ─── 업그레이드 ────────────────────────────────────
 
-routes.get('/api/players/:id/upgrade', validatePlayerId, (c) => {
-  const player = requirePlayer(c.req.param('id')!);
+routes.get('/api/players/:id/upgrade', validatePlayerId, async (c) => {
+  const player = await requirePlayer(c.req.param('id')!);
   const cost = player.electricityPerSecond * GAME.UPGRADE_COST_MULTIPLIER;
 
   return c.json({
@@ -115,16 +121,17 @@ routes.get('/api/players/:id/upgrade', validatePlayerId, (c) => {
   });
 });
 
-routes.post('/api/players/:id/upgrade', validatePlayerId, rateLimit(2, 1000), idempotencyGuard, jwtAuth, (c) => {
+routes.post('/api/players/:id/upgrade', validatePlayerId, rateLimit(2, 1000), idempotencyGuard, jwtAuth, async (c) => {
   const id = c.req.param('id')!;
-  const player = requirePlayer(id);
+  const player = await requirePlayer(id);
   const cost = player.electricityPerSecond * GAME.UPGRADE_COST_MULTIPLIER;
 
   if (player.electricity < cost) {
     throw new InsufficientResourceError('전기', cost, player.electricity);
   }
 
-  const updated = updatePlayer(id, {
+  const repo = await getRepo();
+  const updated = await repo.updatePlayer(id, {
     electricity: player.electricity - cost,
     electricityPerSecond: player.electricityPerSecond + 1,
   });
@@ -138,8 +145,8 @@ routes.post('/api/players/:id/upgrade', validatePlayerId, rateLimit(2, 1000), id
 
 // ─── 방치 보상 ─────────────────────────────────────
 
-routes.get('/api/players/:id/idle-rewards', validatePlayerId, (c) => {
-  const player = requirePlayer(c.req.param('id')!);
+routes.get('/api/players/:id/idle-rewards', validatePlayerId, async (c) => {
+  const player = await requirePlayer(c.req.param('id')!);
   const { elapsed: elapsedSeconds, produced: pending, maxCapped } = calculateProduction(
     player.lastClaimedAt,
     player.electricityPerSecond,
@@ -160,9 +167,9 @@ routes.get('/api/players/:id/idle-rewards', validatePlayerId, (c) => {
 
 // ─── 전투 ──────────────────────────────────────────
 
-routes.post('/api/players/:id/battle', validatePlayerId, rateLimit(1, 3000), idempotencyGuard, jwtAuth, (c) => {
+routes.post('/api/players/:id/battle', validatePlayerId, rateLimit(1, 3000), idempotencyGuard, jwtAuth, async (c) => {
   const id = c.req.param('id')!;
-  const player = requirePlayer(id);
+  const player = await requirePlayer(id);
   const playerPower = player.electricityPerSecond * GAME.COMBAT_POWER_PER_EPS;
 
   const enemyVariance = 1.0 + (Math.random() * GAME.ENEMY_POWER_VARIANCE * 2 - GAME.ENEMY_POWER_VARIANCE);
@@ -177,7 +184,8 @@ routes.post('/api/players/:id/battle', validatePlayerId, rateLimit(1, 3000), ide
     ? Math.floor(baseReward * (GAME.BATTLE_REWARD_MIN_RATIO + Math.random() * (GAME.BATTLE_REWARD_MAX_RATIO - GAME.BATTLE_REWARD_MIN_RATIO)))
     : 0;
 
-  const updated = updatePlayer(id, { electricity: player.electricity + reward });
+  const repo = await getRepo();
+  const updated = await repo.updatePlayer(id, { electricity: player.electricity + reward });
   if (!updated) throw new InternalError();
 
   logger.info({ playerId: id, won, reward, enemy: enemyName, event: 'battle' });
@@ -188,7 +196,8 @@ routes.post('/api/players/:id/battle', validatePlayerId, rateLimit(1, 3000), ide
 // ─── 지갑 ──────────────────────────────────────────
 
 routes.get('/wallet', jwtAuth, async (c) => {
-  const all = getAllPlayers();
+  const repo = await getRepo();
+  const all = await repo.getAllPlayers();
   const player = all[0]; // TODO: c.get('userId') 기반 조회로 전환
 
   if (!player) {
@@ -204,8 +213,9 @@ routes.get('/wallet', jwtAuth, async (c) => {
 
 // ─── 랭킹 ──────────────────────────────────────────
 
-routes.get('/api/rankings', (c) => {
-  const players = getAllPlayers();
+routes.get('/api/rankings', async (c) => {
+  const repo = await getRepo();
+  const players = await repo.getAllPlayers();
 
   const rankings = players
     .map((player) => {
