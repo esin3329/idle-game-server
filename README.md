@@ -201,7 +201,9 @@ src/
 ├── config.ts             # 기본 설정 상수
 ├── types.ts              # 저장소 모델 (Player)
 ├── dto.ts                # 공개 응답 DTO + 변환 함수
-├── store.ts              # JSON 파일 저장소 (개발/폴백)
+├── store.ts              # JSON Player 저장소 (개발/폴백)
+├── store-auth.ts         # JSON Auth 저장소 (회원가입/로그인/세션)
+├── store-wallet.ts       # JSON Wallet 저장소 (잔액/원장)
 ├── provider.ts           # 저장소 provider (MySQL 우선, JSON 폴백)
 ├── repository.ts         # PlayerRepository 인터페이스
 ├── shared/
@@ -222,8 +224,10 @@ src/
 │   ├── migrate.ts        # 마이그레이션 실행
 │   ├── seed.ts           # 개발용 시드 데이터
 │   ├── import-json.ts    # JSON → MySQL import
-│   ├── mysql.repository.ts # MySQL PlayerRepository 구현체
-│   └── migrations/       # drizzle-kit 생성 SQL
+│   ├── mysql.repository.ts   # MySQL PlayerRepository 구현체
+│   ├── mysql-auth.repository.ts  # MySQL AuthRepository 구현체
+│   └── mysql-wallet.repository.ts # MySQL WalletRepository 구현체
+│   └── migrations/         # drizzle-kit 생성 SQL
 └── __tests__/
     ├── store.test.ts     # 저장소 + 신뢰성 테스트
     ├── routes.test.ts    # API 테스트
@@ -231,14 +235,38 @@ src/
     └── integration.test.ts # MySQL 통합 테스트 (todo)
 ```
 
+## 저장소 선택 (provider 패턴)
+
+`DB_DRIVER` 환경변수로 저장소를 선택합니다. MySQL 연결 실패 시 자동으로 JSON으로 폴백됩니다.
+
+| DB_DRIVER | 저장소 | 사용처 |
+|-----------|--------|--------|
+| `json` | JSON 파일 (store.ts + store-auth.ts + store-wallet.ts) | 개발/테스트, MySQL 불필요 |
+| `mysql` (기본) | MySQL + Drizzle ORM | 프로덕션, Docker Compose |
+| 미설정 | MySQL 시도 → 실패 시 JSON 자동 폴백 | 개발 편의 |
+
+### 데이터 파일
+
+| 파일 | 저장 내용 |
+|------|----------|
+| `data.json` | 플레이어 (Player) |
+| `data-users.json` | 사용자 계정 (User) |
+| `data-sessions.json` | Refresh 세션 |
+| `data-sanctions.json` | 계정 제재 |
+| `data-profiles.json` | 플레이어 프로필 |
+| `data-wallets.json` | 재화 지갑 잔액 |
+| `data-ledger.json` | 재화 원장 (currency_ledger) |
+
+> ⚠️ JSON 파일은 개발/테스트 전용입니다. 프로덕션에서는 MySQL을 사용하세요.
+
 ## 실행
 
 ```bash
 npm install
 cp .env.example .env     # 환경변수 설정
 
-# JSON 파일 저장소 (MySQL 없이 개발)
-npm run dev
+# JSON 파일 저장소 (MySQL 불필요, 개발/테스트)
+DB_DRIVER=json npm run dev
 
 # MySQL + Docker Compose
 docker-compose up -d mysql
@@ -260,7 +288,7 @@ npm run dev
 | `DB_USER` | `gameuser` | MySQL 사용자 |
 | `DB_PASSWORD` | — | MySQL 비밀번호 |
 | `DB_NAME` | `idle_game` | 데이터베이스 이름 |
-| `DB_DRIVER` | `mysql` | `json` 지정 시 JSON 파일 저장소 |
+| `DB_DRIVER` | `mysql` | 저장소 드라이버 (`json`=JSON 파일, `mysql`=MySQL).<br>MySQL 미연결 시 자동 JSON 폴백 |
 | `MYSQL_ROOT_PASSWORD` | — | MySQL root 비밀번호 |
 | **JWT** | | |
 | `JWT_ACCESS_SECRET` | — | Access Token 서명 비밀키 |
@@ -279,9 +307,10 @@ GET /ready    → {"status":"ready","uptime":3600,"checks":{"database":"connecte
 
 ### 인증
 
-#### 회원가입
+#### 회원가입 (Idempotency-Key 필요)
 ```bash
 POST /auth/register
+Idempotency-Key: register-550e8400-e29b-41d4-a716-446655440000
 Content-Type: application/json
 {"email":"user@example.com","password":"password123!","nickname":"플레이어"}
 → 201 {userId, playerId, accessToken, refreshToken}
@@ -313,6 +342,9 @@ POST /auth/logout
 ```bash
 GET /wallet          → {playerId, electricity, electricityPerSecond}
 GET /wallet/ledger   → [{id, amount, balanceAfter, source, ...}]
+
+# 잔액/원장은 모든 재화 변경(claim/upgrade/battle) 시
+# wallet_balances + currency_ledger에 자동 기록됨
 ```
 
 ### 플레이어
@@ -336,17 +368,19 @@ GET  /api/players/:id/claim   # 대기량 조회
 GET  /api/players/:id/idle-rewards  # 방치 보상
 ```
 
-### 업그레이드 (JWT 인증 필요)
+### 업그레이드 (JWT 인증 + Idempotency-Key 필요)
 
 ```bash
-GET  /api/players/:id/upgrade   # 비용 조회
-POST /api/players/:id/upgrade   # 구매
+GET  /api/players/:id/upgrade                 # 비용 조회
+POST /api/players/:id/upgrade                 # 구매
+Idempotency-Key: upgrade-550e8400-e29b-41d4-a716-446655440000
 ```
 
-### 전투 (JWT 인증 필요)
+### 전투 (JWT 인증 + Idempotency-Key 필요)
 
 ```bash
 POST /api/players/:id/battle
+Idempotency-Key: battle-550e8400-e29b-41d4-a716-446655440000
 → {won, reward, enemyName, enemyPower, playerPower}
 ```
 
@@ -356,24 +390,29 @@ POST /api/players/:id/battle
 GET /api/rankings   # totalWealth 기준 내림차순
 ```
 
-### 전투 (JWT 인증 필요)
+### 전투 (v2) (JWT 인증 + Idempotency-Key 필요)
 
 ```bash
 POST /battles/start                       # 세션 생성
+Idempotency-Key: start-550e8400-e29b-41d4-a716-446655440000
   Body: { "stageCode": "stage_01_ruins" }
 
 GET  /battles/:sessionId                  # 세션 상태 + recovery
 
 POST /battles/:sessionId/progress         # 진행 이벤트
+Idempotency-Key: progress-550e8400-e29b-41d4-a716-446655440000
   Body: { "sequence": 1, "killsDelta": 5, "coreEnergyDelta": 25, "bossId": "boss_0" }
 
 POST /battles/:sessionId/upgrades/select  # 강화 선택
+Idempotency-Key: select-550e8400-e29b-41d4-a716-446655440000
   Body: { "selectedUpgradeCode": "machine_gun_1" }
 
 POST /battles/:sessionId/finish           # 전투 종료
+Idempotency-Key: finish-550e8400-e29b-41d4-a716-446655440000
   Body: { "totalKills": 245, "totalCoreEnergy": 480, "bossDefeated": ["boss_0"], "elapsedSeconds": 292 }
 
 POST /battles/:sessionId/abandon          # 포기 (보상 없음)
+Idempotency-Key: abandon-550e8400-e29b-41d4-a716-446655440000
 
 GET  /stages                              # 스테이지 목록 + 플레이어 진행도
 ```
@@ -523,19 +562,20 @@ Idempotency-Key: claim-550e8400-e29b-41d4-a716-446655440000
 | 400 | `BAD_REQUEST` | 잘못된 입력 |
 | 400 | `INVALID_JSON` | JSON 파싱 실패 |
 | 400 | `INSUFFICIENT_RESOURCE` | 전기 부족 |
-| 400 | `INSUFFICIENT_BALANCE` | 잔액 부족 |
-| 400 | `MISSING_IDEMPOTENCY_KEY` | 멱등성 키 없음 |
+| 400 | `MISSING_IDEMPOTENCY_KEY` | 멱등성 키(Idempotency-Key) 헤더 없음 |
 | 401 | `UNAUTHORIZED` | 인증 필요 |
 | 401 | `INVALID_TOKEN` | 유효하지 않은 토큰 |
 | 401 | `TOKEN_EXPIRED` | 만료된 토큰 |
 | 401 | `INVALID_CREDENTIALS` | 이메일/비밀번호 불일치 |
 | 403 | `FORBIDDEN` | 권한 없음 |
+| 400 | `IDEMPOTENCY_KEY_TOO_LONG` | 멱등성 키 64자 초과 |
 | 403 | `ACCOUNT_DISABLED` | 비활성화된 계정 |
+| 403 | `ACCOUNT_SUSPENDED` | 제재된 계정 |
 | 404 | `NOT_FOUND` | 리소스 없음 |
 | 404 | `ROUTE_NOT_FOUND` | 정의되지 않은 경로 |
 | 404 | `WALLET_NOT_FOUND` | 지갑 없음 |
 | 409 | `NICKNAME_CONFLICT` | 닉네임 중복 |
-| 409 | `DUPLICATE_ACCOUNT` | 이메일 중복 |
+| 409 | `DUPLICATE_ACCOUNT` | 이메일/닉네임 중복 |
 | 429 | `RATE_LIMITED` | 요청 제한 초과 |
 | 500 | `INTERNAL_ERROR` | 서버 내부 오류 |
 
