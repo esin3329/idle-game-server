@@ -4,7 +4,9 @@
  * DB_DRIVER=mysql → MySQL
  * 그 외          → JSON 파일 (기본값)
  */
-import type { PlayerRepository } from './repository.js';
+import type { PlayerRepository, AuthRepository } from './repository.js';
+
+// ─── PlayerRepository ─────────────────────────────
 
 async function loadJsonRepo(): Promise<PlayerRepository> {
   const { createPlayer, getPlayer, getAllPlayers, updatePlayer, deletePlayer } = await import('./store.js');
@@ -31,7 +33,6 @@ export async function getRepo(): Promise<PlayerRepository> {
       return _repo;
     }
 
-    // 기본: MySQL. 연결 실패 시 JSON 폴백 (개발 편의)
     try {
       _repo = await loadMysqlRepo();
       const { getPool } = await import('./db/connection.js');
@@ -45,7 +46,63 @@ export async function getRepo(): Promise<PlayerRepository> {
   return _repo;
 }
 
-/** 테스트 전용: 저장소 재설정 */
+/** 테스트 전용: Player 저장소 재설정 */
 export function resetRepo(): void {
   _repo = null;
+}
+
+// ─── AuthRepository ───────────────────────────────
+
+async function loadJsonAuthRepo(): Promise<AuthRepository> {
+  const { jsonAuthRepo } = await import('./store-auth.js');
+  return jsonAuthRepo;
+}
+
+async function loadMysqlAuthRepo(): Promise<AuthRepository> {
+  const { mysqlAuthRepo } = await import('./db/mysql-auth.repository.js');
+  return mysqlAuthRepo;
+}
+
+let _authRepo: AuthRepository | null = null;
+let _authRepoMode: 'json' | 'mysql' | null = null;
+
+export async function getAuthRepo(): Promise<AuthRepository> {
+  if (!_authRepo) {
+    if (process.env.DB_DRIVER === 'json') {
+      _authRepo = await loadJsonAuthRepo();
+      _authRepoMode = 'json';
+      return _authRepo;
+    }
+
+    try {
+      _authRepo = await loadMysqlAuthRepo();
+      const { getPool } = await import('./db/connection.js');
+      await getPool().query('SELECT 1');
+      _authRepoMode = 'mysql';
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`MySQL unavailable for auth repo (${msg}), falling back to JSON store.`);
+      _authRepo = await loadJsonAuthRepo();
+      _authRepoMode = 'json';
+    }
+  }
+  return _authRepo;
+}
+
+/** 현재 Auth 저장소 모드 반환 ('json' | 'mysql') */
+export function getAuthRepoMode(): 'json' | 'mysql' {
+  return _authRepoMode || 'json';
+}
+
+/** 테스트 전용: Auth 저장소 재설정 */
+export function resetAuthRepo(): void {
+  _authRepo = null;
+  _authRepoMode = null;
+}
+
+/** 모든 저장소 일괄 리셋 (테스트 전용) */
+export function resetAllRepos(): void {
+  _repo = null;
+  _authRepo = null;
+  _authRepoMode = null;
 }

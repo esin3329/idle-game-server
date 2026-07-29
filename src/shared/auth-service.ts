@@ -1,9 +1,7 @@
 import { compare, hash } from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { createHash } from 'node:crypto';
-import { eq, and } from 'drizzle-orm';
-import { getDb } from '../db/connection.js';
-import { users, playerProfiles, walletBalances, refreshSessions, accountSanctions } from '../db/schema.js';
+import { getAuthRepo, getAuthRepoMode } from '../provider.js';
 import { AppError } from './errors.js';
 import { logger, auditLog } from './logger.js';
 
@@ -19,14 +17,6 @@ function sha256(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }
 
-function parseExpires(expiresIn: string): number {
-  const match = expiresIn.match(/^(\d+)([smhd])$/);
-  if (!match) return 7 * 24 * 60 * 60 * 1000; // 기본 7일
-  const n = parseInt(match[1], 10);
-  const unit = { s: 1000, m: 60000, h: 3600000, d: 86400000 }[match[2]];
-  return n * (unit || 86400000);
-}
-
 export interface TokenPair {
   accessToken: string;
   refreshToken: string;
@@ -40,9 +30,7 @@ export interface AuthResult {
 
 // ─── 토큰 발급 ──────────────────────────────────────
 
-const M = {
-  s: 1, m: 60, h: 3600, d: 86400,
-} as const;
+const M = { s: 1, m: 60, h: 3600, d: 86400 } as const;
 
 function parseExpiresSeconds(expiresIn: string): number {
   const m = expiresIn.match(/^(\d+)([smhd])$/);
@@ -54,52 +42,85 @@ function issueTokens(userId: string, role: string = 'user'): TokenPair {
   const accessSec = parseExpiresSeconds(ACCESS_EXPIRES);
   const refreshSec = parseExpiresSeconds(REFRESH_EXPIRES);
   return {
-    accessToken: jwt.sign({ sub: userId, type: 'access', role }, jwtSecret('JWT_ACCESS_SECRET'), { expiresIn: accessSec }),
-    refreshToken: jwt.sign({ sub: userId, type: 'refresh', role, jti: crypto.randomUUID() }, jwtSecret('JWT_REFRESH_SECRET'), { expiresIn: refreshSec }),
+    accessToken: jwt.sign(
+      { sub: userId, type: 'access', role },
+      jwtSecret('JWT_ACCESS_SECRET'),
+      { expiresIn: accessSec },
+    ),
+    refreshToken: jwt.sign(
+      { sub: userId, type: 'refresh', role, jti: crypto.randomUUID() },
+      jwtSecret('JWT_REFRESH_SECRET'),
+      { expiresIn: refreshSec },
+    ),
   };
 }
 
-// ─── 회원가입 (user + profile + wallet + session 트랜잭션) ──
+// ─── 회원가입 ──────────────────────────────────────
 
 export async function registerUser(email: string, password: string, nickname: string): Promise<AuthResult> {
-  const db = getDb();
+  const mode = getAuthRepoMode();
 
-  const result = await db.transaction(async (tx) => {
-    const userId = crypto.randomUUID();
-    const playerId = crypto.randomUUID();
+  let userId: string;
+  let playerId: string;
+
+  if (mode === 'mysql') {
+    // MySQL: 트랜잭션 최적화
+    const { registerUserTransaction } = await import('../db/mysql-auth.repository.js');
     const passwordHash = await hash(password, SALT_ROUNDS);
-    const now = new Date();
+    const result = await registerUserTransaction(email, nickname, passwordHash);
+    userId = result.userId;
+    playerId = result.playerId;
+  } else {
+    // JSON: 순차 저장 (중복 검사 포함)
+    const repo = await getAuthRepo();
 
-    await tx.insert(users).values({ id: userId, email, nickname, passwordHash, status: 'active', createdAt: now, updatedAt: now });
-    await tx.insert(playerProfiles).values({ id: crypto.randomUUID(), playerId, userId, nickname, createdAt: now, updatedAt: now });
-    await tx.insert(walletBalances).values({ id: crypto.randomUUID(), playerId, userId, electricity: 0, electricityPerSecond: 1, balance: 0, lastClaimedAt: now, createdAt: now, updatedAt: now });
+    const existingEmail = await repo.findUserByEmail(email);
+    if (existingEmail) {
+      throw new AppError('이미 사용 중인 이메일입니다.', 409, 'DUPLICATE_ACCOUNT');
+    }
+
+    // TODO: 닉네임 중복 검사 — store-auth에 findUserByNickname 추가 필요
+
+    userId = crypto.randomUUID();
+    playerId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const passwordHash = await hash(password, SALT_ROUNDS);
+
+    await repo.createUser({
+      id: userId, email, nickname, passwordHash,
+      status: 'active', role: 'user',
+      createdAt: now, updatedAt: now,
+    });
+
+    await repo.createProfile({
+      id: crypto.randomUUID(), playerId, userId, nickname,
+      highestStage: 1, createdAt: now, updatedAt: now,
+    });
+
+    await repo.createWallet({
+      id: crypto.randomUUID(), playerId, userId,
+      electricity: 0, electricityPerSecond: 1, balance: 0,
+      lastClaimedAt: now, createdAt: now, updatedAt: now,
+    });
 
     logger.info({ userId, playerId, email, event: 'register' }, 'User registered');
-    return { userId, playerId };
-  }).catch((err) => {
-    if ((err as { errno?: number }).errno === 1062) { // ER_DUP_ENTRY
-      throw new AppError('이미 사용 중인 이메일 또는 닉네임입니다.', 409, 'DUPLICATE_ACCOUNT');
-    }
-    throw err;
-  });
+  }
 
-  const tokens = issueTokens(result.userId, 'user');
-  await storeRefreshSession(result.userId, tokens.refreshToken);
-  return { userId: result.userId, playerId: result.playerId, tokens };
+  const tokens = issueTokens(userId, 'user');
+  await storeRefreshSession(userId, tokens.refreshToken);
+  return { userId, playerId, tokens };
 }
 
 // ─── 로그인 ─────────────────────────────────────────
 
 export async function loginUser(email: string, password: string): Promise<AuthResult> {
-  const db = getDb();
+  const repo = await getAuthRepo();
 
-  const rows = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  if (rows.length === 0) {
+  const user = await repo.findUserByEmail(email);
+  if (!user) {
     auditLog.warn({ email, event: 'login_failed', reason: 'unknown_email' }, `Login failed: ${email}`);
     throw new AppError('이메일 또는 비밀번호가 일치하지 않습니다.', 401, 'INVALID_CREDENTIALS');
   }
-
-  const user = rows[0];
 
   if (!(await compare(password, user.passwordHash))) {
     auditLog.warn({ userId: user.id, email, event: 'login_failed', reason: 'wrong_password' }, `Login failed (password): ${email}`);
@@ -110,21 +131,19 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
     throw new AppError('비활성화된 계정입니다.', 403, 'ACCOUNT_DISABLED');
   }
 
-  // 제재 확인: active suspension → 로그인 차단
-  const activeSanctions = await db.select().from(accountSanctions)
-    .where(and(eq(accountSanctions.userId, user.id), eq(accountSanctions.type, 'suspension'), eq(accountSanctions.status, 'active')))
-    .limit(1);
+  // 제재 확인
+  const activeSanctions = await repo.findActiveSanctions(user.id);
   if (activeSanctions.length > 0) {
     throw new AppError('제재된 계정입니다.', 403, 'ACCOUNT_SUSPENDED');
   }
 
-  const profiles = await db.select().from(playerProfiles).where(eq(playerProfiles.userId, user.id)).limit(1);
-  const playerId = profiles.length > 0 ? profiles[0].playerId : '';
+  // 플레이어 ID 조회
+  const profile = await repo.findProfileByUserId(user.id);
+  const playerId = profile?.playerId || '';
 
   const tokens = issueTokens(user.id, user.role || 'user');
   await storeRefreshSession(user.id, tokens.refreshToken);
 
-  // 운영자 로그인 감사
   if (user.role === 'operator' || user.role === 'admin') {
     auditLog.warn({ operatorId: user.id, email, event: 'operator_login' }, `Operator login: ${email}`);
   }
@@ -136,7 +155,7 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
 // ─── 토큰 갱신 (rotation) ───────────────────────────
 
 export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
-  const db = getDb();
+  const repo = await getAuthRepo();
   const now = new Date();
   const tokenHash = sha256(refreshToken);
 
@@ -149,16 +168,13 @@ export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
   }
 
   // 2. DB에서 해시 조회 → 존재 + 만료 안 됨 + 취소 안 됨
-  const sessions = await db.select().from(refreshSessions)
-    .where(eq(refreshSessions.tokenHash, tokenHash))
-    .limit(1);
-
-  if (sessions.length === 0 || sessions[0].revokedAt !== null || sessions[0].expiresAt < now) {
+  const session = await repo.findSessionByTokenHash(tokenHash);
+  if (!session || session.revokedAt !== undefined || new Date(session.expiresAt) < now) {
     throw new AppError('만료되었거나 취소된 토큰입니다.', 401, 'TOKEN_EXPIRED');
   }
 
-  // 3. 기존 토큰 폐기 (revoke)
-  await db.update(refreshSessions).set({ revokedAt: now }).where(eq(refreshSessions.tokenHash, tokenHash));
+  // 3. 기존 토큰 폐기
+  await repo.revokeSession(tokenHash);
 
   // 4. 새 토큰 발급 + 저장
   const tokens = issueTokens(payload.sub, payload.role || 'user');
@@ -167,27 +183,27 @@ export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
   return tokens;
 }
 
-// ─── 세션 저장 ──────────────────────────────────────
+// ─── 세션 저장 / 로그아웃 ───────────────────────────
 
 /** 로그아웃: Refresh Token 폐기 */
 export async function revokeRefreshToken(refreshToken: string): Promise<void> {
-  const db = getDb();
+  const repo = await getAuthRepo();
   const tokenHash = sha256(refreshToken);
-  await db.update(refreshSessions).set({ revokedAt: new Date() }).where(eq(refreshSessions.tokenHash, tokenHash));
+  await repo.revokeSession(tokenHash);
   logger.info('Refresh token revoked');
 }
 
 async function storeRefreshSession(userId: string, refreshToken: string): Promise<void> {
-  const db = getDb();
+  const repo = await getAuthRepo();
   const tokenHash = sha256(refreshToken);
-  const expiresMs = parseExpires(REFRESH_EXPIRES);
+  const expiresMs = parseExpiresSeconds(REFRESH_EXPIRES) * 1000;
   const expiresAt = new Date(Date.now() + expiresMs);
 
-  await db.insert(refreshSessions).values({
+  await repo.createSession({
     id: crypto.randomUUID(),
     userId,
     tokenHash,
-    expiresAt,
-    createdAt: new Date(),
+    expiresAt: expiresAt.toISOString(),
+    createdAt: new Date().toISOString(),
   });
 }

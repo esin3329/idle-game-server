@@ -9,3 +9,64 @@ export interface Player {
   createdAt: string;
   updatedAt: string;
 }
+
+/** 사용자 계정 */
+export interface User {
+  id: string;
+  email: string;
+  nickname: string;
+  passwordHash: string;
+  status: string;
+  role: string;
+  suspendedAt?: string;
+  suspendedReason?: string;
+  refreshToken?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Refresh 세션 */
+export interface RefreshSession {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  expiresAt: string;
+  revokedAt?: string;
+  createdAt: string;
+}
+
+/** 계정 제재 */
+export interface Sanction {
+  id: string;
+  userId: string;
+  type: string;
+  status: string;
+  reasonText: string;
+  startsAt: string;
+  expiresAt?: string;
+  createdAt: string;
+}
+
+/** 플레이어 프로필 */
+export interface PlayerProfile {
+  id: string;
+  playerId: string;
+  userId: string;
+  nickname: string;
+  highestStage: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 지갑 잔액 */
+export interface WalletBalance {
+  id: string;
+  playerId: string;
+  userId: string;
+  electricity: number;
+  electricityPerSecond: number;
+  balance: number;
+  lastClaimedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
