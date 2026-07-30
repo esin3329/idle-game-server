@@ -15,6 +15,7 @@ import upgradesRoutes from './upgrades.routes.js';
 import adminRoutes from './admin.routes.js';
 import { AppError } from './shared/errors.js';
 import { logger } from './shared/logger.js';
+import { recordRequest, getMetrics } from './shared/metrics.js';
 import { DEFAULT_PORT } from './config.js';
 import { validateProductionSecrets } from './shared/validate-secrets.js';
 
@@ -30,10 +31,10 @@ function normalizePath(path: string): string {
   return path.replace(/\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '/:id');
 }
 
-// ─── 요청 로깅 미들웨어 ────────────────────────────
+// ─── 요청 로깅 + 메트릭 미들웨어 ───────────────────
 
 app.use('*', async (c, next) => {
-  if (c.req.path === '/health' || c.req.path === '/ready') {
+  if (c.req.path === '/health' || c.req.path === '/ready' || c.req.path === '/metrics') {
     return next();
   }
 
@@ -50,12 +51,17 @@ app.use('*', async (c, next) => {
   inFlightRequests++;
   await next();
   inFlightRequests--;
+  const durationMs = Date.now() - start;
+
+  // 메트릭 수집
+  recordRequest(normalizePath(c.req.path), c.res.status, durationMs);
+
   logger.info({
     requestId,
     method: c.req.method,
     path: normalizePath(c.req.path),
     status: c.res.status,
-    durationMs: Date.now() - start,
+    durationMs,
     inFlight: inFlightRequests,
     ...(c.get('userId') ? { userId: c.get('userId') } : {}),
   });
@@ -111,18 +117,33 @@ app.notFound((c) => {
 // ─── 라우트 ────────────────────────────────────────
 
 app.get('/', (c) => c.text('Idle Game Server'));
-app.get('/health', (c) => c.json({ status: 'ok' }));
-app.get('/health/live', (c) => c.json({ status: 'ok', uptime: Math.floor(process.uptime()) }));
+
+// ─── 헬스 체크 ──────────────────────────────────────
 
 let isReady = true;
 let dbConnected = false;
+
+app.get('/health', (c) => {
+  const mem = process.memoryUsage();
+  return c.json({
+    status: 'ok',
+    uptime: Math.floor(process.uptime()),
+    memory: {
+      rss: Math.round(mem.rss / 1024 / 1024) + 'MB',
+      heapUsed: Math.round(mem.heapUsed / 1024 / 1024) + 'MB',
+      heapTotal: Math.round(mem.heapTotal / 1024 / 1024) + 'MB',
+    },
+    nodeVersion: process.version,
+    environment: process.env.NODE_ENV || 'development',
+  });
+});
+
+app.get('/health/live', (c) => c.json({ status: 'ok', uptime: Math.floor(process.uptime()) }));
 
 app.get('/ready', async (c) => {
   if (!isReady) {
     return c.json({ status: 'not ready' }, 503);
   }
-
-  // DB 연결 상태 확인 (3초 timeout)
   try {
     if (process.env.DB_HOST) {
       const { getPool } = await import('./db/connection.js');
@@ -132,20 +153,20 @@ app.get('/ready', async (c) => {
       dbConnected = true;
     }
   } catch {
-    if (dbConnected) {
-      logger.warn({ event: 'database_connection_lost' }, 'Database connection lost');
-    }
+    if (dbConnected) logger.warn({ event: 'database_connection_lost' }, 'Database connection lost');
     dbConnected = false;
   }
-
   return c.json({
     status: dbConnected ? 'ready' : 'degraded',
     uptime: Math.floor(process.uptime()),
-    checks: {
-      database: dbConnected ? 'connected' : 'disconnected',
-    },
+    inFlightRequests,
+    checks: { database: dbConnected ? 'connected' : 'disconnected' },
   });
 });
+
+// ─── 메트릭 ──────────────────────────────────────────
+
+app.get('/metrics', (c) => c.json(getMetrics()));
 
 app.route('/', routes);
 app.route('/', authRoutes);
