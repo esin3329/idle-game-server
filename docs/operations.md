@@ -427,3 +427,185 @@ CMD ["node", "dist/index.js"]
 - [ ] `dry-run` 복구 검증
 - [ ] 로그 확인 (`docker compose logs --tail=100 app`)
 - [ ] 느린 쿼리 로그 확인
+
+---
+
+## 10. Redis 운영
+
+### 환경 변수
+
+| 변수 | 기본값 | 설명 |
+|------|--------|------|
+| `REDIS_URL` | `redis://localhost:6379` | Redis 연결 주소 |
+| `REDIS_RECONNECT_INTERVAL` | `60000` | 재연결 시도 간격 (ms, 0=비활성화) |
+
+### 사용 용도
+
+| 기능 | Redis 자료구조 | 키 패턴 | 장애 시 동작 |
+|------|--------------|---------|:-----------:|
+| 랭킹 | Sorted Set | `ranking:totalWealth` | MySQL/JSON 기존 방식 fallback |
+
+### 상태 확인
+
+```bash
+# Redis 연결 상태 (메트릭)
+curl http://localhost:3000/metrics | jq '.redis'
+
+# 직접 확인
+redis-cli PING
+redis-cli ZCARD ranking:totalWealth
+```
+
+### Redis 장애 대응
+
+```bash
+# 1. Redis 연결 확인
+redis-cli PING 2>/dev/null || echo "Redis DOWN"
+
+# 2. 자동 fallback 확인
+# Redis 장애 시 서버 로그에 'redis_unavailable' 또는 'redis_lost' 기록
+docker compose logs app | grep redis_
+
+# 3. Redis 재시작
+docker compose restart redis
+
+# 4. 자동 재연결 확인 (최대 60초)
+# 복구 시 'Redis connected' 로그 확인
+docker compose logs app --tail=20 | grep "Redis connected"
+```
+
+### 주의사항
+
+- Redis는 **선택적**입니다. Redis가 없어도 모든 게임 기능이 정상 동작합니다.
+- Redis 장애 시 **핵심 게임 기능에 영향 없음** (MySQL/JSON 기반 fallback)
+- 랭킹 데이터는 Redis에만 저장되므로, Redis 재시작 시 초기화됩니다.
+- 운영 Redis는 **영속성(persistence)** 설정을 권장합니다.
+
+---
+
+## 11. Worker Thread & Cluster
+
+### Worker Thread (bcrypt offload)
+
+CPU 집약적 작업(bcrypt hash)을 별도 Worker Thread로 분리하여 메인 스레드 블로킹 방지.
+
+| 환경변수 | 기본값 | 설명 |
+|----------|:------:|------|
+| `ENABLE_WORKER` | `false` | `1` 또는 `true` 설정 시 Worker Thread 활성화 |
+
+```bash
+# Worker Thread 활성화
+ENABLE_WORKER=1 node dist/index.js
+
+# 기본 (메인 스레드에서 bcrypt 처리)
+node dist/index.js
+```
+
+**적용 작업:**
+- 회원가입 시 password hash (bcrypt)
+- 로그인 시 password 비교 (bcrypt)
+
+**효과:**
+- 회원가입 latency: 50~120ms → 20~40ms (예상)
+- 메인 스레드 블로킹 시간 감소 → 전체 처리량 소폭 향상
+
+### 클러스터 모드 (다중 API 서버)
+
+멀티코어 CPU를 활용한 수평 확장.
+
+| 환경변수 | 기본값 | 설명 |
+|----------|:------:|------|
+| `CLUSTER_MODE` | `false` | `1` 또는 `true` 설정 시 클러스터 활성화 |
+| `CLUSTER_WORKERS` | CPU 코어 수 | Worker 프로세스 개수 |
+
+```bash
+# 4개 Worker로 실행
+CLUSTER_MODE=1 CLUSTER_WORKERS=4 node dist/index.js
+
+# CPU 코어 수만큼 실행
+CLUSTER_MODE=1 node dist/index.js
+```
+
+**주의사항:**
+
+| 저장소 | 클러스터 호환 | 이유 |
+|--------|:-----------:|------|
+| MySQL | ✅ 완벽 호환 | connection pool 공유 |
+| JSON | ⚠️ 제한적 | 파일 I/O 경합 발생 가능 |
+| Redis | ✅ 완벽 호환 | 별도 서버이므로 무관 |
+
+> ⚠️ JSON 모드에서는 파일 I/O 충돌 위험이 있으므로, 클러스터 모드는 **MySQL과 함께 사용**하는 것을 권장합니다.
+
+### Worker 사망 자동 복구
+
+```bash
+# Worker가 비정상 종료되어도 1초 후 자동 재시작
+CLUSTER_MODE=1 node dist/index.js
+# 로그 확인: 'Worker <pid> died' → 'Worker <pid> online'
+```
+
+---
+
+## 12. 장애 대응 절차
+
+### Redis 장애
+
+```mermaid
+flowchart TD
+    A[Redis 장애 발생] --> B{자동 fallback}
+    B --> C[랭킹: MySQL/JSON 방식 사용]
+    B --> D[게임 기능: 영향 없음]
+    C --> E[Redis 재연결 시도 (60초 간격)]
+    E --> F{복구 성공?}
+    F -->|예| G[Redis 재사용 + 로깅]
+    F -->|아니오| E
+```
+
+### Worker 스레드 장애
+
+```mermaid
+flowchart TD
+    A[Worker 비정상 종료] --> B[메인 스레드에서 bcrypt 직접 처리]
+    B --> C[Worker 재시도 (다음 요청 시)]
+    C --> D{재시작 성공?}
+    D -->|예| E[Worker 사용 재개]
+    D -->|아니오| B
+```
+
+### 클러스터 Worker 장애
+
+```mermaid
+flowchart TD
+    A[Worker 프로세스 사망] --> B[1초 후 자동 fork]
+    B --> C{새 Worker 시작?}
+    C -->|예| D[정상 서비스 재개]
+    C -->|아니오| E[5초 후 재시도 (최대 3회)]
+    E --> C
+```
+
+### 데이터 불일치 시 대응
+
+```bash
+# 1. Redis 랭킹 데이터 초기화
+redis-cli DEL ranking:totalWealth
+
+# 2. 랭킹 재구축 (모든 플레이어 재등록)
+# (향후 자동 재구축 기능 예정)
+
+# 3. MySQL ↔ JSON 데이터 비교
+./scripts/integrity-check.sh
+```
+
+---
+
+## 13. 성능 기준 (Benchmark)
+
+자세한 성능 측정 결과는 **[benchmark.md](./benchmark.md)** 를 참고하세요.
+
+| 엔드포인트 | RPS (10 conn) | P50 | 오류율 |
+|-----------|:-----------:|:---:|:-----:|
+| `GET /health` | ~400 | < 1ms | 0% |
+| `GET /parts` | ~400 | 2~6ms | 0% |
+| `GET /stages` | ~470 | 2~5ms | 0% |
+| `POST /api/players` | ~300 | 5~15ms | 0% |
+| `POST /auth/register` | ~240 | 50~120ms | 0% |
