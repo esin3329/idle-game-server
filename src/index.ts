@@ -6,6 +6,7 @@ import { bodyLimit } from 'hono/body-limit';
 import routes from './routes.js';
 import authRoutes from './auth.routes.js';
 import battleRoutes from './battle.routes.js';
+import stagesRoutes from './stages.routes.js';
 import partsRoutes from './parts.routes.js';
 import mechaRoutes from './mecha.routes.js';
 import researchRoutes from './research.routes.js';
@@ -148,6 +149,7 @@ app.get('/ready', async (c) => {
 
 app.route('/', routes);
 app.route('/', authRoutes);
+app.route('/', stagesRoutes);  // battleRoutes의 /stages보다 우선
 app.route('/', battleRoutes);
 app.route('/', partsRoutes);
 app.route('/', mechaRoutes);

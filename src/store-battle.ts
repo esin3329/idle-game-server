@@ -4,6 +4,7 @@
 import { readFileSync, writeFileSync, renameSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BattleRepository } from './repository.js';
+import { STAGES } from './data/stages.js';
 import { logger } from './shared/logger.js';
 
 const sessionsFile = process.env.DATA_FILE_BATTLES || join(process.cwd(), 'data-battles.json');
@@ -53,17 +54,11 @@ function ensure() {
   if (!_initialized) { _initialized = true; sessions = loadMap(sessionsFile, 'sessions'); events = loadArray(eventsFile, 'events'); results = loadMap(resultsFile, 'results'); }
 }
 
-// 정적 스테이지 데이터 (마이그레이션 없이 사용 가능)
-const STATIC_STAGES = [
-  { id: 'stage_01_ruins', name: 'stage_01_ruins', description: '폐허', sequence: 1, durationSeconds: 300, entryRequirement: 'none', recommendedPower: 10, enemySet: '["zombie","slime"]', bossTimings: '[180]', maxKills: 300, maxCoreEnergy: 300, corePerLevel: 50, corePerKill: 5, scrapPerKill: 1, unlocked: 1, enabled: 1, contentVersion: '1.0.0' },
-  { id: 'stage_02_factory', name: 'stage_02_factory', description: '공장', sequence: 2, durationSeconds: 360, entryRequirement: 'stage_01_ruins', recommendedPower: 30, enemySet: '["goblin","drone"]', bossTimings: '[180,300]', maxKills: 400, maxCoreEnergy: 400, corePerLevel: 60, corePerKill: 6, scrapPerKill: 2, unlocked: 0, enabled: 1, contentVersion: '1.0.0' },
-  { id: 'stage_03_lab', name: 'stage_03_lab', description: '연구소', sequence: 3, durationSeconds: 420, entryRequirement: 'stage_02_factory', recommendedPower: 60, enemySet: '["mutant","skeleton"]', bossTimings: '[180,300,400]', maxKills: 500, maxCoreEnergy: 500, corePerLevel: 70, corePerKill: 7, scrapPerKill: 3, unlocked: 0, enabled: 1, contentVersion: '1.0.0' },
-  { id: 'stage_04_core', name: 'stage_04_core', description: '코어', sequence: 4, durationSeconds: 480, entryRequirement: 'stage_03_lab', recommendedPower: 100, enemySet: '["boss"]', bossTimings: '[180,300,400,460]', maxKills: 600, maxCoreEnergy: 600, corePerLevel: 80, corePerKill: 8, scrapPerKill: 4, unlocked: 0, enabled: 1, contentVersion: '1.0.0' },
-];
+// data/stages.ts 에서 STAGES 임포트
 
 export const jsonBattleRepo: BattleRepository = {
-  async getStage(stageId: string) { return STATIC_STAGES.find((s) => s.id === stageId) || null; },
-  async getStages() { return STATIC_STAGES; },
+  async getStage(stageId: string) { return STAGES.find((s) => s.id === stageId) || null; },
+  async getStages() { return STAGES; },
   async getStageRewards() { return []; },
   async getMechStats() { return null; },
   async createMechStats() {},
