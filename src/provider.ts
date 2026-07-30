@@ -4,7 +4,7 @@
  * DB_DRIVER=mysql → MySQL
  * 그 외          → JSON 파일 (기본값)
  */
-import type { PlayerRepository, AuthRepository, WalletRepository } from './repository.js';
+import type { PlayerRepository, AuthRepository, WalletRepository, PartsRepository } from './repository.js';
 
 // ─── PlayerRepository ─────────────────────────────
 
@@ -170,6 +170,42 @@ export function resetWalletRepo(): void {
   _walletRepoMode = null;
 }
 
+// ─── PartsRepository ────────────────────────────
+
+async function loadJsonPartsRepo(): Promise<PartsRepository> {
+  const { jsonPartsRepo } = await import('./store-parts.js');
+  return jsonPartsRepo;
+}
+
+async function loadMysqlPartsRepo(): Promise<PartsRepository> {
+  const { mysqlPartsRepo } = await import('./db/mysql-parts.repository.js');
+  return mysqlPartsRepo;
+}
+
+let _partsRepo: PartsRepository | null = null;
+
+export async function getPartsRepo(): Promise<PartsRepository> {
+  if (!_partsRepo) {
+    if (process.env.DB_DRIVER === 'json') {
+      _partsRepo = await loadJsonPartsRepo();
+      return _partsRepo;
+    }
+    try {
+      _partsRepo = await loadMysqlPartsRepo();
+      const { getPool } = await import('./db/connection.js');
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
+      await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
+    } catch (err) {
+      _partsRepo = await loadJsonPartsRepo();
+    }
+  }
+  return _partsRepo;
+}
+
+export function resetPartsRepo(): void {
+  _partsRepo = null;
+}
+
 /** 모든 저장소 일괄 리셋 (테스트 전용) */
 export function resetAllRepos(): void {
   _repo = null;
@@ -177,4 +213,5 @@ export function resetAllRepos(): void {
   _authRepoMode = null;
   _walletRepo = null;
   _walletRepoMode = null;
+  _partsRepo = null;
 }

@@ -94,3 +94,22 @@ export interface WalletRepository {
   updateLastClaimedAt(playerId: string, claimedAt: string): Promise<void>;
   getLedger(playerId: string, limit?: number): Promise<LedgerEntry[]>;
 }
+
+// ─── 파츠(Part) ───────────────────────────────────
+
+export interface PartsRepository {
+  /** 플레이어의 파츠 인벤토리 조회 */
+  getInventory(playerId: string): Promise<PlayerPart[]>;
+  /** 파츠 보유 여부 확인 */
+  hasPart(playerId: string, partCode: string): Promise<boolean>;
+  /** 새 파츠 지급 */
+  grantPart(playerId: string, partCode: string, partType: string): Promise<PlayerPart>;
+  /** 파츠 장착/해제 */
+  equipPart(playerId: string, partCode: string, partType: string): Promise<void>;
+  /** 현재 장착 상태 조회 */
+  getEquipped(playerId: string): Promise<EquipSlot | null>;
+  /** 파츠 레벨업 */
+  upgradePart(playerId: string, partCode: string): Promise<PlayerPart>;
+}
+
+import type { PlayerPart, EquipSlot } from './types.js';

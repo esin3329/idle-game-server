@@ -488,3 +488,28 @@ export const playerProfiles = mysqlTable('player_profiles', {
 }, (table) => [
   index('idx_pp_user_id').on(table.userId),
 ]);
+
+/** parts_inventory — 플레이어 보유 파츠 */
+export const partsInventory = mysqlTable('parts_inventory', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  playerId: varchar('player_id', { length: 36 }).notNull(),
+  partCode: varchar('part_code', { length: 50 }).notNull(),
+  partType: varchar('part_type', { length: 10 }).notNull(),
+  level: int('level').notNull().default(1),
+  equipped: int('equipped').notNull().default(0),
+  createdAt: datetime('created_at').notNull(),
+}, (table) => [
+  index('idx_pi_player_id').on(table.playerId),
+  unique('uq_pi_player_code').on(table.playerId, table.partCode),
+]);
+
+/** equip_slots — 플레이어 장착 상태 */
+export const equipSlots = mysqlTable('equip_slots', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  playerId: varchar('player_id', { length: 36 }).notNull().unique(),
+  frame: varchar('frame', { length: 50 }).notNull().default('medium_frame'),
+  weapon: varchar('weapon', { length: 50 }).notNull().default('machine_gun'),
+  core: varchar('core', { length: 50 }).notNull().default('assault_core'),
+  module: varchar('module', { length: 50 }).notNull().default('power_module'),
+  updatedAt: datetime('updated_at').notNull(),
+});

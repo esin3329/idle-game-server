@@ -89,3 +89,39 @@ export interface CurrencyLedger {
   requestHash: string;
   createdAt: string;
 }
+
+// ─── 파츠(Part) 시스템 ───────────────────────────
+
+/** 파츠 인벤토리 — 플레이어가 보유한 파츠 */
+export interface PlayerPart {
+  id: string;
+  playerId: string;
+  partCode: string;       // data/parts.ts의 code
+  partType: 'frame' | 'weapon' | 'core' | 'module';
+  level: number;
+  equipped: 0 | 1;
+  createdAt: string;
+}
+
+/** 플레이어 장착 상태 — 각 슬롯에 장착된 파츠 */
+export interface EquipSlot {
+  id: string;
+  playerId: string;
+  frame: string;          // partCode
+  weapon: string;
+  core: string;
+  module: string;
+  updatedAt: string;
+}
+
+/** 파츠 합성 재료 */
+export interface PartCrafting {
+  id: string;
+  playerId: string;
+  resultCode: string;
+  materials: string;      // JSON: {code: qty, ...}
+  startedAt: string;
+  completesAt: string;
+  completed: 0 | 1;
+  createdAt: string;
+}
