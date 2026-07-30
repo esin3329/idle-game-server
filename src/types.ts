@@ -151,3 +151,14 @@ export interface MechaConfig {
   createdAt: string;
   updatedAt: string;
 }
+
+/** 연구 노드 — 플레이어의 연구 진행 상태 */
+export interface PlayerResearch {
+  id: string;
+  playerId: string;
+  code: string;           // data/research.ts의 code
+  level: number;          // 현재 레벨 (0 = 미해금)
+  completed: 0 | 1;       // maxLevel 도달 시 1
+  createdAt: string;
+  updatedAt: string;
+}

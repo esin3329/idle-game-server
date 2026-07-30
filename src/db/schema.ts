@@ -529,3 +529,17 @@ export const mechaConfigs = mysqlTable('mecha_configs', {
 }, (table) => [
   index('idx_mc_player_id').on(table.playerId),
 ]);
+
+/** player_research — 플레이어 연구 진행도 */
+export const playerResearch = mysqlTable('player_research', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  playerId: varchar('player_id', { length: 36 }).notNull(),
+  code: varchar('code', { length: 50 }).notNull(),
+  level: int('level').notNull().default(0),
+  completed: int('completed').notNull().default(0),
+  createdAt: datetime('created_at').notNull(),
+  updatedAt: datetime('updated_at').notNull(),
+}, (table) => [
+  index('idx_pr_player_id').on(table.playerId),
+  unique('uq_pr_player_code').on(table.playerId, table.code),
+]);

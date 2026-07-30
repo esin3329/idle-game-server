@@ -124,3 +124,18 @@ export interface MechaConfigRepository {
   deleteConfig(id: string, playerId: string): Promise<boolean>;
   getActiveConfig(playerId: string): Promise<MechaConfig | null>;
 }
+
+// ─── Research ────────────────────────────────────
+
+export interface ResearchRepository {
+  /** 플레이어의 모든 연구 상태 조회 */
+  getAll(playerId: string): Promise<PlayerResearch[]>;
+  /** 특정 연구 조회 */
+  get(playerId: string, code: string): Promise<PlayerResearch | null>;
+  /** 연구 레벨업 (1 증가) */
+  levelUp(playerId: string, code: string): Promise<PlayerResearch>;
+  /** 연구 초기화 (모든 연구 level=0) */
+  reset(playerId: string): Promise<void>;
+}
+
+import type { PlayerResearch } from './types.js';

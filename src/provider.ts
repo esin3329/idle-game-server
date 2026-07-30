@@ -4,7 +4,7 @@
  * DB_DRIVER=mysql → MySQL
  * 그 외          → JSON 파일 (기본값)
  */
-import type { PlayerRepository, AuthRepository, WalletRepository, PartsRepository, MechaConfigRepository } from './repository.js';
+import type { PlayerRepository, AuthRepository, WalletRepository, PartsRepository, MechaConfigRepository, ResearchRepository } from './repository.js';
 
 // ─── PlayerRepository ─────────────────────────────
 
@@ -233,6 +233,35 @@ export async function getMechaConfigRepo(): Promise<MechaConfigRepository> {
 
 export function resetMechaConfigRepo(): void {
   _configsRepo = null;
+}
+
+// ─── ResearchRepository ──────────────────────────
+
+let _researchRepo: ResearchRepository | null = null;
+
+export async function getResearchRepo(): Promise<ResearchRepository> {
+  if (!_researchRepo) {
+    if (process.env.DB_DRIVER === 'json') {
+      const { jsonResearchRepo } = await import('./store-research.js');
+      _researchRepo = jsonResearchRepo;
+      return _researchRepo;
+    }
+    try {
+      const { mysqlResearchRepo } = await import('./db/mysql-research.repository.js');
+      const { getPool } = await import('./db/connection.js');
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
+      await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
+      _researchRepo = mysqlResearchRepo;
+    } catch {
+      const { jsonResearchRepo } = await import('./store-research.js');
+      _researchRepo = jsonResearchRepo;
+    }
+  }
+  return _researchRepo;
+}
+
+export function resetResearchRepo(): void {
+  _researchRepo = null;
 }
 
 /** 모든 저장소 일괄 리셋 (테스트 전용) */
