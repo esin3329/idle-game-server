@@ -199,3 +199,11 @@ export function getStageBosses(stageId: string): BossData[] {
   if (!stage) return [];
   return stage.bossCodes.map((c) => BOSSES[c]).filter(Boolean);
 }
+
+/** 다음 스테이지 ID 반환 (없으면 undefined) */
+export function getNextStageId(currentStageId: string): string | undefined {
+  const current = STAGES.find((s) => s.id === currentStageId);
+  if (!current) return undefined;
+  const next = STAGES.find((s) => s.sequence === current.sequence + 1);
+  return next?.id;
+}

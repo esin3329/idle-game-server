@@ -7,6 +7,8 @@
 import { getBattleRepo } from '../provider.js';
 import { BATTLE_POLICY } from './battle-policy.js';
 import { ALL_UPGRADES } from '../data/upgrades.js';
+import { randomBlueprintByDropWeight } from '../data/crafting.js';
+import { getNextStageId } from '../data/stages.js';
 import { AppError } from './errors.js';
 import { logger, auditLog } from './logger.js';
 
@@ -405,31 +407,68 @@ export async function endBattleSession(sessionId: string, userId: string, report
       throw new AppError('이미 종료된 전투입니다.', 409, 'ALREADY_FINISHED');
     }
 
+    // ═══════════════════════════════════════════════
     // 보상 계산
+    // ═══════════════════════════════════════════════
     const scrapPerKill = stageDef.scrapPerKill || 1;
     const scrapReward = report.totalKills * scrapPerKill;
-    const isFirstClear = false; // TODO: 첫 클리어 확인
+    const bossSequence = sessionBosses.length;  // 검증부에서 선언된 sessionBosses 재사용
 
-    const rewards: BattleReward = { scrap: scrapReward };
+    // 첫 클리어 확인
+    const existingRecord = await repo.getPlayerRecord(session.playerId, stageDef.id);
+    const isFirstClear = !existingRecord || (existingRecord.totalClears || 0) === 0;
 
-    // 보상 지급 (트랜잭션)
+    // ─── 설계도 보상 ───────────────────────────────
+    let blueprintCode: string | undefined;
+    if (isFirstClear) {
+      // 첫 클리어: 확정 설계도 (stage_04 코어 = 희귀, else 랜덤)
+      if (stageDef.id === 'stage_04_core') {
+        blueprintCode = randomBlueprintByDropWeight('rare').code;
+      } else {
+        blueprintCode = randomBlueprintByDropWeight().code;
+      }
+    } else if (Math.random() < 0.15) {
+      // 일반 클리어: 15% 확률로 랜덤 설계도
+      blueprintCode = randomBlueprintByDropWeight().code;
+    }
+
+    // 설계도 지급
+    if (blueprintCode) {
+      const { getCraftingRepo } = await import('../provider.js');
+      const craftRepo = await getCraftingRepo();
+      const already = await craftRepo.hasBlueprint(session.playerId, blueprintCode);
+      if (!already) {
+        await craftRepo.grantBlueprint(session.playerId, blueprintCode);
+        logger.info({ playerId: session.playerId, blueprintCode, sessionId, event: 'battle_blueprint_drop' }, 'Blueprint dropped');
+      }
+    }
+
+    const rewards: BattleReward = {
+      scrap: scrapReward,
+      blueprint: blueprintCode,
+    };
+
+    // ─── 보상 확정 (completed) ────────────────────
     await repo.updateSession(sessionId, {
       status: 'completed', endTime: new Date(),
       completedAt: new Date(), resultCode: 'clear',
       rewardScrap: scrapReward,
     });
 
+    // 멱등성 키: 전투 세션 ID 기반 (중복 실행 방지)
+    const idempotencyKey = `battle-${sessionId}`;
+
     await repo.createBattleResult({
       id: crypto.randomUUID(), battleSessionId: sessionId,
       userId, result: 'clear', isFirstClear: isFirstClear ? 1 : 0,
       verifiedElapsedMs: report.elapsedSeconds * 1000,
       verifiedKills: report.totalKills,
-      verifiedBossSequence: JSON.parse(session.bossDefeated || '[]').length,
+      verifiedBossSequence: bossSequence,
       scrapReward, rewardSummary: JSON.stringify(rewards),
       finalizedAt: new Date(), createdAt: new Date(),
     });
 
-    // 지갑 + 원장
+    // ─── 지갑 + 원장 ──────────────────────────────
     if (scrapReward > 0) {
       const wallet = await repo.getWalletBalance(session.playerId);
       if (wallet) {
@@ -440,20 +479,35 @@ export async function endBattleSession(sessionId: string, userId: string, report
           balanceAfter: (wallet.scrap || 0) + scrapReward,
           source: 'battle', reason: '전투 보상',
           referenceType: 'battle_session', referenceId: sessionId,
+          idempotencyKey: idempotencyKey + '-scrap',
           createdAt: new Date().toISOString(),
         });
       }
     }
 
-    // 기록 갱신
+    // ─── 기록 갱신 ──────────────────────────────
+    const recordId = existingRecord?.id || crypto.randomUUID();
     await repo.upsertPlayerRecord({
-      id: crypto.randomUUID(), playerId: session.playerId,
+      id: recordId, playerId: session.playerId,
       stageId: stageDef.id, bestClearTimeSec: report.elapsedSeconds,
-      bestKillCount: report.totalKills, totalClears: 1,
-      lastClearedAt: new Date(), createdAt: new Date(), updatedAt: new Date(),
+      bestKillCount: report.totalKills, totalClears: (existingRecord?.totalClears || 0) + 1,
+      firstClearedAt: isFirstClear ? new Date() : existingRecord?.firstClearedAt,
+      lastClearedAt: new Date(), createdAt: existingRecord?.createdAt || new Date(), updatedAt: new Date(),
     });
 
-    logger.info({ sessionId, playerId: session.playerId, scrapReward, event: 'battle_end' }, 'Battle ended');
+    // ─── 다음 스테이지 해금 ─────────────────────
+    if (isFirstClear) {
+      const nextStageId = stageDef.entryRequirement ? undefined : getNextStageId(stageDef.id);
+      if (nextStageId) {
+        await repo.upsertPlayerStageProgress({
+          id: crypto.randomUUID(), playerId: session.playerId, userId,
+          stageId: nextStageId, unlockedAt: new Date(),
+          createdAt: new Date(), updatedAt: new Date(),
+        });
+      }
+    }
+
+    logger.info({ sessionId, playerId: session.playerId, scrapReward, blueprintCode, isFirstClear, event: 'battle_end' }, 'Battle ended');
     return { ...rewards, reward: rewards };
   } catch (err) {
     // 실패 시 롤백
