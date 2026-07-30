@@ -2,7 +2,9 @@ import { Hono } from 'hono';
 import { jwtAuth } from './shared/jwt-auth.js';
 import { getResearchRepo } from './provider.js';
 import { RESEARCH_TREE, getResearchNode } from './data/research.js';
+import { adjustBalance } from './shared/wallet.js';
 import { AppError } from './shared/errors.js';
+import { logger } from './shared/logger.js';
 
 const researchRoutes = new Hono<{ Variables: { userId: string } }>();
 
@@ -74,11 +76,21 @@ researchRoutes.post('/research/:code/levelup', jwtAuth, async (c) => {
     throw new AppError('이미 최대 레벨입니다.', 400, 'MAX_LEVEL');
   }
 
-  // 비용 확인 및 차감 (TODO: wallet 연동)
+  // 비용 확인 및 차감 (트랜잭션 + 원장)
   const nextLevel = (current?.level || 0) + 1;
   const cost = node.costPerLevel(nextLevel);
+  const idempotencyKey = `research-${userId}-${code}-lvl${nextLevel}`;
 
-  // TODO: adjustBalance로 재화 차감 (wallet.ts)
+  // electricity 비용 차감
+  if (cost.electricity && cost.electricity > 0) {
+    await adjustBalance(userId, -cost.electricity, 'research', idempotencyKey, 'electricity', `${node.name} Lv.${nextLevel}`, 'research', code);
+  }
+  // scrap 비용 차감
+  if (cost.scrap && cost.scrap > 0) {
+    await adjustBalance(userId, -cost.scrap, 'research', idempotencyKey + '-scrap', 'scrap', `${node.name} Lv.${nextLevel}`, 'research', code);
+  }
+
+  logger.info({ userId, code, nextLevel, cost, event: 'research_levelup' }, 'Research level up');
 
   const result = await repo.levelUp(userId, code);
 

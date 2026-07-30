@@ -3,7 +3,7 @@
  */
 import { eq, and } from 'drizzle-orm';
 import { getDb } from './connection.js';
-import { partsInventory, equipSlots, mechaConfigs } from './schema.js';
+import { partsInventory, equipSlots, mechaConfigs, itemLedger } from './schema.js';
 import type { PlayerPart, EquipSlot, MechaConfig } from '../types.js';
 import type { PartsRepository, MechaConfigRepository } from '../repository.js';
 
@@ -49,6 +49,13 @@ export const mysqlPartsRepo: PartsRepository = {
       partType: partType,
       level: 1, equipped: 0,
       createdAt: now,
+    });
+    // 아이템 원장 기록
+    await db.insert(itemLedger as any).values({
+      id: crypto.randomUUID(), playerId, userId: playerId,
+      itemType: 'part', itemId: partCode, quantity: 1,
+      source: 'grant', referenceType: 'part', referenceId: id,
+      idempotencyKey: '', createdAt: now,
     });
     return { id, playerId, partCode, partType: partType as PlayerPart['partType'], level: 1, equipped: 0, createdAt: now.toISOString() };
   },

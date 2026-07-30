@@ -3,7 +3,7 @@
  */
 import { eq, and } from 'drizzle-orm';
 import { getDb } from './connection.js';
-import { playerBlueprints, craftingQueue } from './schema.js';
+import { playerBlueprints, craftingQueue, itemLedger } from './schema.js';
 import type { PlayerBlueprint, PartCrafting } from '../types.js';
 import type { CraftingRepository } from '../repository.js';
 import { getBlueprint } from '../data/crafting.js';
@@ -41,6 +41,13 @@ export const mysqlCraftingRepo: CraftingRepository = {
     const now = new Date();
     const id = crypto.randomUUID();
     await db.insert(playerBlueprints).values({ id, playerId, blueprintCode, acquiredAt: now });
+    // 아이템 원장 기록
+    await db.insert(itemLedger as any).values({
+      id: crypto.randomUUID(), playerId, userId: playerId,
+      itemType: 'blueprint', itemId: blueprintCode, quantity: 1,
+      source: 'drop', referenceType: 'blueprint', referenceId: id,
+      idempotencyKey: '', createdAt: now,
+    });
     return { id, playerId, blueprintCode, acquiredAt: now.toISOString() };
   },
 

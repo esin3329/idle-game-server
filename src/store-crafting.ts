@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { PlayerBlueprint, PartCrafting } from './types.js';
 import type { CraftingRepository } from './repository.js';
 import { getBlueprint } from './data/crafting.js';
+import { logItemEvent } from './store-item-ledger.js';
 import { logger } from './shared/logger.js';
 
 const bpFile = process.env.DATA_FILE_BLUEPRINTS || join(process.cwd(), 'data-blueprints.json');
@@ -68,6 +69,7 @@ export const jsonCraftingRepo: CraftingRepository = {
     };
     blueprints.set(bp.id, bp);
     saveMap(blueprints, bpFile, 'blueprints');
+    logItemEvent(playerId, 'blueprint', blueprintCode, 1, 'drop', 'blueprint', bp.id);
     return bp;
   },
 

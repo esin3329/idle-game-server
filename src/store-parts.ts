@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, copyFileSync, unli
 import { join } from 'node:path';
 import type { PlayerPart, EquipSlot, MechaConfig } from './types.js';
 import type { PartsRepository, MechaConfigRepository } from './repository.js';
+import { logItemEvent } from './store-item-ledger.js';
 import { logger } from './shared/logger.js';
 
 const partsFile = process.env.DATA_FILE_PARTS || join(process.cwd(), 'data-parts.json');
@@ -73,6 +74,8 @@ export const jsonPartsRepo: PartsRepository = {
     };
     parts.set(part.id, part);
     saveMap(parts, partsFile, 'parts');
+    // 아이템 원장 기록
+    logItemEvent(playerId, 'part', partCode, 1, 'grant', 'part', part.id);
     return part;
   },
 
