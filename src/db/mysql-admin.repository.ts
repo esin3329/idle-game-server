@@ -55,6 +55,14 @@ export const mysqlAdminRepo: AdminRepository = {
     }
     return { id, ...d };
   },
+  async getUserItems(userId: string, limit = 50) {
+    const db = getDb(); const { itemLedger } = await import("./schema.js"); const { eq } = await import("drizzle-orm");
+    return db.select().from(itemLedger).where(eq(itemLedger.userId, userId)).limit(limit);
+  },
+  async getIdleRewardLogs(userId: string, limit = 50) {
+    const db = getDb(); const { currencyLedger } = await import("./schema.js"); const { eq } = await import("drizzle-orm");
+    return db.select().from(currencyLedger).where(eq(currencyLedger.userId, userId)).limit(limit);
+  },
   async listGrants(limit: number, offset: number, targetUserId?: string) {
     const db = getDb(); const { operatorGrants } = await import('./schema.js'); const { eq } = await import('drizzle-orm');
     let query: any = db.select().from(operatorGrants);

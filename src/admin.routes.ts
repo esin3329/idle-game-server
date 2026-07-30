@@ -6,7 +6,7 @@ import { logger, auditLog } from './shared/logger.js';
 import { getAdminRepo } from './provider.js';
 import { AppError } from './shared/errors.js';
 import { getDb } from './db/connection.js';
-import { users, currencyLedger, itemLedger, battleSessions, accountSanctions, securityEvents, operatorAuditLogs, operatorAccounts } from './db/schema.js';
+import { users, accountSanctions, securityEvents, operatorAuditLogs, operatorAccounts } from './db/schema.js';
 import { eq, and, or, gte, lte } from 'drizzle-orm';
 
 const adminRoutes = new Hono<{ Variables: { userId: string; role: string } }>();
@@ -60,70 +60,32 @@ adminRoutes.get('/admin/users/:id', async (c) => {
 
 // ─── GET /admin/users/:id/wallet-ledger ──────────────
 
-adminRoutes.get('/admin/users/:id/wallet-ledger', requirePermission('admin.wallets.read'), async (c) => {
-  const db = getDb();
+adminRoutes.get('/admin/users/:id/wallet-ledger', async (c) => {
+  await checkPerm(c, 'admin.wallets.read');
   const userId = c.req.param('id')!;
-  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
-  const offset = Math.max(parseInt(c.req.query('offset') || '0'), 0);
-  const currency = c.req.query('currency');
-  const startDate = c.req.query('start');
-  const endDate = c.req.query('end');
-
-  const conditions = [eq(currencyLedger.userId, userId)];
-  if (currency) conditions.push(eq(currencyLedger.currency, currency));
-  if (startDate) conditions.push(gte(currencyLedger.createdAt, new Date(startDate)));
-  if (endDate) conditions.push(lte(currencyLedger.createdAt, new Date(endDate)));
-
-  const rows = await db.select().from(currencyLedger)
-    .where(and(...conditions)).limit(limit).offset(offset);
-
-  return c.json({ ledger: rows.map((l) => ({
-    id: l.id, currency: l.currency, amount: l.amount,
-    balanceAfter: l.balanceAfter, source: l.source, reason: l.reason,
-    referenceType: l.referenceType, referenceId: l.referenceId,
-    createdAt: l.createdAt,
-  })), limit, offset });
+  const repo = await getAdminRepo();
+  const ledger = await repo.getUserLedger(userId);
+  return c.json({ ledger });
 });
 
 // ─── GET /admin/users/:id/item-ledger ────────────────
 
-adminRoutes.get('/admin/users/:id/item-ledger', requirePermission('admin.inventories.read'), async (c) => {
-  const db = getDb();
+adminRoutes.get('/admin/users/:id/item-ledger', async (c) => {
+  await checkPerm(c, 'admin.inventories.read');
   const userId = c.req.param('id')!;
-  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
-  const offset = Math.max(parseInt(c.req.query('offset') || '0'), 0);
-
-  const rows = await db.select().from(itemLedger)
-    .where(eq(itemLedger.userId, userId)).limit(limit).offset(offset);
-
-  return c.json({ items: rows.map((i) => ({
-    id: i.id, itemType: i.itemType, itemId: i.itemId,
-    quantity: i.quantity, source: i.source,
-    referenceType: i.referenceType, referenceId: i.referenceId,
-    createdAt: i.createdAt,
-  })), limit, offset });
+  const repo = await getAdminRepo();
+  const items = await repo.getUserItems(userId);
+  return c.json({ items });
 });
 
 // ─── GET /admin/users/:id/battles ────────────────────
 
-adminRoutes.get('/admin/users/:id/battles', requirePermission('admin.battles.read'), async (c) => {
-  const db = getDb();
+adminRoutes.get('/admin/users/:id/battles', async (c) => {
+  await checkPerm(c, 'admin.battles.read');
   const userId = c.req.param('id')!;
-  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 100);
-  const offset = Math.max(parseInt(c.req.query('offset') || '0'), 0);
-
-  const rows = await db.select().from(battleSessions)
-    .where(eq(battleSessions.userId, userId)).limit(limit).offset(offset);
-
-  return c.json({ battles: rows.map((b) => ({
-    id: b.id, stageId: b.stageId, status: b.status,
-    battleLevel: b.battleLevel, killsReported: b.killsReported,
-    scrapAccumulated: b.scrapAccumulated,
-    resultCode: b.resultCode, rewardScrap: b.rewardScrap,
-    rewardBlueprint: b.rewardBlueprint, rewardPart: b.rewardPart,
-    startTime: b.startTime, endTime: b.endTime,
-    createdAt: b.createdAt,
-  })), limit, offset });
+  const repo = await getAdminRepo();
+  const battles = await repo.getUserBattles(userId);
+  return c.json({ battles });
 });
 
 // ─── PUT /admin/users/:id/suspend ─────────────────────
@@ -277,6 +239,16 @@ adminRoutes.get('/admin/grants', async (c) => {
   const targetUserId = c.req.query('userId');
   const grants = await repo.listGrants(limit, offset, targetUserId);
   return c.json({ grants, limit, offset });
+});
+
+// ─── GET /admin/users/:id/idle-rewards ─────────────
+
+adminRoutes.get('/admin/users/:id/idle-rewards', async (c) => {
+  await checkPerm(c, 'admin.wallets.read');
+  const userId = c.req.param('id')!;
+  const repo = await getAdminRepo();
+  const logs = await repo.getIdleRewardLogs(userId);
+  return c.json({ idleRewards: logs });
 });
 
 adminRoutes.get('/admin/health', (c) => {

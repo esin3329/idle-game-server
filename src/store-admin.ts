@@ -92,6 +92,16 @@ export const jsonAdminRepo: AdminRepository = {
     for (const g of grants) { if (g.userId === userId && g.type === "suspension" && g.status === "active") g.status = "revoked"; }
     saveArray(grantsFile);
   },
+  async getUserItems(userId: string, limit = 50) {
+    const { getItemLedger } = await import("./store-item-ledger.js");
+    return getItemLedger(userId, limit);
+  },
+  async getIdleRewardLogs(userId: string, limit = 50) {
+    try {
+      const { getLedger } = await import("./shared/wallet.js");
+      return (await getLedger(userId, limit)).filter((e: any) => e.source === "claim");
+    } catch { return []; }
+  },
   async listGrants(limit, offset, targetUserId) {
     ensure();
     let filtered = [...grants];
