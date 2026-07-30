@@ -190,3 +190,34 @@ export interface BattleRepository {
   upsertPlayerStageProgress(progress: any): Promise<void>;
   createSecurityEvent(event: any): Promise<void>;
 }
+
+// ─── Admin (운영 API) ────────────────────────────
+
+export interface UserSummary {
+  id: string; email: string; nickname: string;
+  status: string; role: string; createdAt: string;
+}
+
+export interface WalletSummary {
+  playerId: string; electricity: number; scrap: number;
+  electricityPerSecond: number; lastClaimedAt: string;
+}
+
+export interface AdminRepository {
+  listUsers(limit: number, offset: number, search?: string, status?: string): Promise<{ users: UserSummary[]; total: number }>;
+  getUserDetail(userId: string): Promise<any>;
+  getUserWallet(userId: string): Promise<WalletSummary | null>;
+  getUserLedger(userId: string, limit?: number): Promise<any[]>;
+  getUserBattles(userId: string, limit?: number): Promise<any[]>;
+  getUserSanctions(userId: string): Promise<any[]>;
+  createSanction(data: any): Promise<any>;
+  revokeSanction(sanctionId: string, operatorId: string, reason?: string): Promise<void>;
+  createGrant(data: any): Promise<any>;
+  listOperators(): Promise<any[]>;
+  createOperator(data: any): Promise<any>;
+  changeOperatorRole(operatorId: string, newRole: string): Promise<any>;
+  listSecurityEvents(limit?: number, offset?: number, eventType?: string): Promise<any[]>;
+  reviewSecurityEvent(eventId: string, operatorId: string, resolution: string, note?: string): Promise<void>;
+  listAuditLogs(limit?: number, action?: string): Promise<any[]>;
+  checkPermission(roleCode: string, permissionCode: string): Promise<boolean>;
+}

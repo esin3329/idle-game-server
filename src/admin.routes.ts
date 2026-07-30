@@ -3,9 +3,11 @@ import { cors } from 'hono/cors';
 import { operatorAuth, requirePermission } from './shared/jwt-auth.js';
 import { idempotencyGuard } from './shared/idempotency.js';
 import { logger, auditLog } from './shared/logger.js';
+import { getAdminRepo } from './provider.js';
+import { AppError } from './shared/errors.js';
 import { getDb } from './db/connection.js';
 import { users, playerProfiles, walletBalances, currencyLedger, itemLedger, battleSessions, accountSanctions, operatorGrants, securityEvents, operatorAuditLogs, operatorAccounts } from './db/schema.js';
-import { eq, and, like, or, gte, lte } from 'drizzle-orm';
+import { eq, and, or, gte, lte } from 'drizzle-orm';
 
 const adminRoutes = new Hono<{ Variables: { userId: string; role: string } }>();
 
@@ -20,48 +22,29 @@ adminRoutes.use('/admin/*', cors({
 // 모든 운영 API에 operatorAuth 적용
 adminRoutes.use('/admin/*', operatorAuth);
 
+// ─── 권한 검증 헬퍼 ────────────────────────────────
+
+async function checkPerm(c: any, permission: string) {
+  const role = c.get('role');
+  if (role === 'admin' || role === 'administrator') return;
+  const repo = await getAdminRepo();
+  const ok = await repo.checkPermission(role, permission);
+  if (!ok) throw new AppError('권한이 없습니다.', 403, 'FORBIDDEN');
+}
+
 // ─── GET /admin/users ───────────────────────────────
 
-adminRoutes.get('/admin/users', requirePermission('admin.users.read'), async (c) => {
-  const db = getDb();
+adminRoutes.get('/admin/users', async (c) => {
+  await checkPerm(c, 'admin.users.read');
+  const repo = await getAdminRepo();
   const limit = Math.min(parseInt(c.req.query('limit') || '20'), 100);
   const offset = Math.max(parseInt(c.req.query('offset') || '0'), 0);
   const search = c.req.query('search');
   const statusFilter = c.req.query('status');
-  const createdAfter = c.req.query('created_after');
-  const createdBefore = c.req.query('created_before');
 
-  const ALLOWED_SORT = ['created_at', 'email', 'nickname', 'status'] as const;
-  const sortBy = c.req.query('sort') || 'created_at';
-  if (!ALLOWED_SORT.includes(sortBy as typeof ALLOWED_SORT[number])) {
-    return c.json({ error: '허용되지 않은 정렬 필드입니다.', code: 'BAD_REQUEST' }, 400);
-  }
-  const sortOrder = c.req.query('order') === 'asc' ? 'asc' : 'desc';
+  const { users: rows, total } = await repo.listUsers(limit, offset, search, statusFilter);
 
-  const conditions = [];
-  const userId = c.req.query('id');
-  const email = c.req.query('email');
-  if (userId) conditions.push(eq(users.id, userId));
-  if (email) conditions.push(eq(users.email, email));
-  if (createdAfter) conditions.push(gte(users.createdAt, new Date(createdAfter)));
-  if (createdBefore) conditions.push(lte(users.createdAt, new Date(createdBefore)));
-  if (search) conditions.push(or(like(users.email, `%${search}%`), like(users.nickname, `%${search}%`)));
-  if (statusFilter) conditions.push(eq(users.status, statusFilter));
-
-  const query = db.select({
-    id: users.id,
-    email: users.email,
-    nickname: users.nickname,
-    status: users.status,
-    role: users.role,
-    createdAt: users.createdAt,
-  }).from(users);
-
-  const rows = conditions.length > 0
-    ? await query.where(and(...conditions)).limit(limit).offset(offset)
-    : await query.limit(limit).offset(offset);
-
-  return c.json({ users: rows, limit, offset, sort: sortBy, order: sortOrder });
+  return c.json({ users: rows, limit, offset, total });
 });
 
 // ─── GET /admin/users/:id ────────────────────────────

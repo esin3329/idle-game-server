@@ -4,7 +4,7 @@
  * DB_DRIVER=mysql → MySQL
  * 그 외          → JSON 파일 (기본값)
  */
-import type { PlayerRepository, AuthRepository, WalletRepository, PartsRepository, MechaConfigRepository, ResearchRepository, CraftingRepository, BattleRepository } from './repository.js';
+import type { PlayerRepository, AuthRepository, WalletRepository, PartsRepository, MechaConfigRepository, ResearchRepository, CraftingRepository, BattleRepository, AdminRepository } from './repository.js';
 
 // ─── PlayerRepository ─────────────────────────────
 
@@ -322,6 +322,35 @@ export function resetBattleRepo(): void {
   _battleRepo = null;
 }
 
+// ─── AdminRepository ────────────────────────────
+
+let _adminRepo: AdminRepository | null = null;
+
+export async function getAdminRepo(): Promise<AdminRepository> {
+  if (!_adminRepo) {
+    if (process.env.DB_DRIVER === 'json') {
+      const { jsonAdminRepo } = await import('./store-admin.js');
+      _adminRepo = jsonAdminRepo;
+      return _adminRepo;
+    }
+    try {
+      const { mysqlAdminRepo } = await import('./db/mysql-admin.repository.js');
+      const { getPool } = await import('./db/connection.js');
+      const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2000));
+      await Promise.race([getPool().query('SELECT 1'), timeout]);
+      _adminRepo = mysqlAdminRepo;
+    } catch {
+      const { jsonAdminRepo } = await import('./store-admin.js');
+      _adminRepo = jsonAdminRepo;
+    }
+  }
+  return _adminRepo;
+}
+
+export function resetAdminRepo(): void {
+  _adminRepo = null;
+}
+
 /** 모든 저장소 일괄 리셋 (테스트 전용) */
 export function resetAllRepos(): void {
   _repo = null;
@@ -334,4 +363,5 @@ export function resetAllRepos(): void {
   _researchRepo = null;
   _craftingRepo = null;
   _battleRepo = null;
+  _adminRepo = null;
 }

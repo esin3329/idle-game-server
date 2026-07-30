@@ -151,6 +151,12 @@ export const jsonAuthRepo: AuthRepository = {
 };
 
 /** 테스트 전용: 모든 저장소 초기화 */
+/** 모든 사용자 조회 (Admin 전용) */
+export function getAllUsers(): User[] {
+  ensureLoaded();
+  return Array.from(users.values());
+}
+
 export function resetAuthStores(): void {
   users = new Map();
   sessions = new Map();
