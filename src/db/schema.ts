@@ -543,3 +543,28 @@ export const playerResearch = mysqlTable('player_research', {
   index('idx_pr_player_id').on(table.playerId),
   unique('uq_pr_player_code').on(table.playerId, table.code),
 ]);
+
+/** player_blueprints — 플레이어 보유 설계도 */
+export const playerBlueprints = mysqlTable('player_blueprints', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  playerId: varchar('player_id', { length: 36 }).notNull(),
+  blueprintCode: varchar('blueprint_code', { length: 50 }).notNull(),
+  acquiredAt: datetime('acquired_at').notNull(),
+}, (table) => [
+  index('idx_pb_player_id').on(table.playerId),
+  unique('uq_pb_player_code').on(table.playerId, table.blueprintCode),
+]);
+
+/** crafting_queue — 파츠 제작 대기열 */
+export const craftingQueue = mysqlTable('crafting_queue', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  playerId: varchar('player_id', { length: 36 }).notNull(),
+  resultCode: varchar('result_code', { length: 50 }).notNull(),
+  materials: varchar('materials', { length: 500 }).notNull().default('{}'),
+  startedAt: datetime('started_at').notNull(),
+  completesAt: datetime('completes_at').notNull(),
+  completed: int('completed').notNull().default(0),
+  createdAt: datetime('created_at').notNull(),
+}, (table) => [
+  index('idx_cq_player_id').on(table.playerId),
+]);

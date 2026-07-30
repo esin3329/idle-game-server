@@ -139,3 +139,24 @@ export interface ResearchRepository {
 }
 
 import type { PlayerResearch } from './types.js';
+
+// ─── Crafting ────────────────────────────────────
+
+export interface CraftingRepository {
+  /** 보유 설계도 목록 */
+  getBlueprints(playerId: string): Promise<PlayerBlueprint[]>;
+  /** 설계도 보유 여부 */
+  hasBlueprint(playerId: string, blueprintCode: string): Promise<boolean>;
+  /** 설계도 획득 */
+  grantBlueprint(playerId: string, blueprintCode: string): Promise<PlayerBlueprint>;
+  /** 제작 대기열 조회 */
+  getQueue(playerId: string): Promise<PartCrafting[]>;
+  /** 제작 시작 */
+  startCraft(playerId: string, blueprintCode: string): Promise<PartCrafting>;
+  /** 완료된 제작 확인 (완료 시 파츠 지급) */
+  completeCraft(playerId: string, craftId: string): Promise<{ partId: string; partCode: string }>;
+  /** 완료 가능한 제작 목록 */
+  getCompletable(playerId: string): Promise<PartCrafting[]>;
+}
+
+import type { PlayerBlueprint, PartCrafting } from './types.js';

@@ -162,3 +162,11 @@ export interface PlayerResearch {
   createdAt: string;
   updatedAt: string;
 }
+
+/** 플레이어 보유 설계도 */
+export interface PlayerBlueprint {
+  id: string;
+  playerId: string;
+  blueprintCode: string;    // data/crafting.ts의 code (bp_*)
+  acquiredAt: string;
+}

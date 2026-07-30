@@ -4,7 +4,7 @@
  * DB_DRIVER=mysql → MySQL
  * 그 외          → JSON 파일 (기본값)
  */
-import type { PlayerRepository, AuthRepository, WalletRepository, PartsRepository, MechaConfigRepository, ResearchRepository } from './repository.js';
+import type { PlayerRepository, AuthRepository, WalletRepository, PartsRepository, MechaConfigRepository, ResearchRepository, CraftingRepository } from './repository.js';
 
 // ─── PlayerRepository ─────────────────────────────
 
@@ -264,6 +264,35 @@ export function resetResearchRepo(): void {
   _researchRepo = null;
 }
 
+// ─── CraftingRepository ──────────────────────────
+
+let _craftingRepo: CraftingRepository | null = null;
+
+export async function getCraftingRepo(): Promise<CraftingRepository> {
+  if (!_craftingRepo) {
+    if (process.env.DB_DRIVER === 'json') {
+      const { jsonCraftingRepo } = await import('./store-crafting.js');
+      _craftingRepo = jsonCraftingRepo;
+      return _craftingRepo;
+    }
+    try {
+      const { mysqlCraftingRepo } = await import('./db/mysql-crafting.repository.js');
+      const { getPool } = await import('./db/connection.js');
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
+      await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
+      _craftingRepo = mysqlCraftingRepo;
+    } catch {
+      const { jsonCraftingRepo } = await import('./store-crafting.js');
+      _craftingRepo = jsonCraftingRepo;
+    }
+  }
+  return _craftingRepo;
+}
+
+export function resetCraftingRepo(): void {
+  _craftingRepo = null;
+}
+
 /** 모든 저장소 일괄 리셋 (테스트 전용) */
 export function resetAllRepos(): void {
   _repo = null;
@@ -272,4 +301,7 @@ export function resetAllRepos(): void {
   _walletRepo = null;
   _walletRepoMode = null;
   _partsRepo = null;
+  _configsRepo = null;
+  _researchRepo = null;
+  _craftingRepo = null;
 }
