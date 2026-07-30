@@ -90,88 +90,30 @@ curl -H "Authorization: Bearer <operatorToken>" \
 - 길드·친구·우편·출석·업적·시즌 (소셜/라이브 서비스)
 - 결제·상점·재화 구매
 
-## 백업
+## 운영
+
+백업, 복구, 모니터링, 로깅, 문제 해결 등 전체 운영 가이드는 **[docs/operations.md](./docs/operations.md)** 를 참고하세요.
+
+### 빠른 참조
 
 ```bash
-# 수동 백업
-DB_PASSWORD=changeme ./scripts/backup.sh
-
-# Docker Compose 환경
-DB_HOST=127.0.0.1 DB_PASSWORD=changeme ./scripts/backup.sh -o ./backups
-
-# cron 자동화 (매일 02:00 UTC)
-0 2 * * * cd /app && DB_PASSWORD=xxx ./scripts/backup.sh
-```
-
-## 복구
-
-```bash
-# 검증만 (--dry-run)
-./scripts/recover.sh --dry-run latest
-
-# 검증용 DB로 복구 (기본: idle_game_recovered)
-./scripts/recover.sh latest
-
-# 복구 중 쓰기 차단: docker-compose stop app
-# 복구 완료 후: docker-compose start app && curl /health/ready
-
-# 복구 검증
-mysql -e "SELECT COUNT(*) FROM players; SELECT COUNT(*) FROM currency_ledger;"
-curl http://localhost:3000/health/ready
-```
-
-백업: `--single-transaction` (InnoDB), 30일 보관, UTC timestamp, .tmp → rename, chmod 600
-복구: gzip 검증 → checksum 확인 → DROP 확인 → 복원 → 마이그레이션 → 검증
-
-### 최소 복구 리허설
-
-```bash
-# 1. 백업 생성
+# MySQL 백업
 ./scripts/backup.sh
 
-# 2. dry-run 검증
+# MySQL 복구 (dry-run 먼저)
 ./scripts/recover.sh --dry-run latest
+./scripts/recover.sh latest
 
-# 3. 검증용 DB로 복구
-./scripts/recover.sh --target-db idle_game_recovery_test latest
+# 헬스 체크
+curl http://localhost:3000/health
+curl http://localhost:3000/ready
 
-# 4. 복구 검증
-mysql -e "USE idle_game_recovery_test; SHOW TABLES; SELECT COUNT(*) FROM players;"
+# 메트릭
+curl http://localhost:3000/metrics
 
-# 5. healthcheck
-curl http://localhost:3000/health/ready
+# Graceful shutdown
+docker compose stop app
 ```
-
-### 운영 DB 복구 전 체크리스트
-
-- [ ] 최신 백업 존재 확인 (`ls backups/*.sql.gz`)
-- [ ] `--dry-run` 으로 검증 완료
-- [ ] `docker-compose stop app` (API 쓰기 차단)
-- [ ] 복구 대상 DB 백업 (`./scripts/backup.sh`)
-- [ ] `integrity-check.sh` 실행 (복구 전 무결성 확인)
-- [ ] 복구 실행 (`./scripts/recover.sh latest`)
-- [ ] `integrity-check.sh` 재실행 (복구 후 무결성 확인)
-- [ ] `docker-compose start app` (API 재개)
-- [ ] `/health/ready` 확인
-- [ ] 핵심 API smoke test
-
-### 안전한 종료와 재시작
-
-```bash
-# Graceful shutdown (SIGTERM)
-docker-compose stop app      # 진행 중 요청 완료 후 종료 (10s timeout)
-
-# 재시작
-docker-compose start app     # DB 연결 복구, GET /battles/:id 로 세션 복원
-```
-
-### 비밀값 관리
-
-Production 필수 환경변수 (`validate-secrets.ts`로 검증):
-- `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` (dev-secret 사용 금지)
-- `DB_PASSWORD` / `MYSQL_ROOT_PASSWORD` (changeme 사용 금지)
-- `.env` 파일은 `.dockerignore`로 이미지 제외
-- 백업 파일은 `chmod 600` 적용
 
 ## 이번 단계에서 제외한 기능
 
