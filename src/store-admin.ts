@@ -41,7 +41,6 @@ export const jsonAdminRepo: AdminRepository = {
   async getUserWallet() { return null; },
   async getUserLedger() { return []; },
   async getUserBattles() { return []; },
-  async getUserSanctions() { return []; },
 
   async createSanction(data: any) {
     ensure();
@@ -70,5 +69,20 @@ export const jsonAdminRepo: AdminRepository = {
   async listSecurityEvents() { return []; },
   async reviewSecurityEvent() {},
   async listAuditLogs() { return []; },
+  async getUserSanctions(userId: string) {
+    ensure();
+    return grants.filter((g: any) => g.userId === userId);
+  },
+
+  async suspendUser(userId: string, operatorId: string, reason: string) {
+    ensure();
+    grants.push({ id: crypto.randomUUID(), userId, operatorId, type: "suspension", reasonText: reason, status: "active", startsAt: new Date().toISOString(), createdAt: new Date().toISOString() });
+    saveArray(grantsFile);
+  },
+  async unsuspendUser(userId: string, _operatorId: string, _reason: string) {
+    ensure();
+    for (const g of grants) { if (g.userId === userId && g.type === "suspension" && g.status === "active") g.status = "revoked"; }
+    saveArray(grantsFile);
+  },
   async checkPermission() { return true; },
 };

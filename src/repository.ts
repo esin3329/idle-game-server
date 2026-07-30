@@ -219,5 +219,7 @@ export interface AdminRepository {
   listSecurityEvents(limit?: number, offset?: number, eventType?: string): Promise<any[]>;
   reviewSecurityEvent(eventId: string, operatorId: string, resolution: string, note?: string): Promise<void>;
   listAuditLogs(limit?: number, action?: string): Promise<any[]>;
+  suspendUser(userId: string, operatorId: string, reason: string): Promise<void>;
+  unsuspendUser(userId: string, operatorId: string, reason: string): Promise<void>;
   checkPermission(roleCode: string, permissionCode: string): Promise<boolean>;
 }

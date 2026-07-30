@@ -28,7 +28,6 @@ export const mysqlAdminRepo: AdminRepository = {
   async getUserWallet() { return null; },
   async getUserLedger() { return []; },
   async getUserBattles() { return []; },
-  async getUserSanctions() { return []; },
   async createSanction(d: any) { return d; },
   async revokeSanction() {},
   async createGrant(d: any) { return d; },
@@ -38,6 +37,19 @@ export const mysqlAdminRepo: AdminRepository = {
   async listSecurityEvents() { return []; },
   async reviewSecurityEvent() {},
   async listAuditLogs() { return []; },
+  async getUserSanctions(userId: string) {
+    const db = getDb(); const { accountSanctions } = await import("./schema.js"); const { eq } = await import("drizzle-orm"); return db.select().from(accountSanctions).where(eq(accountSanctions.userId, userId));
+  },
+  async suspendUser(userId: string, operatorId: string, reason: string) {
+    const db = getDb(); const now = new Date(); const { users, accountSanctions } = await import("./schema.js"); const { eq } = await import("drizzle-orm");
+    await db.update(users).set({ status: "suspended", suspendedAt: now, suspendedReason: reason, updatedAt: now }).where(eq(users.id, userId));
+    await db.insert(accountSanctions).values({ id: crypto.randomUUID(), userId, operatorId, type: "suspension", reasonCode: "operator_action", reasonText: reason, startsAt: now, status: "active", createdAt: now });
+  },
+  async unsuspendUser(userId: string, operatorId: string, reason: string) {
+    const db = getDb(); const now = new Date(); const { users, accountSanctions } = await import("./schema.js"); const { eq, and } = await import("drizzle-orm");
+    await db.update(users).set({ status: "active", suspendedAt: null, suspendedReason: null, updatedAt: now }).where(eq(users.id, userId));
+    await db.update(accountSanctions).set({ status: "revoked", revokedAt: now, revokedByOperatorId: operatorId, revokeReason: reason }).where(and(eq(accountSanctions.userId, userId), eq(accountSanctions.status, "active")));
+  },
   async checkPermission(roleCode: string, permissionCode: string) {
     const db = getDb();
     const roleRows = await db.select().from(operatorRoles).where(eq(operatorRoles.code, roleCode)).limit(1);

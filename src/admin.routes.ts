@@ -6,7 +6,7 @@ import { logger, auditLog } from './shared/logger.js';
 import { getAdminRepo } from './provider.js';
 import { AppError } from './shared/errors.js';
 import { getDb } from './db/connection.js';
-import { users, playerProfiles, walletBalances, currencyLedger, itemLedger, battleSessions, accountSanctions, operatorGrants, securityEvents, operatorAuditLogs, operatorAccounts } from './db/schema.js';
+import { users, walletBalances, currencyLedger, itemLedger, battleSessions, accountSanctions, operatorGrants, securityEvents, operatorAuditLogs, operatorAccounts } from './db/schema.js';
 import { eq, and, or, gte, lte } from 'drizzle-orm';
 
 const adminRoutes = new Hono<{ Variables: { userId: string; role: string } }>();
@@ -49,52 +49,13 @@ adminRoutes.get('/admin/users', async (c) => {
 
 // ─── GET /admin/users/:id ────────────────────────────
 
-adminRoutes.get('/admin/users/:id', requirePermission('admin.users.read'), async (c) => {
-  const db = getDb();
+adminRoutes.get('/admin/users/:id', async (c) => {
+  await checkPerm(c, 'admin.users.read');
   const userId = c.req.param('id')!;
-
-  const userRows = await db.select({
-    id: users.id,
-    email: users.email,
-    nickname: users.nickname,
-    status: users.status,
-    role: users.role,
-    createdAt: users.createdAt,
-    updatedAt: users.updatedAt,
-    suspendedAt: users.suspendedAt,
-    suspendedReason: users.suspendedReason,
-  }).from(users).where(eq(users.id, userId)).limit(1);
-
-  if (userRows.length === 0) {
-    return c.json({ error: '사용자를 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
-  }
-  const user = userRows[0];
-
-  const profiles = await db.select().from(playerProfiles).where(eq(playerProfiles.userId, userId));
-  const wallets = await db.select().from(walletBalances).where(eq(walletBalances.userId, userId));
-  const recentLedger = await db.select().from(currencyLedger).where(eq(currencyLedger.userId, userId)).limit(10);
-  const blueprints = await db.select().from(itemLedger).where(eq(itemLedger.userId, userId));
-
-  return c.json({
-    id: user.id,
-    email: user.email,
-    nickname: user.nickname,
-    status: user.status,
-    role: user.role,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
-    profiles: profiles.map((p) => ({ playerId: p.playerId, nickname: p.nickname })),
-    wallets: wallets.map((w) => ({ playerId: w.playerId, electricity: w.electricity, scrap: w.scrap })),
-    recentLedger: recentLedger.map((l) => ({
-      id: l.id, currency: l.currency, amount: l.amount,
-      balanceAfter: l.balanceAfter, source: l.source, createdAt: l.createdAt,
-    })),
-    blueprints: blueprints.filter((b) => b.itemType === 'blueprint').map((b) => ({
-      itemId: b.itemId, source: b.source, createdAt: b.createdAt,
-    })),
-    suspendedAt: user.suspendedAt,
-    suspendedReason: user.suspendedReason,
-  });
+  const repo = await getAdminRepo();
+  const user = await repo.getUserDetail(userId);
+  if (!user) return c.json({ error: '사용자를 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
+  return c.json(user);
 });
 
 // ─── GET /admin/users/:id/wallet-ledger ──────────────
@@ -167,115 +128,44 @@ adminRoutes.get('/admin/users/:id/battles', requirePermission('admin.battles.rea
 
 // ─── PUT /admin/users/:id/suspend ─────────────────────
 
-adminRoutes.put('/admin/users/:id/suspend', idempotencyGuard, requirePermission('admin.sanctions.write'), async (c) => {
-  const db = getDb();
+adminRoutes.put('/admin/users/:id/suspend', idempotencyGuard, async (c) => {
+  await checkPerm(c, 'admin.sanctions.write');
   const targetId = c.req.param('id')!;
   const operatorId = c.get('userId');
-  const now = new Date();
-
-  const { reason } = await c.req.json<{ reason: string }>();
-  if (!reason || reason.length < 1) {
-    return c.json({ error: '사유가 필요합니다.', code: 'BAD_REQUEST' }, 400);
-  }
-
-  const userRows = await db.select().from(users).where(eq(users.id, targetId)).limit(1);
-  if (userRows.length === 0) {
-    return c.json({ error: '사용자를 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
-  }
-
-  await db.update(users).set({
-    status: 'suspended', suspendedAt: now, suspendedReason: reason, updatedAt: now,
-  }).where(eq(users.id, targetId));
-
-  // 트랜잭션 내에서 감사 로그도 함께 기록
-  await db.insert(operatorAuditLogs).values({
-    id: crypto.randomUUID(),
-    operatorId,
-    action: 'user_suspended',
-    targetType: 'user',
-    targetId,
-    reasonCode: 'operator_action',
-    reasonText: reason,
-    beforeSummary: JSON.stringify({ status: userRows[0].status }),
-    afterSummary: JSON.stringify({ status: 'suspended' }),
-    result: 'success',
-    createdAt: now,
-  });
-
-  await db.insert(accountSanctions).values({
-    id: crypto.randomUUID(),
-    userId: targetId,
-    operatorId,
-    type: 'suspension',
-    reasonCode: 'operator_action',
-    reasonText: reason,
-    startsAt: now,
-    status: 'active',
-    createdAt: now,
-  });
-
-  auditLog.warn({ operatorId, targetId, targetEmail: userRows[0].email, reason, event: 'account.sanctioned' }, `User ${targetId} suspended`);
+  const { reason } = await c.req.json();
+  if (!reason || reason.length < 1) return c.json({ error: '사유가 필요합니다.', code: 'BAD_REQUEST' }, 400);
+  const repo = await getAdminRepo();
+  const user = await repo.getUserDetail(targetId);
+  if (!user) return c.json({ error: '사용자를 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
+  await repo.suspendUser(targetId, operatorId, reason);
+  logger.info({ operatorId, targetId, reason, event: 'user_suspended' });
   return c.json({ status: 'suspended' });
 });
 
 // ─── PUT /admin/users/:id/unsuspend ───────────────────
 
-adminRoutes.put('/admin/users/:id/unsuspend', idempotencyGuard, requirePermission('admin.sanctions.write'), async (c) => {
-  const db = getDb();
+adminRoutes.put('/admin/users/:id/unsuspend', idempotencyGuard, async (c) => {
+  await checkPerm(c, 'admin.sanctions.write');
   const targetId = c.req.param('id')!;
   const operatorId = c.get('userId');
-  const now = new Date();
-
-  const { reason } = await c.req.json<{ reason: string }>();
-  if (!reason || reason.length < 1) {
-    return c.json({ error: '사유가 필요합니다.', code: 'BAD_REQUEST' }, 400);
-  }
-
-  await db.update(users).set({
-    status: 'active', suspendedAt: null, suspendedReason: null, updatedAt: now,
-  }).where(eq(users.id, targetId));
-
-  await db.insert(operatorAuditLogs).values({
-    id: crypto.randomUUID(),
-    operatorId,
-    action: 'user_unsuspended',
-    targetType: 'user',
-    targetId,
-    reasonCode: 'operator_action',
-    reasonText: reason,
-    beforeSummary: JSON.stringify({ status: 'suspended' }),
-    afterSummary: JSON.stringify({ status: 'active' }),
-    result: 'success',
-    createdAt: now,
-  });
-
-  await db.update(accountSanctions)
-    .set({ status: 'revoked', revokedAt: now, revokedByOperatorId: operatorId, revokeReason: reason })
-    .where(and(eq(accountSanctions.userId, targetId), eq(accountSanctions.status, 'active')));
-
-  auditLog.info({ operatorId, targetId, reason, event: 'account.unsanctioned' }, `User ${targetId} unsuspended`);
+  const { reason } = await c.req.json();
+  if (!reason || reason.length < 1) return c.json({ error: '사유가 필요합니다.', code: 'BAD_REQUEST' }, 400);
+  const repo = await getAdminRepo();
+  const user = await repo.getUserDetail(targetId);
+  if (!user) return c.json({ error: '사용자를 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
+  await repo.unsuspendUser(targetId, operatorId, reason);
+  logger.info({ operatorId, targetId, reason, event: 'user_unsuspended' });
   return c.json({ status: 'active' });
 });
 
 // ─── GET /admin/users/:id/sanctions ───────────────────
 
-adminRoutes.get('/admin/users/:id/sanctions', requirePermission('admin.sanctions.read'), async (c) => {
-  const db = getDb();
+adminRoutes.get('/admin/users/:id/sanctions', async (c) => {
+  await checkPerm(c, 'admin.sanctions.read');
   const userId = c.req.param('id')!;
-  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 100);
-  const offset = Math.max(parseInt(c.req.query('offset') || '0'), 0);
-
-  const rows = await db.select().from(accountSanctions)
-    .where(eq(accountSanctions.userId, userId)).limit(limit).offset(offset);
-
-  return c.json({ sanctions: rows.map((s) => ({
-    id: s.id, type: s.type, status: s.status,
-    reasonCode: s.reasonCode, reasonText: s.reasonText,
-    startsAt: s.startsAt, expiresAt: s.expiresAt,
-    revokedAt: s.revokedAt, revokeReason: s.revokeReason,
-    operatorId: s.operatorId, revokedByOperatorId: s.revokedByOperatorId,
-    createdAt: s.createdAt,
-  })), limit, offset });
+  const repo = await getAdminRepo();
+  const sanctions = await repo.getUserSanctions(userId);
+  return c.json({ sanctions });
 });
 
 // ─── POST /admin/users/:id/sanctions ──────────────────
@@ -339,30 +229,15 @@ adminRoutes.post('/admin/users/:id/sanctions', idempotencyGuard, requirePermissi
 
 // ─── PUT /admin/users/:id/sanctions/:sanctionId/revoke ─
 
-adminRoutes.put('/admin/users/:id/sanctions/:sanctionId/revoke', idempotencyGuard, requirePermission('admin.sanctions.write'), async (c) => {
-  const db = getDb();
+adminRoutes.put('/admin/users/:id/sanctions/:sanctionId/revoke', idempotencyGuard, async (c) => {
+  await checkPerm(c, 'admin.sanctions.write');
   const sanctionId = c.req.param('sanctionId')!;
   const operatorId = c.get('userId');
-  const now = new Date();
-
-  const { reason } = await c.req.json<{ reason: string }>();
-  if (!reason || reason.length < 1) {
-    return c.json({ error: '사유가 필요합니다.', code: 'BAD_REQUEST' }, 400);
-  }
-
-  const rows = await db.select().from(accountSanctions).where(eq(accountSanctions.id, sanctionId)).limit(1);
-  if (rows.length === 0) {
-    return c.json({ error: '제재를 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
-  }
-  if (rows[0].status === 'revoked') {
-    return c.json({ error: '이미 해제된 제재입니다.', code: 'BAD_REQUEST' }, 400);
-  }
-
-  await db.update(accountSanctions)
-    .set({ status: 'revoked', revokedAt: now, revokedByOperatorId: operatorId, revokeReason: reason })
-    .where(eq(accountSanctions.id, sanctionId));
-
-  auditLog.info({ operatorId, sanctionId, reason, event: 'account.unsanctioned' }, `Sanction ${sanctionId} revoked`);
+  const { reason } = await c.req.json();
+  if (!reason || reason.length < 1) return c.json({ error: '사유가 필요합니다.', code: 'BAD_REQUEST' }, 400);
+  const repo = await getAdminRepo();
+  await repo.revokeSanction(sanctionId, operatorId, reason);
+  auditLog.info({ operatorId, sanctionId, reason, event: 'account.unsanctioned' });
   return c.json({ status: 'revoked' });
 });
 
