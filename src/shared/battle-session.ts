@@ -357,10 +357,52 @@ export async function endBattleSession(sessionId: string, userId: string, report
     const stageDef = await repo.getStage(session.stageId);
     if (!stageDef) throw new AppError('스테이지 정보를 찾을 수 없습니다.', 404, 'STAGE_NOT_FOUND');
 
-    // 검증
-    if (report.totalKills > (session.killsReported || 0) + 50) {
+    // ═══════════════════════════════════════════════
+    // 서버 검증
+    // ═══════════════════════════════════════════════
+
+    // 1. 경과 시간 검증 (스테이지 duration ± 허용오차)
+    const durationTolerance = 10; // 초
+    if (report.elapsedSeconds < 10 || report.elapsedSeconds > stageDef.durationSeconds + durationTolerance) {
+      logRejection(sessionId, session.playerId, 'TIME_OUT_OF_RANGE', { elapsed: report.elapsedSeconds, max: stageDef.durationSeconds });
+      throw new AppError('경과 시간이 허용 범위를 벗어났습니다.', 400, 'TIME_OUT_OF_RANGE');
+    }
+
+    // 2. 최종 처치 수 검증 (보고된 누적 + 허용 오차)
+    if (report.totalKills < 0 || report.totalKills > (session.killsReported || 0) + 50) {
       logRejection(sessionId, session.playerId, 'FINAL_KILLS_MISMATCH', { reported: report.totalKills, expected: session.killsReported });
       throw new AppError('최종 처치 수가 일치하지 않습니다.', 400, 'FINAL_KILLS_MISMATCH');
+    }
+
+    // 3. Core Energy 검증
+    if (report.totalCoreEnergy < 0 || report.totalCoreEnergy > (session.coreEnergy || 0) + 100) {
+      logRejection(sessionId, session.playerId, 'CORE_ENERGY_MISMATCH', { reported: report.totalCoreEnergy, expected: session.coreEnergy });
+      throw new AppError('Core Energy가 일치하지 않습니다.', 400, 'CORE_ENERGY_MISMATCH');
+    }
+
+    // 4. 보스 처치 검증 (세션에 기록된 보스와 일치하는지)
+    const sessionBosses: string[] = JSON.parse(session.bossDefeated || '[]');
+    const reportedBosses: string[] = report.bossDefeated || [];
+    if (reportedBosses.length > 0) {
+      const allMatch = reportedBosses.every((b) => sessionBosses.includes(b));
+      if (!allMatch) {
+        logRejection(sessionId, session.playerId, 'BOSS_MISMATCH', { reported: reportedBosses, expected: sessionBosses });
+        throw new AppError('보스 처치 정보가 일치하지 않습니다.', 400, 'BOSS_MISMATCH');
+      }
+    }
+
+    // 5. 업그레이드 선택 완료 확인 (미선택 선택지가 있으면 차단)
+    const appliedUpgrades: string[] = JSON.parse(session.upgradesApplied || '[]');
+    const offers: UpgradeChoice[] = JSON.parse(session.offeredChoices || '[]');
+    const hasPending = offers.some((o) => o.options.some((opt) => !appliedUpgrades.includes(opt.upgradeId)));
+    if (hasPending) {
+      throw new AppError('선택하지 않은 강화가 있습니다.', 400, 'PENDING_UPGRADES');
+    }
+
+    // 6. 중복 보상 방지
+    const existingResult = await repo.getBattleResult(sessionId);
+    if (existingResult) {
+      throw new AppError('이미 종료된 전투입니다.', 409, 'ALREADY_FINISHED');
     }
 
     // 보상 계산
