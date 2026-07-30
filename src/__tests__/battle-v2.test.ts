@@ -6,7 +6,6 @@ import stagesRoutes from '../stages.routes.js';
 import upgradesRoutes from '../upgrades.routes.js';
 import { resetBattleStores } from '../store-battle.js';
 import { resetAllRepos } from '../provider.js';
-import { STAGES } from '../data/stages.js';
 import { ALL_UPGRADES, UPGRADE_GROUPS } from '../data/upgrades.js';
 
 function createApp() {
