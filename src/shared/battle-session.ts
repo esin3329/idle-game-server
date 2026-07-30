@@ -96,10 +96,41 @@ export async function startBattleSession(playerIdOrUserId: string, stageCode: st
   if (!stageDef) throw new AppError('존재하지 않는 스테이지입니다.', 404, 'STAGE_NOT_FOUND');
   if (!stageDef.enabled) throw new AppError('비활성화된 스테이지입니다.', 400, 'STAGE_DISABLED');
 
-  // 해금 확인
+  // ─── 출격 조건 검증 ───────────────────────────
+  // 1. entryRequirement: 이전 스테이지 클리어 확인
+  if (stageDef.entryRequirement && stageDef.entryRequirement !== 'none') {
+    const prevProgress = await repo.getPlayerStageProgress(playerId, stageDef.entryRequirement);
+    const prevRecord = await repo.getPlayerRecord(playerId, stageDef.entryRequirement);
+    const prevCleared = prevProgress?.firstClearedAt !== undefined && prevProgress?.firstClearedAt !== null;
+    const prevClearedRecord = (prevRecord?.totalClears || 0) > 0;
+    if (!prevCleared && !prevClearedRecord) {
+      throw new AppError(
+        `이전 스테이지(${stageDef.entryRequirement})를 클리어해야 합니다.`,
+        400, 'STAGE_LOCKED',
+      );
+    }
+  }
+
+  // 2. 권장 전투력 확인 (옵션)
+  if (stageDef.recommendedPower) {
+    const mechCheck = await repo.getMechStats(playerId);
+    if (mechCheck) {
+      const playerPower = (mechCheck.attackPower || 10) * 10;
+      if (playerPower < stageDef.recommendedPower * 0.7) {
+        // 권장 전투력의 70% 미만이면 경고 (진입은 허용)
+        logger.warn({ playerId, stageId: stageDef.id, playerPower, recommended: stageDef.recommendedPower, event: 'battle_low_power' }, 'Player power below 70% of recommended');
+      }
+    }
+  }
+
+  // 3. 기존 해금 검증 (하위 호환)
   const progress = await repo.getPlayerStageProgress(playerId, stageDef.id);
   if (!progress && stageDef.sequence > 1) {
-    throw new AppError('스테이지가 해금되지 않았습니다.', 400, 'STAGE_LOCKED');
+    const prevProgressFallback = await repo.getPlayerStageProgress(playerId, stageDef.entryRequirement || '');
+    const prevRecordFallback = await repo.getPlayerRecord(playerId, stageDef.entryRequirement || '');
+    if ((!prevProgressFallback || !prevProgressFallback.firstClearedAt) && (!prevRecordFallback || !prevRecordFallback.totalClears)) {
+      throw new AppError('스테이지가 해금되지 않았습니다.', 400, 'STAGE_LOCKED');
+    }
   }
 
   // 메카 스탯 조회 (없으면 기본 생성)
