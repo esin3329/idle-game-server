@@ -221,7 +221,9 @@ src/
 ├── data/
 │   ├── parts.ts          # 파츠 밸런스 데이터 (16종)
 │   ├── research.ts       # 연구 노드 데이터 (21개)
-│   └── crafting.ts       # 설계도 데이터 (16종)
+│   ├── crafting.ts       # 설계도 데이터 (16종)
+│   ├── stages.ts         # 스테이지 + 보스 데이터 (4스테이지, 8보스)
+│   └── upgrades.ts       # 전투 강화 선택지 (30개, 13개 진화 그룹)
 ├── shared/
 │   ├── errors.ts         # 커스텀 에러 클래스
 │   ├── validator.ts      # Zod 검증 + UUID 미들웨어
@@ -282,6 +284,9 @@ src/
 | `data-blueprints.json` | 보유 설계도 |
 | `data-crafts.json` | 제작 대기열 |
 | `data-item-ledger.json` | 아이템 원장 |
+| `data-battles.json` | 전투 세션 |
+| `data-battle-events.json` | 전투 이벤트 |
+| `data-battle-results.json` | 전투 결과 |
 
 > ⚠️ JSON 파일은 개발/테스트 전용입니다. 프로덕션에서는 MySQL을 사용하세요.
 
@@ -466,28 +471,42 @@ GET /api/rankings   # totalWealth 기준 내림차순
 ### 전투 (v2) (JWT 인증 + Idempotency-Key 필요)
 
 ```bash
-POST /battles/start                       # 세션 생성
-Idempotency-Key: start-550e8400-e29b-41d4-a716-446655440000
+POST /battles/start                       # 세션 생성 (출격 조건 검증)
+Idempotency-Key: start-...
   Body: { "stageCode": "stage_01_ruins" }
+  → 출격 조건: 이전 스테이지 클리어 + 권장 전투력 + 장비 장착
 
 GET  /battles/:sessionId                  # 세션 상태 + recovery
 
-POST /battles/:sessionId/progress         # 진행 이벤트
-Idempotency-Key: progress-550e8400-e29b-41d4-a716-446655440000
+POST /battles/:sessionId/progress         # 진행 이벤트 (kills/coreEnergy/boss 검증)
+Idempotency-Key: progress-...
   Body: { "sequence": 1, "killsDelta": 5, "coreEnergyDelta": 25, "bossId": "boss_0" }
 
-POST /battles/:sessionId/upgrades/select  # 강화 선택
-Idempotency-Key: select-550e8400-e29b-41d4-a716-446655440000
+POST /battles/:sessionId/upgrades/select  # 강화 3지선다 (서버 생성·검증)
+Idempotency-Key: select-...
   Body: { "selectedUpgradeCode": "machine_gun_1" }
+  → 서버가 3개 선택지 생성 → 클라이언트 선택 → 서버 검증
 
-POST /battles/:sessionId/finish           # 전투 종료
-Idempotency-Key: finish-550e8400-e29b-41d4-a716-446655440000
+POST /battles/:sessionId/finish           # 전투 종료 (6단계 서버 검증)
+Idempotency-Key: finish-...
   Body: { "totalKills": 245, "totalCoreEnergy": 480, "bossDefeated": ["boss_0"], "elapsedSeconds": 292 }
+  → 검증: 시간/처치/core/보스/업그레이드/중복 → scrap+설계도 보상
 
 POST /battles/:sessionId/abandon          # 포기 (보상 없음)
-Idempotency-Key: abandon-550e8400-e29b-41d4-a716-446655440000
+Idempotency-Key: abandon-...
 
-GET  /stages                              # 스테이지 목록 + 플레이어 진행도
+GET  /stages                              # 스테이지 목록 + 보스 + 진행도 + 해금 상태
+GET  /stages/:id                          # 스테이지 상세 + 보스 정보
+GET  /stages/:id/bosses                   # 스테이지 보스 목록
+GET  /stages/:id/requirements             # 출격 조건 (선행스테이지/권장전투력/장비)
+```
+
+### 강화 카탈로그
+
+```bash
+GET /upgrades                        # 30개 강화 전체 + 13개 진화 그룹
+GET /upgrades/:id                    # 단일 강화 상세 (스탯 효과 포함)
+GET /upgrades/group/:groupId         # 그룹별 강화 목록
 ```
 
 ```
@@ -649,6 +668,16 @@ Idempotency-Key: claim-550e8400-e29b-41d4-a716-446655440000
 | 404 | `WALLET_NOT_FOUND` | 지갑 없음 |
 | 409 | `NICKNAME_CONFLICT` | 닉네임 중복 |
 | 409 | `DUPLICATE_ACCOUNT` | 이메일/닉네임 중복 |
+| 400 | `STAGE_LOCKED` | 스테이지 해금 안 됨 |
+| 400 | `TIME_OUT_OF_RANGE` | 전투 경과 시간 이상 |
+| 400 | `FINAL_KILLS_MISMATCH` | 최종 처치 수 불일치 |
+| 400 | `CORE_ENERGY_MISMATCH` | Core Energy 불일치 |
+| 400 | `BOSS_MISMATCH` | 보스 처치 정보 불일치 |
+| 400 | `PENDING_UPGRADES` | 미선택 강화 존재 |
+| 400 | `CHOICES_GENERATED` | 강화 선택지 생성됨 (재요청) |
+| 400 | `INVALID_CHOICE` | 유효하지 않은 강화 선택 |
+| 409 | `ALREADY_FINISHED` | 이미 종료된 전투 |
+| 409 | `SESSION_NOT_ACTIVE` | 세션이 활성 상태 아님 |
 | 429 | `RATE_LIMITED` | 요청 제한 초과 |
 | 500 | `INTERNAL_ERROR` | 서버 내부 오류 |
 
