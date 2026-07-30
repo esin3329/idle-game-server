@@ -1,3 +1,10 @@
+import { startCluster } from './cluster.js';
+
+// 클러스터 모드: 메인 프로세스는 Worker 포크 후 종료
+if (startCluster()) {
+  process.exit(0);
+}
+
 import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
