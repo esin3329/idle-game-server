@@ -112,4 +112,15 @@ export interface PartsRepository {
   upgradePart(playerId: string, partCode: string): Promise<PlayerPart>;
 }
 
-import type { PlayerPart, EquipSlot } from './types.js';
+import type { PlayerPart, EquipSlot, MechaConfig } from './types.js';
+
+// ─── MechaConfig ────────────────────────────────
+
+export interface MechaConfigRepository {
+  getConfigs(playerId: string): Promise<MechaConfig[]>;
+  createConfig(playerId: string, name: string, frame: string, weapon: string, core: string, module: string): Promise<MechaConfig>;
+  updateConfig(id: string, updates: Partial<Omit<MechaConfig, 'id' | 'playerId' | 'createdAt'>>): Promise<MechaConfig | null>;
+  activateConfig(id: string, playerId: string): Promise<MechaConfig | null>;
+  deleteConfig(id: string, playerId: string): Promise<boolean>;
+  getActiveConfig(playerId: string): Promise<MechaConfig | null>;
+}

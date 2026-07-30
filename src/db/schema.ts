@@ -513,3 +513,19 @@ export const equipSlots = mysqlTable('equip_slots', {
   module: varchar('module', { length: 50 }).notNull().default('power_module'),
   updatedAt: datetime('updated_at').notNull(),
 });
+
+/** mecha_configs — 메카 장착 구성 프리셋 */
+export const mechaConfigs = mysqlTable('mecha_configs', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  playerId: varchar('player_id', { length: 36 }).notNull(),
+  name: varchar('name', { length: 50 }).notNull().default('기본 구성'),
+  frame: varchar('frame', { length: 50 }).notNull().default('medium_frame'),
+  weapon: varchar('weapon', { length: 50 }).notNull().default('machine_gun'),
+  core: varchar('core', { length: 50 }).notNull().default('assault_core'),
+  module: varchar('module', { length: 50 }).notNull().default('power_module'),
+  isActive: int('is_active').notNull().default(0),
+  createdAt: datetime('created_at').notNull(),
+  updatedAt: datetime('updated_at').notNull(),
+}, (table) => [
+  index('idx_mc_player_id').on(table.playerId),
+]);

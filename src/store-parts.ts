@@ -3,15 +3,17 @@
  */
 import { readFileSync, writeFileSync, renameSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import type { PlayerPart, EquipSlot } from './types.js';
-import type { PartsRepository } from './repository.js';
+import type { PlayerPart, EquipSlot, MechaConfig } from './types.js';
+import type { PartsRepository, MechaConfigRepository } from './repository.js';
 import { logger } from './shared/logger.js';
 
 const partsFile = process.env.DATA_FILE_PARTS || join(process.cwd(), 'data-parts.json');
 const equipFile = process.env.DATA_FILE_EQUIP || join(process.cwd(), 'data-equip.json');
+const configsFile = process.env.DATA_FILE_CONFIGS || join(process.cwd(), 'data-configs.json');
 
 let parts = new Map<string, PlayerPart>();
 let equips = new Map<string, EquipSlot>();
+let configs = new Map<string, MechaConfig>();
 let _initialized = false;
 
 function loadMap<T extends { id: string }>(fp: string, name: string): Map<string, T> {
@@ -43,6 +45,7 @@ function ensure(): void {
     _initialized = true;
     parts = loadMap<PlayerPart>(partsFile, 'parts');
     equips = loadMap<EquipSlot>(equipFile, 'equips');
+    configs = loadMap<MechaConfig>(configsFile, 'configs');
   }
 }
 
@@ -115,8 +118,72 @@ export const jsonPartsRepo: PartsRepository = {
   },
 };
 
+// ─── MechaConfigRepository ─────────────────────────
+
+export const jsonMechaConfigRepo: MechaConfigRepository = {
+  async getConfigs(playerId: string): Promise<MechaConfig[]> {
+    ensure();
+    return Array.from(configs.values()).filter((c) => c.playerId === playerId);
+  },
+
+  async createConfig(playerId: string, name: string, frame: string, weapon: string, core: string, module: string): Promise<MechaConfig> {
+    ensure();
+    const now = new Date().toISOString();
+    const config: MechaConfig = {
+      id: crypto.randomUUID(), playerId, name,
+      frame, weapon, core, module,
+      isActive: 0, createdAt: now, updatedAt: now,
+    };
+    configs.set(config.id, config);
+    saveMap(configs, configsFile, 'configs');
+    return config;
+  },
+
+  async updateConfig(id: string, updates: Partial<Omit<MechaConfig, 'id' | 'playerId' | 'createdAt'>>): Promise<MechaConfig | null> {
+    ensure();
+    const config = configs.get(id);
+    if (!config) return null;
+    Object.assign(config, updates, { updatedAt: new Date().toISOString() });
+    configs.set(id, config);
+    saveMap(configs, configsFile, 'configs');
+    return config;
+  },
+
+  async activateConfig(id: string, playerId: string): Promise<MechaConfig | null> {
+    ensure();
+    const target = configs.get(id);
+    if (!target || target.playerId !== playerId) return null;
+    // 모든 구성을 비활성화
+    for (const c of configs.values()) {
+      if (c.playerId === playerId && c.isActive) {
+        c.isActive = 0;
+        configs.set(c.id, c);
+      }
+    }
+    target.isActive = 1;
+    configs.set(id, target);
+    saveMap(configs, configsFile, 'configs');
+    return target;
+  },
+
+  async deleteConfig(id: string, playerId: string): Promise<boolean> {
+    ensure();
+    const config = configs.get(id);
+    if (!config || config.playerId !== playerId) return false;
+    configs.delete(id);
+    saveMap(configs, configsFile, 'configs');
+    return true;
+  },
+
+  async getActiveConfig(playerId: string): Promise<MechaConfig | null> {
+    ensure();
+    return Array.from(configs.values()).find((c) => c.playerId === playerId && c.isActive) || null;
+  },
+};
+
 export function resetPartsStores(): void {
   parts = new Map();
   equips = new Map();
+  configs = new Map();
   _initialized = false;
 }

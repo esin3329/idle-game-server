@@ -7,6 +7,7 @@ import routes from './routes.js';
 import authRoutes from './auth.routes.js';
 import battleRoutes from './battle.routes.js';
 import partsRoutes from './parts.routes.js';
+import mechaRoutes from './mecha.routes.js';
 import adminRoutes from './admin.routes.js';
 import { AppError } from './shared/errors.js';
 import { logger } from './shared/logger.js';
@@ -146,6 +147,7 @@ app.route('/', routes);
 app.route('/', authRoutes);
 app.route('/', battleRoutes);
 app.route('/', partsRoutes);
+app.route('/', mechaRoutes);
 app.route('/', adminRoutes);
 
 // ─── 서버 시작 ─────────────────────────────────────

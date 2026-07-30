@@ -4,7 +4,7 @@
  * DB_DRIVER=mysql → MySQL
  * 그 외          → JSON 파일 (기본값)
  */
-import type { PlayerRepository, AuthRepository, WalletRepository, PartsRepository } from './repository.js';
+import type { PlayerRepository, AuthRepository, WalletRepository, PartsRepository, MechaConfigRepository } from './repository.js';
 
 // ─── PlayerRepository ─────────────────────────────
 
@@ -204,6 +204,35 @@ export async function getPartsRepo(): Promise<PartsRepository> {
 
 export function resetPartsRepo(): void {
   _partsRepo = null;
+}
+
+// ─── MechaConfigRepository (Parts와 동일 연결 공유) ─
+
+let _configsRepo: MechaConfigRepository | null = null;
+
+export async function getMechaConfigRepo(): Promise<MechaConfigRepository> {
+  if (!_configsRepo) {
+    if (process.env.DB_DRIVER === 'json') {
+      const { jsonMechaConfigRepo } = await import('./store-parts.js');
+      _configsRepo = jsonMechaConfigRepo;
+      return _configsRepo;
+    }
+    try {
+      const { mysqlMechaConfigRepo } = await import('./db/mysql-parts.repository.js');
+      const { getPool } = await import('./db/connection.js');
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
+      await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
+      _configsRepo = mysqlMechaConfigRepo;
+    } catch {
+      const { jsonMechaConfigRepo } = await import('./store-parts.js');
+      _configsRepo = jsonMechaConfigRepo;
+    }
+  }
+  return _configsRepo;
+}
+
+export function resetMechaConfigRepo(): void {
+  _configsRepo = null;
 }
 
 /** 모든 저장소 일괄 리셋 (테스트 전용) */

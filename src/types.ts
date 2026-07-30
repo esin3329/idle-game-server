@@ -125,3 +125,29 @@ export interface PartCrafting {
   completed: 0 | 1;
   createdAt: string;
 }
+
+/** 파츠 합성 재료 */
+export interface PartCrafting {
+  id: string;
+  playerId: string;
+  resultCode: string;
+  materials: string;      // JSON: {code: qty, ...}
+  startedAt: string;
+  completesAt: string;
+  completed: 0 | 1;
+  createdAt: string;
+}
+
+/** 메카 장착 구성 — 프레임+무기+코어+모듈 프리셋 */
+export interface MechaConfig {
+  id: string;
+  playerId: string;
+  name: string;
+  frame: string;
+  weapon: string;
+  core: string;
+  module: string;
+  isActive: 0 | 1;
+  createdAt: string;
+  updatedAt: string;
+}
