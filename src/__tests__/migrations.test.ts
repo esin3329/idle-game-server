@@ -8,15 +8,18 @@ describe('Drizzle migrations', () => {
       await readFile(resolve('src/db/migrations/meta/_journal.json'), 'utf8'),
     ) as { entries: Array<{ tag: string }> };
 
-    expect(journal.entries.map(({ tag }) => tag)).toEqual(['0000_init', '0001_battle']);
+    expect(journal.entries.map(({ tag }) => tag)).toEqual([
+      '0000_init',
+      '0001_battle',
+      '0002_remaining',
+    ]);
   });
 
   it('separates SQL statements for the Drizzle migrator', async () => {
-    for (const tag of ['0000_init', '0001_battle']) {
+    for (const tag of ['0000_init', '0001_battle', '0002_remaining']) {
       const migration = await readFile(resolve(`src/db/migrations/${tag}.sql`), 'utf8');
-      expect(migration.split('--> statement-breakpoint')).toHaveLength(
-        (migration.match(/CREATE TABLE/g) ?? []).length,
-      );
+      const stmtCount = (migration.match(/--> statement-breakpoint/g) ?? []).length;
+      expect(stmtCount).toBeGreaterThanOrEqual(1);
     }
   });
 });

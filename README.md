@@ -78,12 +78,10 @@ curl -H "Authorization: Bearer <operatorToken>" \
 ```
 
 - 실시간 프레임 단위 서버 시뮬레이션
-- 파츠/장비/연구 시스템 (스냅샷 placeholder만 존재)
 - 파츠 강화·랜덤 옵션·제련
 - PvP, 멀티플레이
 - 매치메이킹
 - Redis 분산 Rate Limit (단일 인스턴스 in-memory로 충분)
-- 백그라운드 Worker (세션 만료 등 요청 시점 판정)
 - AI 기반 부정행위 탐지 (통계적 상한 + audit 로그로 충분)
 - 다중 API 서버 / 수평 확장 (단일 인스턴스 기준)
 - Unity 클라이언트 (서버 API만 구현)
@@ -200,7 +198,7 @@ src/
 │   ├── mysql-parts.repository.ts    # MySQL 파츠/메카구성 저장소
 │   ├── mysql-research.repository.ts # MySQL 연구 저장소
 │   ├── mysql-crafting.repository.ts # MySQL 제작 저장소
-│   └── migrations/         # drizzle-kit 생성 SQL (0000~0004)
+│   └── migrations/         # drizzle-kit 생성 SQL (0000~0002)
 └── __tests__/
     ├── store.test.ts     # 저장소 + 신뢰성 테스트
     ├── routes.test.ts    # API 테스트
@@ -296,14 +294,14 @@ POST /auth/register
 Idempotency-Key: register-550e8400-e29b-41d4-a716-446655440000
 Content-Type: application/json
 {"email":"user@example.com","password":"password123!","nickname":"플레이어"}
-→ 201 {userId, playerId, accessToken, refreshToken}
+→ 201 {userId, playerId, tokens: {accessToken, refreshToken}}
 ```
 
 #### 로그인
 ```bash
 POST /auth/login
 {"email":"user@example.com","password":"password123!"}
-→ 200 {userId, playerId, accessToken, refreshToken}
+→ 200 {userId, playerId, tokens: {accessToken, refreshToken}}
 ```
 
 #### 토큰 갱신
@@ -619,16 +617,17 @@ Idempotency-Key: claim-550e8400-e29b-41d4-a716-446655440000
 
 ## 데이터베이스
 
-### 스키마 (6개 테이블)
+### 스키마 (32개 테이블)
 
-| 테이블 | 용도 |
-|------|------|
-| `players` | 게임 플레이어 데이터 |
-| `users` | 인증 계정 |
-| `wallet_balances` | 재화 잔액 (electricity + scrap) |
-| `currency_ledger` | 재화 변동 기록 (append-only) |
-| `refresh_sessions` | JWT Refresh Token 관리 |
-| `player_profiles` | 플레이어 부가 정보 |
+| 카테고리 | 테이블 | 수 |
+|------|------|:---:|
+| 계정·플레이어 | `users`, `refresh_sessions`, `players`, `player_profiles`, `player_records` | 5 |
+| 재화 | `wallet_balances`, `currency_ledger` | 2 |
+| 전투 | `stages`, `stage_bosses`, `stage_rewards`, `mecha_stats`, `battle_sessions`, `battle_events`, `battle_upgrade_offers`, `battle_results`, `player_stage_progress` | 9 |
+| 파츠·메카 | `parts_inventory`, `equip_slots`, `mecha_configs` | 3 |
+| 연구·제작 | `player_research`, `player_blueprints`, `crafting_queue` | 3 |
+| 아이템 | `item_ledger` | 1 |
+| 운영·감사 | `account_sanctions`, `operator_grants`, `operator_audit_logs`, `security_events`, `operator_accounts`, `operator_roles`, `operator_permissions`, `operator_role_permissions`, `operator_account_roles` | 9 |
 
 ### 재화 트랜잭션 설계
 
@@ -720,16 +719,19 @@ erDiagram
 ### 마이그레이션
 
 ```bash
-npm run db:generate     # 스키마 → SQL 생성
+npm run db:generate     # schema.ts → SQL 생성 (MySQL 필요)
 npm run db:migrate      # 마이그레이션 실행
 npm run db:seed         # 시드 데이터 (20명)
+npm run db:battle-seed  # 전투 콘텐츠 시드
 npm run db:import-json  # 기존 data.json → MySQL import (중복 무시)
 ```
+
+> ⚠️ `db:generate`는 MySQL 연결이 필요합니다. 생성된 SQL을 커밋하기 전에 반드시 리뷰하세요.
 
 ## 테스트
 
 ```bash
-npm test              # 유닛 테스트 (55개)
+npm test              # 유닛 테스트 (209개)
 npm run test:watch    # watch 모드
 npm run type-check    # 타입 검사
 
