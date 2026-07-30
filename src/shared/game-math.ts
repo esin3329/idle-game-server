@@ -19,21 +19,56 @@ export const GAME = {
   BATTLE_REWARD_MAX_RATIO: 1.5,
 } as const;
 
+export interface ResearchBonus {
+  /** 방치 생산량 증가 배율 (1.0 = 기본) */
+  idleProdMultiplier: number;
+  /** 최대 방치 시간 추가 (초) */
+  extraMaxIdleSeconds: number;
+  /** 방치 보상 증가 배율 (1.0 = 기본) */
+  idleRewardMultiplier: number;
+}
+
+/** 연구 보너스 기본값 (효과 없음) */
+export const DEFAULT_RESEARCH_BONUS: ResearchBonus = {
+  idleProdMultiplier: 1.0,
+  extraMaxIdleSeconds: 0,
+  idleRewardMultiplier: 1.0,
+};
+
+/**
+ * 연구 진행도로 ResearchBonus 계산
+ */
+export function calcResearchBonus(
+  prodPassiveLevel: number,  // 방치 최적화 레벨
+  prodCapLevel: number,      // 저장 용량 확장 레벨
+  idleRewardLevel: number,   // 방치 보상 강화 레벨
+): ResearchBonus {
+  return {
+    idleProdMultiplier: 1.0 + prodPassiveLevel * 0.2,
+    extraMaxIdleSeconds: prodCapLevel * 2 * 3600,
+    idleRewardMultiplier: 1.0 + idleRewardLevel * 0.15,
+  };
+}
+
 // ─── 생산량 계산 유틸 ──────────────────────────────
 
 export function calculateProduction(
   lastClaimedAt: string,
   electricityPerSecond: number,
+  researchBonus: ResearchBonus = DEFAULT_RESEARCH_BONUS,
 ): { elapsed: number; produced: number; maxCapped: boolean } {
   const now = Date.now();
   const last = new Date(lastClaimedAt).getTime();
-  const maxIdle = GAME.MAX_IDLE_SECONDS;
+  const maxIdle = GAME.MAX_IDLE_SECONDS + researchBonus.extraMaxIdleSeconds;
   const raw = Math.max(0, Math.floor((now - last) / 1000));
   const elapsed = Math.min(raw, maxIdle);
 
+  const baseProduced = elapsed * electricityPerSecond;
+  const produced = Math.floor(baseProduced * researchBonus.idleProdMultiplier * researchBonus.idleRewardMultiplier);
+
   return {
     elapsed,
-    produced: elapsed * electricityPerSecond,
+    produced,
     maxCapped: raw > maxIdle,
   };
 }

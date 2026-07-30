@@ -6,11 +6,11 @@ import { idempotencyGuard } from './shared/idempotency.js';
 import type { ClaimResponse, UpgradeResponse, BattleResponse } from './dto.js';
 import { NotFoundError, InsufficientResourceError, InternalError, AppError } from './shared/errors.js';
 import { validatePlayerId, validateJson, createPlayerSchema } from './shared/validator.js';
-import { getRepo } from './provider.js';
+import { getRepo, getResearchRepo } from './provider.js';
 import { logger } from './shared/logger.js';
 import { rateLimit } from './shared/rate-limit.js';
-import { adjustBalance, updateEps, updateLastClaimedAt } from './shared/wallet.js';
-import { GAME, calculateProduction } from './shared/game-math.js';
+import { getBalance, adjustBalance, updateEps, updateLastClaimedAt } from './shared/wallet.js';
+import { GAME, calculateProduction, calcResearchBonus, DEFAULT_RESEARCH_BONUS } from './shared/game-math.js';
 
 const routes = new Hono<{ Variables: { parsedBody: { nickname: string }; player: Player; idempotencyKey: string } }>();
 
@@ -20,6 +20,20 @@ async function requirePlayer(id: string): Promise<Player> {
   const player = await repo.getPlayer(id);
   if (!player) throw new NotFoundError('플레이어');
   return player;
+}
+
+// 공통: 연구 보너스 조회
+async function getResearchBonus(playerId: string) {
+  try {
+    const researchRepo = await getResearchRepo();
+    const allResearch = await researchRepo.getAll(playerId);
+    const prodPassiveLv = allResearch.find((r) => r.code === 'prod_passive')?.level || 0;
+    const prodCapLv = allResearch.find((r) => r.code === 'prod_cap')?.level || 0;
+    const idleRewardLv = allResearch.find((r) => r.code === 'util_idle_reward')?.level || 0;
+    return calcResearchBonus(prodPassiveLv, prodCapLv, idleRewardLv);
+  } catch {
+    return DEFAULT_RESEARCH_BONUS;
+  }
 }
 
 // ─── 플레이어 ──────────────────────────────────────
@@ -70,9 +84,17 @@ routes.post('/api/players/:id/claim', validatePlayerId, rateLimit(1, 1000), idem
   const id = c.req.param('id')!;
   const player = await requirePlayer(id);
 
+  // wallet_balances 기준 lastClaimedAt + eps 사용
+  const walletInfo = await getBalance(id);
+  const refLastClaimed = walletInfo?.lastClaimedAt || player.lastClaimedAt;
+  const refEps = walletInfo?.electricityPerSecond || player.electricityPerSecond;
+
+  const researchBonus = await getResearchBonus(id);
+
   const { elapsed: elapsedSeconds, produced, maxCapped } = calculateProduction(
-    player.lastClaimedAt,
-    player.electricityPerSecond,
+    refLastClaimed,
+    refEps,
+    researchBonus,
   );
 
   if (elapsedSeconds <= 0) {
@@ -108,11 +130,21 @@ routes.post('/api/players/:id/claim', validatePlayerId, rateLimit(1, 1000), idem
 
 routes.get('/api/players/:id/claim', validatePlayerId, async (c) => {
   const player = await requirePlayer(c.req.param('id')!);
+  const id = c.req.param('id')!;
+
+  // wallet_balances 기준
+  const walletInfo = await getBalance(id);
+  const refLastClaimed = walletInfo?.lastClaimedAt || player.lastClaimedAt;
+  const refEps = walletInfo?.electricityPerSecond || player.electricityPerSecond;
+
+  const researchBonus = await getResearchBonus(id);
+
   const { elapsed, produced: pending, maxCapped } = calculateProduction(
-    player.lastClaimedAt,
-    player.electricityPerSecond,
+    refLastClaimed,
+    refEps,
+    researchBonus,
   );
-  return c.json({ pending, elapsedSeconds: elapsed, maxCapped, electricityPerSecond: player.electricityPerSecond });
+  return c.json({ pending, elapsedSeconds: elapsed, maxCapped, electricityPerSecond: refEps });
 });
 
 // ─── 업그레이드 ────────────────────────────────────
@@ -162,9 +194,19 @@ routes.post('/api/players/:id/upgrade', validatePlayerId, rateLimit(2, 1000), id
 
 routes.get('/api/players/:id/idle-rewards', validatePlayerId, async (c) => {
   const player = await requirePlayer(c.req.param('id')!);
+  const id = c.req.param('id')!;
+
+  // wallet_balances 기준
+  const walletInfo = await getBalance(id);
+  const refLastClaimed = walletInfo?.lastClaimedAt || player.lastClaimedAt;
+  const refEps = walletInfo?.electricityPerSecond || player.electricityPerSecond;
+
+  const researchBonus = await getResearchBonus(id);
+
   const { elapsed: elapsedSeconds, produced: pending, maxCapped } = calculateProduction(
-    player.lastClaimedAt,
-    player.electricityPerSecond,
+    refLastClaimed,
+    refEps,
+    researchBonus,
   );
 
   const hours = Math.floor(elapsedSeconds / 3600);
@@ -174,7 +216,7 @@ routes.get('/api/players/:id/idle-rewards', validatePlayerId, async (c) => {
   return c.json({
     offlineTime: `${hours}h ${minutes}m ${seconds}s`,
     pendingReward: pending,
-    electricityPerSecond: player.electricityPerSecond,
+    electricityPerSecond: refEps,
     maxCapped,
     maxIdleHours: GAME.MAX_IDLE_SECONDS / 3600,
   });
