@@ -6,7 +6,7 @@ import { idempotencyGuard } from './shared/idempotency.js';
 import type { ClaimResponse, UpgradeResponse, BattleResponse } from './dto.js';
 import { NotFoundError, InsufficientResourceError, InternalError, AppError } from './shared/errors.js';
 import { validatePlayerId, validateJson, createPlayerSchema } from './shared/validator.js';
-import { getRepo, getResearchRepo } from './provider.js';
+import { getRepo, getResearchRepo, getAuthRepo, getWalletRepo } from './provider.js';
 import { logger } from './shared/logger.js';
 import { rateLimit } from './shared/rate-limit.js';
 import { getBalance, adjustBalance, updateEps, updateLastClaimedAt } from './shared/wallet.js';
@@ -260,18 +260,24 @@ routes.post('/api/players/:id/battle', validatePlayerId, rateLimit(1, 3000), ide
 // ─── 지갑 ──────────────────────────────────────────
 
 routes.get('/wallet', jwtAuth, async (c) => {
-  const repo = await getRepo();
-  const all = await repo.getAllPlayers();
-  const player = all[0]; // TODO: c.get('userId') 기반 조회로 전환
+  const userId = c.get('userId')!;
+  const walletRepo = await getWalletRepo();
 
-  if (!player) {
+  const authRepo = await getAuthRepo();
+  const profile = await authRepo.findProfileByUserId(userId);
+  if (!profile) {
     throw new NotFoundError('플레이어');
   }
 
+  const balance = await walletRepo.getBalance(profile.playerId);
+  if (!balance) {
+    throw new NotFoundError('지갑');
+  }
+
   return c.json({
-    playerId: player.id,
-    electricity: player.electricity,
-    electricityPerSecond: player.electricityPerSecond,
+    playerId: profile.playerId,
+    electricity: balance.balance,
+    electricityPerSecond: balance.electricityPerSecond,
   });
 });
 

@@ -14,6 +14,7 @@ import { resetResearchStores } from '../store-research.js';
 import { resetItemLedger } from '../store-item-ledger.js';
 import { resetBattleStores } from '../store-battle.js';
 import { resetWalletStores } from '../store-wallet.js';
+import { resetAuthStores } from '../store-auth.js';
 import jwt from 'jsonwebtoken';
 
 // ─── 헬퍼 ──────────────────────────────────────────
@@ -72,6 +73,12 @@ beforeEach(() => {
   try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-battles.json')); } catch {}
   try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-battle-events.json')); } catch {}
   try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-battle-results.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-users.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-sessions.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-sanctions.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-profiles.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-wallets.json')); } catch {}  // 재차 정리
+  resetAuthStores();
   resetAllRepos();
   resetPartsStores();
   resetCraftingStores();
@@ -249,7 +256,112 @@ describe('중복 지급 방지', () => {
     }
   });
 
-  // 11. 전투 세션 중복 종료 방지 (unit test)
+  // 11. 닉네임 중복 가입 방지
+  it('동일 닉네임으로 회원가입 → 409 DUPLICATE_ACCOUNT', async () => {
+    const app = createFullApp();
+
+    // 첫 번째 회원가입
+    const registerId = crypto.randomUUID();
+    const res1 = await app.request('/auth/register', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `register-${registerId}`,
+      },
+      body: JSON.stringify({ email: 'dup-nick@test.com', password: 'password123!', nickname: '중복닉네임' }),
+    });
+    expect(res1.status).toBe(201);
+
+    // 같은 닉네임으로 두 번째 회원가입
+    const registerId2 = crypto.randomUUID();
+    const res2 = await app.request('/auth/register', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `register-${registerId2}`,
+      },
+      body: JSON.stringify({ email: 'dup-nick-2@test.com', password: 'password123!', nickname: '중복닉네임' }),
+    });
+    expect(res2.status).toBe(409);
+    const body = await res2.json();
+    expect(body.code).toBe('DUPLICATE_ACCOUNT');
+  });
+
+  // 12. GET /wallet — JWT 인증 + 본인 지갑 조회
+  it('GET /wallet → JWT 기반 본인 지갑 반환', async () => {
+    const app = createFullApp();
+
+    // 회원가입
+    const registerId = crypto.randomUUID();
+    const regRes = await app.request('/auth/register', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `register-${registerId}`,
+      },
+      body: JSON.stringify({ email: 'wallet-test@test.com', password: 'password123!', nickname: '지갑테스트' }),
+    });
+    if (regRes.status !== 201) {
+      const errBody = await regRes.json();
+      console.error('REG ERROR:', JSON.stringify(errBody));
+    }
+    expect(regRes.status).toBe(201);
+    const regBody = await regRes.json();
+    const accessToken = regBody.tokens.accessToken;
+
+    // 지갑 조회
+    const walletRes = await app.request('/wallet', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    expect(walletRes.status).toBe(200);
+    const walletBody = await walletRes.json();
+    expect(walletBody).toHaveProperty('playerId');
+    expect(walletBody).toHaveProperty('electricity');
+    expect(walletBody).toHaveProperty('electricityPerSecond');
+    expect(walletBody.electricityPerSecond).toBe(1);
+  });
+
+  it('GET /wallet → 다른 사용자 지갑에 접근 불가', async () => {
+    const app = createFullApp();
+
+    // 사용자 A 회원가입
+    const regA = await app.request('/auth/register', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `register-${crypto.randomUUID()}`,
+      },
+      body: JSON.stringify({ email: 'user-a@test.com', password: 'password123!', nickname: '사용자A' }),
+    });
+    expect(regA.status).toBe(201);
+    const regABody = await regA.json();
+    const tokenA = regABody.tokens.accessToken;
+
+    // 사용자 B 회원가입 (다른 사용자 존재 확인용)
+    const regB = await app.request('/auth/register', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': `register-${crypto.randomUUID()}`,
+      },
+      body: JSON.stringify({ email: 'user-b@test.com', password: 'password123!', nickname: '사용자B' }),
+    });
+    expect(regB.status).toBe(201);
+
+    // 사용자 A의 토큰으로 지갑 조회 → 사용자 A의 지갑 반환
+    const walletRes = await app.request('/wallet', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${tokenA}` },
+    });
+    expect(walletRes.status).toBe(200);
+    const walletBody = await walletRes.json();
+    // A의 지갑에는 A의 playerId가 있어야 함
+    expect(typeof walletBody.playerId).toBe('string');
+    expect(typeof walletBody.electricity).toBe('number');
+  });
+
+  // 13. 전투 세션 중복 종료 방지 (unit test)
   it('이미 종료된 세션 다시 종료 → 409 SESSION_NOT_ACTIVE', async () => {
     const { endBattleSession } = await import('../shared/battle-session.js');
     const { jsonBattleRepo } = await import('../store-battle.js');

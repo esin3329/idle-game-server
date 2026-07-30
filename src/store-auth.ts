@@ -109,6 +109,11 @@ export const jsonAuthRepo: AuthRepository = {
     return Array.from(users.values()).find((u) => u.email === email);
   },
 
+  async findUserByNickname(nickname: string): Promise<User | undefined> {
+    ensureLoaded();
+    return Array.from(users.values()).find((u) => u.nickname === nickname);
+  },
+
   async findUserById(id: string): Promise<User | undefined> {
     ensureLoaded();
     return users.get(id);

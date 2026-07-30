@@ -64,6 +64,12 @@ export const mysqlAuthRepo: AuthRepository = {
     return rows.length > 0 ? toUser(rows[0]) : undefined;
   },
 
+  async findUserByNickname(nickname: string): Promise<User | undefined> {
+    const db = getDb();
+    const rows = await db.select().from(users).where(eq(users.nickname, nickname)).limit(1);
+    return rows.length > 0 ? toUser(rows[0]) : undefined;
+  },
+
   async findUserById(id: string): Promise<User | undefined> {
     const db = getDb();
     const rows = await db.select().from(users).where(eq(users.id, id)).limit(1);

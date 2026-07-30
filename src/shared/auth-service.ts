@@ -79,7 +79,10 @@ export async function registerUser(email: string, password: string, nickname: st
       throw new AppError('이미 사용 중인 이메일입니다.', 409, 'DUPLICATE_ACCOUNT');
     }
 
-    // TODO: 닉네임 중복 검사 — store-auth에 findUserByNickname 추가 필요
+    const existingNickname = await repo.findUserByNickname(nickname);
+    if (existingNickname) {
+      throw new AppError('이미 사용 중인 닉네임입니다.', 409, 'DUPLICATE_ACCOUNT');
+    }
 
     userId = crypto.randomUUID();
     playerId = crypto.randomUUID();

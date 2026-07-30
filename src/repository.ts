@@ -48,6 +48,7 @@ export interface AuthRepository {
   createProfile(profile: PlayerProfile): Promise<PlayerProfile>;
   createWallet(wallet: WalletBalance): Promise<WalletBalance>;
   findUserByEmail(email: string): Promise<User | undefined>;
+  findUserByNickname(nickname: string): Promise<User | undefined>;
   findUserById(id: string): Promise<User | undefined>;
   findProfileByUserId(userId: string): Promise<PlayerProfile | undefined>;
   findActiveSanctions(userId: string): Promise<Sanction[]>;
