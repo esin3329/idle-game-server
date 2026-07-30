@@ -13,6 +13,7 @@ import { resetCraftingStores } from '../store-crafting.js';
 import { resetResearchStores } from '../store-research.js';
 import { resetItemLedger } from '../store-item-ledger.js';
 import { resetBattleStores } from '../store-battle.js';
+import { resetWalletStores } from '../store-wallet.js';
 import jwt from 'jsonwebtoken';
 import { AppError } from '../shared/errors.js';
 
@@ -61,12 +62,26 @@ function createApp() {
 
 beforeEach(() => {
   process.env.DB_DRIVER = 'json';
+  // JSON 파일 삭제 (store 계열이 파일에서 로드하는 것 방지)
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-wallets.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-ledger.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-parts.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-equip.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-configs.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-research.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-item-ledger.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-blueprints.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-crafts.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-battles.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-battle-events.json')); } catch {}
+  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-battle-results.json')); } catch {}
   resetAllRepos();
   resetPartsStores();
   resetCraftingStores();
   resetResearchStores();
   resetItemLedger();
   resetBattleStores();
+  resetWalletStores();
 });
 
 // ═══════════════════════════════════════════════════════
