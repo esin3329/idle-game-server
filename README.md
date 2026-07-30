@@ -115,27 +115,15 @@ curl http://localhost:3000/metrics
 docker compose stop app
 ```
 
-## 이번 단계에서 제외한 기능
+## 향후 로드맵
 
-- 실시간 프레임 단위 서버 시뮬레이션
-- 파츠/장비/연구 시스템 (스냅샷 placeholder만 존재)
-- 파츠 강화·랜덤 옵션·제련
-- PvP, 멀티플레이
-- 매치메이킹
-- Redis 분산 Rate Limit (단일 인스턴스 in-memory로 충분)
-- 백그라운드 Worker (세션 만료 등 요청 시점 판정)
-- AI 기반 부정행위 탐지 (통계적 상한 + audit 로그로 충분)
-- 다중 API 서버 / 수평 확장 (단일 인스턴스 기준)
-- Unity 클라이언트 (서버 API만 구현)
+- PvP · 멀티플레이
 - WebSocket 실시간 동기화
-- 관리자 대시보드
-- 길드·친구·우편·출석·업적·시즌 (소셜/라이브 서비스)
-- 결제·상점·재화 구매
-- 관리자 웹 UI
-- Prometheus·Grafana·ELK (별도 모니터링 스택)
-- 외부 상용 APM (Datadog/NewRelic 등)
-- 이메일·SMS 알림
-- 자동 백업 스케줄러 (cron 예시만 제공)
+- Unity 클라이언트 연동
+- 관리자 대시보드 (웹 UI)
+- 길드 · 친구 · 우편 · 출석 · 업적 · 시즌
+- 결제 · 상점 · 재화 구매
+- Prometheus · Grafana 연동
 
 ## 프로젝트 구조
 
@@ -396,20 +384,6 @@ POST /api/players/:id/upgrade                 # 구매
 Idempotency-Key: upgrade-550e8400-e29b-41d4-a716-446655440000
 ```
 
-### 전투 (JWT 인증 + Idempotency-Key 필요)
-
-```bash
-POST /api/players/:id/battle
-Idempotency-Key: battle-550e8400-e29b-41d4-a716-446655440000
-→ {won, reward, enemyName, enemyPower, playerPower}
-```
-
-### 랭킹
-
-```bash
-GET /api/rankings   # totalWealth 기준 내림차순
-```
-
 ### 전투 (v2) (JWT 인증 + Idempotency-Key 필요)
 
 ```bash
@@ -574,8 +548,6 @@ flowchart TD
 **Unity 연동 예정**
 - 클라이언트가 progress로 2~5초 간격 누적 수치 보고
 - 서버는 통계적 상한 + sessionSeed 기반 재현 검증으로 확장 가능
-
-### 랭킹 (기존)
 
 ### 멱등성
 

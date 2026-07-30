@@ -15,7 +15,6 @@ import { resetItemLedger } from '../store-item-ledger.js';
 import { resetBattleStores } from '../store-battle.js';
 import { resetWalletStores } from '../store-wallet.js';
 import jwt from 'jsonwebtoken';
-import { AppError } from '../shared/errors.js';
 
 // ─── 헬퍼 ──────────────────────────────────────────
 
@@ -25,8 +24,6 @@ const EXPIRED_TOKEN = jwt.sign({ sub: 'expired-user', type: 'access' }, 'dev-sec
 
 const adminAuth = () => ({ Authorization: `Bearer ${ADMIN_TOKEN}` });
 const userAuth = () => ({ Authorization: `Bearer ${USER_TOKEN}` });
-const noAuth = () => ({});
-
 function createFullApp() {
   const app = new Hono();
   app.onError((err, c) => {
