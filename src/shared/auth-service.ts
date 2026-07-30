@@ -1,4 +1,3 @@
-import { hashPassword, comparePassword, isWorkerEnabled } from '../worker.js';
 import { compare, hash } from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { createHash } from 'node:crypto';
@@ -67,7 +66,7 @@ export async function registerUser(email: string, password: string, nickname: st
   if (mode === 'mysql') {
     // MySQL: 트랜잭션 최적화
     const { registerUserTransaction } = await import('../db/mysql-auth.repository.js');
-    const passwordHash = isWorkerEnabled() ? await hashPassword(password, SALT_ROUNDS) : await hash(password, SALT_ROUNDS);
+    const passwordHash = await hash(password, SALT_ROUNDS);
     const result = await registerUserTransaction(email, nickname, passwordHash);
     userId = result.userId;
     playerId = result.playerId;
@@ -85,7 +84,7 @@ export async function registerUser(email: string, password: string, nickname: st
     userId = crypto.randomUUID();
     playerId = crypto.randomUUID();
     const now = new Date().toISOString();
-    const passwordHash = isWorkerEnabled() ? await hashPassword(password, SALT_ROUNDS) : await hash(password, SALT_ROUNDS);
+    const passwordHash = await hash(password, SALT_ROUNDS);
 
     await repo.createUser({
       id: userId, email, nickname, passwordHash,
@@ -123,8 +122,7 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
     throw new AppError('이메일 또는 비밀번호가 일치하지 않습니다.', 401, 'INVALID_CREDENTIALS');
   }
 
-  const passwordMatch = isWorkerEnabled() ? await comparePassword(password, user.passwordHash) : await compare(password, user.passwordHash);
-  if (!passwordMatch) {
+  if (!(await compare(password, user.passwordHash))) {
     auditLog.warn({ userId: user.id, email, event: 'login_failed', reason: 'wrong_password' }, `Login failed (password): ${email}`);
     throw new AppError('이메일 또는 비밀번호가 일치하지 않습니다.', 401, 'INVALID_CREDENTIALS');
   }
