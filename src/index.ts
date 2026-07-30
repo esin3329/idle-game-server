@@ -10,6 +10,7 @@ import partsRoutes from './parts.routes.js';
 import mechaRoutes from './mecha.routes.js';
 import researchRoutes from './research.routes.js';
 import craftingRoutes from './crafting.routes.js';
+import upgradesRoutes from './upgrades.routes.js';
 import adminRoutes from './admin.routes.js';
 import { AppError } from './shared/errors.js';
 import { logger } from './shared/logger.js';
@@ -152,6 +153,7 @@ app.route('/', partsRoutes);
 app.route('/', mechaRoutes);
 app.route('/', researchRoutes);
 app.route('/', craftingRoutes);
+app.route('/', upgradesRoutes);
 app.route('/', adminRoutes);
 
 // ─── 서버 시작 ─────────────────────────────────────

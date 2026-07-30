@@ -6,6 +6,7 @@
  */
 import { getBattleRepo } from '../provider.js';
 import { BATTLE_POLICY } from './battle-policy.js';
+import { ALL_UPGRADES } from '../data/upgrades.js';
 import { AppError } from './errors.js';
 import { logger, auditLog } from './logger.js';
 
@@ -247,27 +248,6 @@ export async function reportBattleEvent(sessionId: string, userId: string, event
 // selectUpgrade
 // ═══════════════════════════════════════════════════════
 
-const UPGRADE_DEFS = [
-  { id: 'machine_gun_1', weight: 10, tier: 1 }, { id: 'machine_gun_2', weight: 6, tier: 2 }, { id: 'machine_gun_3', weight: 3, tier: 3 },
-  { id: 'shotgun_1', weight: 8, tier: 1 }, { id: 'shotgun_2', weight: 5, tier: 2 },
-  { id: 'sniper_1', weight: 6, tier: 1 }, { id: 'sniper_2', weight: 3, tier: 2 },
-  { id: 'laser_1', weight: 8, tier: 1 }, { id: 'laser_2', weight: 5, tier: 2 },
-  { id: 'missile_1', weight: 5, tier: 1 },
-  { id: 'plasma_1', weight: 6, tier: 1 },
-  { id: 'armor_1', weight: 10, tier: 1 }, { id: 'armor_2', weight: 6, tier: 2 }, { id: 'armor_3', weight: 3, tier: 3 },
-  { id: 'drone_1', weight: 8, tier: 1 }, { id: 'drone_2', weight: 5, tier: 2 },
-  { id: 'speed_1', weight: 8, tier: 1 }, { id: 'speed_2', weight: 5, tier: 2 },
-  { id: 'reload_1', weight: 8, tier: 1 }, { id: 'reload_2', weight: 5, tier: 2 },
-  { id: 'shield_1', weight: 8, tier: 1 }, { id: 'shield_2', weight: 5, tier: 2 },
-  { id: 'regen_1', weight: 6, tier: 1 },
-  { id: 'crit_1', weight: 8, tier: 1 }, { id: 'crit_2', weight: 5, tier: 2 },
-  { id: 'ulti_1', weight: 7, tier: 1 }, { id: 'ulti_2', weight: 4, tier: 2 },
-  { id: 'dash_1', weight: 8, tier: 1 },
-  { id: 'bomb_1', weight: 5, tier: 1 },
-  { id: 'chain_1', weight: 6, tier: 1 },
-  { id: 'heal_1', weight: 7, tier: 1 },
-];
-
 export async function selectUpgrade(sessionId: string, userId: string, selectedUpgradeCode: string): Promise<{ applied: string[]; offeredChoices: UpgradeChoice[] }> {
   const repo = await getBattleRepo();
   const session = await repo.getSession(sessionId);
@@ -283,9 +263,9 @@ export async function selectUpgrade(sessionId: string, userId: string, selectedU
     // 새 선택지 생성
     const newLevel = (session.battleLevel || 1) + 1;
     const seed = parseInt(session.sessionSeed || '0') + newLevel * 1000 + session.killsReported;
-    const available = UPGRADE_DEFS.filter((u) => {
+    const available = ALL_UPGRADES.filter((u) => {
       if (applied.includes(u.id)) return false;
-      const parentTier = u.tier > 1 ? UPGRADE_DEFS.find((x) => x.id.startsWith(u.id.slice(0, -2)) && x.tier === u.tier - 1) : null;
+      const parentTier = u.tier > 1 ? ALL_UPGRADES.find((x) => x.group === u.group && x.tier === u.tier - 1) : null;
       if (parentTier && !applied.includes(parentTier.id)) return false;
       return true;
     });
