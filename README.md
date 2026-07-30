@@ -16,6 +16,10 @@ Hono + TypeScript + MySQL 기반 방치형(idle) 게임 서버 API
 - 🔐 **JWT 인증** — 회원가입/로그인, Access/Refresh Token
 - 💰 **재화 지갑** — electricity, scrap 잔액 및 원장 추적
 - 🤖 **전투 시스템 (v2)** — 서버 권위 전투 세션, 4개 스테이지, 30개 강화 선택지, 단일 트랜잭션 보상
+- 🧩 **파츠 시스템** — 프레임3/무기6/코어3/모듈4, 인벤토리+장착+강화
+- 🔧 **메카 구성** — 프레임+무기+코어+모듈 프리셋 저장/전환
+- 🔬 **연구 트리** — 21개 연구 노드, 선행 조건, 방치 보상/전투력/경제 효과
+- 📐 **설계도+제작** — 16종 설계도 드롭, 스크랩 소비 파츠 제작, 제작 대기열
 
 ## 기술 스택
 
@@ -204,8 +208,20 @@ src/
 ├── store.ts              # JSON Player 저장소 (개발/폴백)
 ├── store-auth.ts         # JSON Auth 저장소 (회원가입/로그인/세션)
 ├── store-wallet.ts       # JSON Wallet 저장소 (잔액/원장)
+├── store-parts.ts        # JSON 파츠 저장소
+├── store-research.ts     # JSON 연구 저장소
+├── store-crafting.ts     # JSON 제작 저장소
+├── store-item-ledger.ts  # JSON 아이템 원장
 ├── provider.ts           # 저장소 provider (MySQL 우선, JSON 폴백)
 ├── repository.ts         # PlayerRepository 인터페이스
+├── parts.routes.ts       # 파츠 인벤토리/장착/강화 API
+├── mecha.routes.ts       # 메카 구성 프리셋 API
+├── research.routes.ts    # 연구 트리 API
+├── crafting.routes.ts    # 설계도/제작 API
+├── data/
+│   ├── parts.ts          # 파츠 밸런스 데이터 (16종)
+│   ├── research.ts       # 연구 노드 데이터 (21개)
+│   └── crafting.ts       # 설계도 데이터 (16종)
 ├── shared/
 │   ├── errors.ts         # 커스텀 에러 클래스
 │   ├── validator.ts      # Zod 검증 + UUID 미들웨어
@@ -225,9 +241,12 @@ src/
 │   ├── seed.ts           # 개발용 시드 데이터
 │   ├── import-json.ts    # JSON → MySQL import
 │   ├── mysql.repository.ts   # MySQL PlayerRepository 구현체
-│   ├── mysql-auth.repository.ts  # MySQL AuthRepository 구현체
-│   └── mysql-wallet.repository.ts # MySQL WalletRepository 구현체
-│   └── migrations/         # drizzle-kit 생성 SQL
+│   ├── mysql-auth.repository.ts    # MySQL AuthRepository 구현체
+│   ├── mysql-wallet.repository.ts   # MySQL WalletRepository 구현체
+│   ├── mysql-parts.repository.ts    # MySQL 파츠/메카구성 저장소
+│   ├── mysql-research.repository.ts # MySQL 연구 저장소
+│   ├── mysql-crafting.repository.ts # MySQL 제작 저장소
+│   └── migrations/         # drizzle-kit 생성 SQL (0000~0004)
 └── __tests__/
     ├── store.test.ts     # 저장소 + 신뢰성 테스트
     ├── routes.test.ts    # API 테스트
@@ -256,6 +275,13 @@ src/
 | `data-profiles.json` | 플레이어 프로필 |
 | `data-wallets.json` | 재화 지갑 잔액 |
 | `data-ledger.json` | 재화 원장 (currency_ledger) |
+| `data-parts.json` | 파츠 인벤토리 |
+| `data-equip.json` | 장착 상태 |
+| `data-configs.json` | 메카 구성 프리셋 |
+| `data-research.json` | 연구 진행도 |
+| `data-blueprints.json` | 보유 설계도 |
+| `data-crafts.json` | 제작 대기열 |
+| `data-item-ledger.json` | 아이템 원장 |
 
 > ⚠️ JSON 파일은 개발/테스트 전용입니다. 프로덕션에서는 MySQL을 사용하세요.
 
@@ -345,6 +371,53 @@ GET /wallet/ledger   → [{id, amount, balanceAfter, source, ...}]
 
 # 잔액/원장은 모든 재화 변경(claim/upgrade/battle) 시
 # wallet_balances + currency_ledger에 자동 기록됨
+```
+
+### 파츠 시스템
+
+```bash
+# 카탈로그 (인증 불필요)
+GET /parts                      → {frames[], weapons[], cores[], modules[]}
+GET /parts/:code                → {type, code, name, stats, ...}
+
+# 인벤토리/장착 (JWT 필요)
+GET  /parts/my                  → {inventory[], equipped}
+POST /parts/grant               # 파츠 지급
+POST /parts/equip  {partCode}   # 파츠 장착
+POST /parts/upgrade {partCode}  # 파츠 강화
+
+# 파츠 상세 조회 (JWT 필요)
+GET  /mecha/parts               # 보유 파츠 (?type=weapon 필터)
+```
+
+### 메카 구성 (JWT 필요)
+
+```bash
+GET    /mecha/configs                # 구성 목록 + 활성 구성
+POST   /mecha/configs {name,frame,weapon,core,module}  # 생성
+PUT    /mecha/configs/:id            # 수정
+POST   /mecha/configs/:id/activate   # 활성화 (프리셋 전환)
+DELETE /mecha/configs/:id            # 삭제
+```
+
+### 연구 (JWT 필요)
+
+```bash
+GET  /research                  # 연구 트리 전체 (카탈로그)
+GET  /research/my               # 내 연구 현황 + 선행 조건 + canResearch
+POST /research/:code/levelup    # 연구 레벨업 (비용 차감 + 원장 기록)
+POST /research/reset            # 연구 초기화
+```
+
+### 설계도 & 제작 (JWT 필요)
+
+```bash
+GET  /crafting/blueprints          # 설계도 카탈로그
+GET  /crafting/my-blueprints       # 내 보유 설계도
+POST /crafting/drop                # 랜덤 설계도 드롭
+GET  /crafting/queue               # 제작 대기열 + 완료 가능 수
+POST /crafting/:code/start         # 제작 시작 (설계도 소비)
+POST /crafting/:id/complete        # 제작 완료 (파츠 지급)
 ```
 
 ### 플레이어
