@@ -6,7 +6,7 @@ import { logger, auditLog } from './shared/logger.js';
 import { getAdminRepo } from './provider.js';
 import { AppError } from './shared/errors.js';
 import { getDb } from './db/connection.js';
-import { users, walletBalances, currencyLedger, itemLedger, battleSessions, accountSanctions, operatorGrants, securityEvents, operatorAuditLogs, operatorAccounts } from './db/schema.js';
+import { users, currencyLedger, itemLedger, battleSessions, accountSanctions, securityEvents, operatorAuditLogs, operatorAccounts } from './db/schema.js';
 import { eq, and, or, gte, lte } from 'drizzle-orm';
 
 const adminRoutes = new Hono<{ Variables: { userId: string; role: string } }>();
@@ -243,110 +243,41 @@ adminRoutes.put('/admin/users/:id/sanctions/:sanctionId/revoke', idempotencyGuar
 
 // ─── POST /admin/users/:id/grants ────────────────────
 
-adminRoutes.post('/admin/users/:id/grants', idempotencyGuard, requirePermission('admin.grants.low'), async (c) => {
-  const db = getDb();
+adminRoutes.post('/admin/users/:id/grants', idempotencyGuard, async (c) => {
+  await checkPerm(c, 'admin.grants.low');
   const operatorId = c.get('userId');
   const targetUserId = c.req.param('id')!;
-  const now = new Date();
 
-  const { resourceType, resourceCode, amount, reasonText, externalReference } = await c.req.json<{
-    resourceType: string; resourceCode: string; amount: number;
-    reasonText: string; externalReference?: string;
-  }>();
+  const { resourceType, resourceCode, amount, reasonText, externalReference } = await c.req.json();
+  if (!resourceType || !resourceCode) return c.json({ error: 'resourceType, resourceCode는 필수입니다.', code: 'BAD_REQUEST' }, 400);
+  if (!reasonText || reasonText.length < 5) return c.json({ error: '충분한 사유가 필요합니다 (5자 이상).', code: 'BAD_REQUEST' }, 400);
+  if (typeof amount !== 'number' || amount === 0) return c.json({ error: '유효한 amount가 필요합니다.', code: 'BAD_REQUEST' }, 400);
 
-  // 검증
-  if (!resourceType || !resourceCode) {
-    return c.json({ error: 'resourceType, resourceCode는 필수입니다.', code: 'BAD_REQUEST' }, 400);
-  }
-  if (!reasonText || reasonText.length < 5) {
-    return c.json({ error: '충분한 사유가 필요합니다 (5자 이상).', code: 'BAD_REQUEST' }, 400);
-  }
-  if (typeof amount !== 'number' || amount === 0) {
-    return c.json({ error: '유효한 amount가 필요합니다.', code: 'BAD_REQUEST' }, 400);
-  }
+  const repo = await getAdminRepo();
+  const user = await repo.getUserDetail(targetUserId);
+  if (!user) return c.json({ error: '대상 사용자를 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
 
-  // 대상 사용자 존재 확인
-  const userRows = await db.select({ id: users.id }).from(users).where(eq(users.id, targetUserId)).limit(1);
-  if (userRows.length === 0) {
-    return c.json({ error: '대상 사용자를 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
-  }
-
-  // resourceType에 따른 처리
-  const grantId = crypto.randomUUID();
-
-  if (resourceType === 'currency') {
-    const ALLOWED_RESOURCES = ['electricity', 'scrap'];
-    if (!ALLOWED_RESOURCES.includes(resourceCode)) {
-      return c.json({ error: '지원하지 않는 재화입니다.', code: 'BAD_REQUEST' }, 400);
-    }
-
-    // 직접 지갑 조회 + 갱신 (기존 wallet 서비스 패턴)
-    const walletRows = await db.select().from(walletBalances).where(eq(walletBalances.playerId, targetUserId)).limit(1);
-    if (walletRows.length === 0) {
-      return c.json({ error: '대상 지갑을 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
-    }
-    const wallet = walletRows[0];
-    const currentBalance = resourceCode === 'scrap' ? wallet.scrap : wallet.electricity;
-    const newBalance = currentBalance + amount;
-    if (newBalance < 0) {
-      return c.json({ error: '잔액이 부족합니다.', code: 'INSUFFICIENT_BALANCE' }, 400);
-    }
-
-    const setData: Record<string, unknown> = { updatedAt: now };
-    if (resourceCode === 'scrap') setData.scrap = newBalance;
-    else setData.electricity = newBalance;
-    await db.update(walletBalances).set(setData).where(eq(walletBalances.playerId, targetUserId));
-
-    // 원장 기록
-    await db.insert(currencyLedger).values({
-      id: crypto.randomUUID(),
-      playerId: targetUserId,
-      userId: targetUserId,
-      currency: resourceCode,
-      amount,
-      balanceAfter: newBalance,
-      source: 'operator_grant',
-      reason: reasonText,
-      referenceType: 'operator_grant',
-      referenceId: externalReference || '',
-      idempotencyKey: c.req.header('Idempotency-Key') || '',
-      createdAt: now,
-    });
-  } else if (resourceType === 'item') {
-    // 아이템 지급: itemLedger에 기록
-    await db.insert(itemLedger).values({
-      id: crypto.randomUUID(),
-      playerId: targetUserId,
-      userId: targetUserId,
-      itemType: resourceCode,
-      itemId: `${resourceCode}_grant_${Date.now()}`,
-      quantity: Math.abs(amount),
-      source: 'operator_grant',
-      referenceType: 'operator_grant',
-      referenceId: externalReference || '',
-      idempotencyKey: c.req.header('Idempotency-Key') || '',
-      createdAt: now,
-    });
-  } else {
-    return c.json({ error: '지원하지 않는 resourceType입니다. currency 또는 item입니다.', code: 'BAD_REQUEST' }, 400);
-  }
-
-  await db.insert(operatorGrants).values({
-    id: grantId, targetUserId, operatorId,
-    grantType: resourceType, resourceCode, amount,
-    reasonCode: resourceType, reasonText,
-    externalReference: externalReference || '',
-    status: 'completed',
-    idempotencyKey: c.req.header('Idempotency-Key') || '',
-    createdAt: now,
+  const result = await repo.createGrant({
+    targetUserId, operatorId, grantType: resourceType, resourceCode, amount,
+    reasonCode: resourceType, reasonText, externalReference: externalReference || '',
+    status: 'completed', idempotencyKey: c.req.header('Idempotency-Key') || '',
   });
 
-  auditLog.warn({ operatorId, targetUserId, grantType: resourceType, resourceCode, amount, reasonText, grantId, event: 'operator_grant' }, `Operator grant: ${resourceType} ${resourceCode} x${amount}`);
-
-  return c.json({ status: 'completed', grantType: resourceType, resourceCode, amount, grantId }, 201);
+  auditLog.warn({ operatorId, targetUserId, grantType: resourceType, resourceCode, amount, reasonText, grantId: result.id, event: 'operator_grant' });
+  return c.json({ status: 'completed', grantType: resourceType, resourceCode, amount, grantId: result.id }, 201);
 });
 
 // ─── GET /admin/grants ───────────────────────────────
+
+adminRoutes.get('/admin/grants', async (c) => {
+  await checkPerm(c, 'admin.grants.read');
+  const repo = await getAdminRepo();
+  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
+  const offset = Math.max(parseInt(c.req.query('offset') || '0'), 0);
+  const targetUserId = c.req.query('userId');
+  const grants = await repo.listGrants(limit, offset, targetUserId);
+  return c.json({ grants, limit, offset });
+});
 
 adminRoutes.get('/admin/health', (c) => {
   const userId = c.get('userId');

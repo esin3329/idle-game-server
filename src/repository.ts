@@ -213,6 +213,7 @@ export interface AdminRepository {
   createSanction(data: any): Promise<any>;
   revokeSanction(sanctionId: string, operatorId: string, reason?: string): Promise<void>;
   createGrant(data: any): Promise<any>;
+  listGrants(limit?: number, offset?: number, targetUserId?: string): Promise<any[]>;
   listOperators(): Promise<any[]>;
   createOperator(data: any): Promise<any>;
   changeOperatorRole(operatorId: string, newRole: string): Promise<any>;

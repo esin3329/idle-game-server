@@ -30,7 +30,38 @@ export const mysqlAdminRepo: AdminRepository = {
   async getUserBattles() { return []; },
   async createSanction(d: any) { return d; },
   async revokeSanction() {},
-  async createGrant(d: any) { return d; },
+  async createGrant(d: any) {
+    const db = getDb();
+    const { operatorGrants, walletBalances, currencyLedger } = await import('./schema.js');
+    const { eq } = await import('drizzle-orm');
+    const id = crypto.randomUUID();
+    await db.insert(operatorGrants).values({ id, ...d, createdAt: new Date() });
+    // 재화 지급 시 wallet+ledger 갱신
+    if (d.grantType === 'currency' && d.targetUserId) {
+      const walletRows = await db.select().from(walletBalances).where(eq(walletBalances.playerId, d.targetUserId)).limit(1);
+      if (walletRows.length > 0) {
+        const wallet = walletRows[0];
+        const field = d.resourceCode === 'scrap' ? 'scrap' : 'electricity';
+        const newBalance = (wallet[field] || 0) + d.amount;
+        await db.update(walletBalances).set({ [field]: newBalance, updatedAt: new Date() }).where(eq(walletBalances.playerId, d.targetUserId));
+        await db.insert(currencyLedger).values({
+          id: crypto.randomUUID(), playerId: d.targetUserId, userId: d.targetUserId,
+          currency: d.resourceCode, amount: d.amount, balanceAfter: newBalance,
+          source: 'operator_grant', reason: d.reasonText || '',
+          referenceType: 'operator_grant', referenceId: id,
+          idempotencyKey: d.idempotencyKey || '', createdAt: new Date(),
+        });
+      }
+    }
+    return { id, ...d };
+  },
+  async listGrants(limit: number, offset: number, targetUserId?: string) {
+    const db = getDb(); const { operatorGrants } = await import('./schema.js'); const { eq } = await import('drizzle-orm');
+    let query: any = db.select().from(operatorGrants);
+    if (targetUserId) query = query.where(eq(operatorGrants.targetUserId, targetUserId));
+    const rows = await query.limit(limit || 50).offset(offset || 0);
+    return rows;
+  },
   async listOperators() { return []; },
   async createOperator(d: any) { return d; },
   async changeOperatorRole(id: string, r: string) { return { id, role: r }; },

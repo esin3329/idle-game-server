@@ -57,9 +57,17 @@ export const jsonAdminRepo: AdminRepository = {
 
   async createGrant(data: any) {
     ensure();
-    const grant = { id: crypto.randomUUID(), ...data, status: 'completed', createdAt: new Date().toISOString() };
+    const id = crypto.randomUUID();
+    const grant = { id, ...data, status: 'completed', createdAt: new Date().toISOString() };
     grants.push(grant);
     saveArray(grantsFile);
+    // 재화 지급 시 wallet에도 반영
+    if (data.grantType === 'currency') {
+      try {
+        const { adjustBalance } = await import('./shared/wallet.js');
+        await adjustBalance(data.targetUserId, data.amount, 'operator_grant', data.idempotencyKey || id, data.resourceCode, data.reasonText, 'operator_grant', id);
+      } catch { /* best effort */ }
+    }
     return grant;
   },
 
@@ -83,6 +91,13 @@ export const jsonAdminRepo: AdminRepository = {
     ensure();
     for (const g of grants) { if (g.userId === userId && g.type === "suspension" && g.status === "active") g.status = "revoked"; }
     saveArray(grantsFile);
+  },
+  async listGrants(limit, offset, targetUserId) {
+    ensure();
+    let filtered = [...grants];
+    if (targetUserId) filtered = filtered.filter((g: any) => g.targetUserId === targetUserId);
+    filtered.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return filtered.slice(offset || 0, (offset || 0) + (limit || 50));
   },
   async checkPermission() { return true; },
 };
