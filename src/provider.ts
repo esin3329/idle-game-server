@@ -4,7 +4,7 @@
  * DB_DRIVER=mysql → MySQL
  * 그 외          → JSON 파일 (기본값)
  */
-import type { PlayerRepository, AuthRepository, WalletRepository, PartsRepository, MechaConfigRepository, ResearchRepository, CraftingRepository } from './repository.js';
+import type { PlayerRepository, AuthRepository, WalletRepository, PartsRepository, MechaConfigRepository, ResearchRepository, CraftingRepository, BattleRepository } from './repository.js';
 
 // ─── PlayerRepository ─────────────────────────────
 
@@ -293,6 +293,35 @@ export function resetCraftingRepo(): void {
   _craftingRepo = null;
 }
 
+// ─── BattleRepository ───────────────────────────
+
+let _battleRepo: BattleRepository | null = null;
+
+export async function getBattleRepo(): Promise<BattleRepository> {
+  if (!_battleRepo) {
+    if (process.env.DB_DRIVER === 'json') {
+      const { jsonBattleRepo } = await import('./store-battle.js');
+      _battleRepo = jsonBattleRepo;
+      return _battleRepo;
+    }
+    try {
+      const { mysqlBattleRepo } = await import('./db/mysql-battle.repository.js');
+      const { getPool } = await import('./db/connection.js');
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
+      await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
+      _battleRepo = mysqlBattleRepo;
+    } catch {
+      const { jsonBattleRepo } = await import('./store-battle.js');
+      _battleRepo = jsonBattleRepo;
+    }
+  }
+  return _battleRepo;
+}
+
+export function resetBattleRepo(): void {
+  _battleRepo = null;
+}
+
 /** 모든 저장소 일괄 리셋 (테스트 전용) */
 export function resetAllRepos(): void {
   _repo = null;
@@ -304,4 +333,5 @@ export function resetAllRepos(): void {
   _configsRepo = null;
   _researchRepo = null;
   _craftingRepo = null;
+  _battleRepo = null;
 }

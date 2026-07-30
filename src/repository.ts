@@ -160,3 +160,33 @@ export interface CraftingRepository {
 }
 
 import type { PlayerBlueprint, PartCrafting } from './types.js';
+
+// ─── Battle (전투 세션) ─────────────────────────
+
+export interface BattleRepository {
+  getStage(stageId: string): Promise<any>;
+  getStages(): Promise<any[]>;
+  getStageRewards(stageId: string): Promise<any[]>;
+  getMechStats(playerId: string): Promise<any>;
+  createMechStats(playerId: string, stats: any): Promise<void>;
+  getActiveSanctions(playerId: string): Promise<any[]>;
+  getActiveSessions(playerId: string): Promise<any[]>;
+  abandonSession(sessionId: string): Promise<void>;
+  createSession(session: any): Promise<void>;
+  getSession(sessionId: string): Promise<any>;
+  updateSession(sessionId: string, data: Record<string, unknown>): Promise<void>;
+  saveBattleEvent(event: any): Promise<void>;
+  getUpgradeOffers(sessionId: string): Promise<any[]>;
+  saveUpgradeOffer(offer: any): Promise<void>;
+  createBattleResult(result: any): Promise<void>;
+  getBattleResult(sessionId: string): Promise<any>;
+  getWalletBalance(playerId: string): Promise<any>;
+  updateWalletElectricity(playerId: string, amount: number): Promise<void>;
+  updateWalletScrap(playerId: string, amount: number): Promise<void>;
+  insertCurrencyLedger(entry: any): Promise<void>;
+  getPlayerRecord(playerId: string, stageId: string): Promise<any>;
+  upsertPlayerRecord(record: any): Promise<void>;
+  getPlayerStageProgress(playerId: string, stageId: string): Promise<any>;
+  upsertPlayerStageProgress(progress: any): Promise<void>;
+  createSecurityEvent(event: any): Promise<void>;
+}
