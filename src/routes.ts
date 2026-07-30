@@ -10,6 +10,7 @@ import { getRepo, getResearchRepo } from './provider.js';
 import { logger } from './shared/logger.js';
 import { rateLimit } from './shared/rate-limit.js';
 import { getBalance, adjustBalance, updateEps, updateLastClaimedAt } from './shared/wallet.js';
+import { updateRanking, getTopRankings, isRedisAvailable } from './shared/redis.js';
 import { GAME, calculateProduction, calcResearchBonus, DEFAULT_RESEARCH_BONUS } from './shared/game-math.js';
 
 const routes = new Hono<{ Variables: { parsedBody: { nickname: string }; player: Player; idempotencyKey: string } }>();
@@ -120,6 +121,9 @@ routes.post('/api/players/:id/claim', validatePlayerId, rateLimit(1, 1000), idem
 
   logger.info({ playerId: id, claimed: produced, elapsed: elapsedSeconds, event: 'claim' });
 
+  // Redis 랭킹 업데이트
+  updateRanking(id, updated.electricity + produced).catch(() => {});
+
   return c.json({
     player: toPublicPlayerDto(updated),
     claimed: produced,
@@ -186,6 +190,9 @@ routes.post('/api/players/:id/upgrade', validatePlayerId, rateLimit(2, 1000), id
   if (!updated) throw new InternalError();
 
   logger.info({ playerId: id, cost, newEps: updated.electricityPerSecond, event: 'upgrade' });
+
+  // Redis 랭킹 업데이트
+  updateRanking(id, updated.electricity).catch(() => {});
 
   return c.json({ player: toPublicPlayerDto(updated), cost, newElectricityPerSecond: updated.electricityPerSecond } satisfies UpgradeResponse);
 });
@@ -254,6 +261,9 @@ routes.post('/api/players/:id/battle', validatePlayerId, rateLimit(1, 3000), ide
 
   logger.info({ playerId: id, won, reward, enemy: enemyName, event: 'battle' });
 
+  // Redis 랭킹 업데이트
+  updateRanking(id, updated.electricity).catch(() => {});
+
   return c.json({ player: toPublicPlayerDto(updated), won, reward, enemyName, enemyPower, playerPower } satisfies BattleResponse);
 });
 
@@ -278,6 +288,28 @@ routes.get('/wallet', jwtAuth, async (c) => {
 // ─── 랭킹 ──────────────────────────────────────────
 
 routes.get('/api/rankings', async (c) => {
+  // Redis 우선 조회
+  if (isRedisAvailable()) {
+    const top = await getTopRankings(100);
+    if (top.length > 0) {
+      const repo = await getRepo();
+      const players = await repo.getAllPlayers();
+      const playerMap = new Map(players.map((p) => [p.id, p]));
+      const rankings = top.map((r) => {
+        const p = playerMap.get(r.playerId);
+        return {
+          id: r.playerId,
+          nickname: p?.nickname || 'Unknown',
+          electricity: p?.electricity || 0,
+          electricityPerSecond: p?.electricityPerSecond || 0,
+          totalWealth: r.score,
+        };
+      });
+      return c.json(rankings);
+    }
+  }
+
+  // Redis 없거나 비어있으면 기존 방식
   const repo = await getRepo();
   const players = await repo.getAllPlayers();
 
