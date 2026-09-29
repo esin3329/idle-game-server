@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rewriteAdminApiRequest } from '../cloudflare-routing.js';
+import { createApiUpstreamRequest, rewriteAdminApiRequest } from '../cloudflare-routing.js';
 
 describe('Cloudflare admin API routing', () => {
   it('strips the SPA proxy prefix from admin API paths and preserves query strings', () => {
@@ -21,5 +21,27 @@ describe('Cloudflare admin API routing', () => {
 
     expect(new URL(rewritten.url).pathname).toBe('/api/players/player-1/claim');
     expect(rewritten.method).toBe('POST');
+  });
+
+  it('proxies admin requests to the configured Node origin, preserving query, method, headers, and body', async () => {
+    const request = new Request('https://admin.example/api/admin/users?search=pilot', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer test-token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'active' }),
+    });
+
+    const upstream = createApiUpstreamRequest(request, 'https://api.example.net');
+
+    expect(new URL(upstream.url).origin).toBe('https://api.example.net');
+    expect(new URL(upstream.url).pathname).toBe('/admin/users');
+    expect(new URL(upstream.url).searchParams.get('search')).toBe('pilot');
+    expect(upstream.method).toBe('POST');
+    expect(upstream.headers.get('Authorization')).toBe('Bearer test-token');
+    expect(await upstream.json()).toEqual({ status: 'active' });
+  });
+
+  it('rejects non-HTTPS public API origins', () => {
+    const request = new Request('https://admin.example/api/admin/health');
+    expect(() => createApiUpstreamRequest(request, 'http://api.example.net')).toThrow('API_ORIGIN must use HTTPS');
   });
 });

@@ -168,18 +168,13 @@ export async function expireStaleAiRuns(): Promise<void> {
   );
 }
 
-async function claimAiRun(runId?: string): Promise<ClaimedAiRun | null> {
+export async function claimNextAiRun(): Promise<ClaimedAiRun | null> {
   const connection = await getPool().getConnection();
   try {
     await connection.beginTransaction();
-    const [rows] = runId
-      ? await connection.execute<RowDataPacket[]>(
-        "SELECT `id`, `operator_id`, `target_user_id`, `case_type`, `provider`, `model`, `input_json` FROM `ai_runs` WHERE `id` = ? AND `status` = 'queued' AND `deadline_at` > UTC_TIMESTAMP(3) LIMIT 1 FOR UPDATE SKIP LOCKED",
-        [runId],
-      )
-      : await connection.execute<RowDataPacket[]>(
-        "SELECT `id`, `operator_id`, `target_user_id`, `case_type`, `provider`, `model`, `input_json` FROM `ai_runs` WHERE `status` = 'queued' AND `deadline_at` > UTC_TIMESTAMP(3) ORDER BY `created_at`, `id` LIMIT 1 FOR UPDATE SKIP LOCKED",
-      );
+    const [rows] = await connection.execute<RowDataPacket[]>(
+      "SELECT `id`, `operator_id`, `target_user_id`, `case_type`, `provider`, `model`, `input_json` FROM `ai_runs` WHERE `status` = 'queued' AND `deadline_at` > UTC_TIMESTAMP(3) ORDER BY `created_at`, `id` LIMIT 1 FOR UPDATE SKIP LOCKED",
+    );
     const row = rows[0];
     if (!row) {
       await connection.commit();
@@ -206,14 +201,6 @@ async function claimAiRun(runId?: string): Promise<ClaimedAiRun | null> {
   } finally {
     connection.release();
   }
-}
-
-export function claimNextAiRun(): Promise<ClaimedAiRun | null> {
-  return claimAiRun();
-}
-
-export function claimAiRunById(runId: string): Promise<ClaimedAiRun | null> {
-  return claimAiRun(runId);
 }
 
 export async function appendAiToolCall(runId: string, input: AiToolAuditInput): Promise<void> {
@@ -279,20 +266,6 @@ export async function failAiRun(runId: string, errorCode: string, elapsedMs?: nu
      SET \`status\` = ?, \`error_code\` = ?, \`elapsed_ms\` = ?, \`finished_at\` = UTC_TIMESTAMP(3), \`active_operator_id\` = NULL
      WHERE \`id\` = ? AND \`status\` = 'running'`,
     [status, safeCode, elapsedMs === undefined ? null : Math.max(0, Math.floor(elapsedMs)), runId],
-  );
-}
-
-/** Mark queued or running work terminal when a Cloudflare Workflow cannot safely continue it. */
-export async function failAiRunForWorkflow(runId: string, errorCode: string): Promise<void> {
-  const safeCode = safeErrorCode(errorCode);
-  const status = safeCode === 'AI_RUN_TIMEOUT' ? 'timed_out' : 'failed';
-  await getPool().execute(
-    `UPDATE \`ai_runs\`
-     SET \`status\` = ?, \`error_code\` = ?, \`finished_at\` = UTC_TIMESTAMP(3),
-         \`elapsed_ms\` = CASE WHEN \`started_at\` IS NULL THEN NULL ELSE TIMESTAMPDIFF(MICROSECOND, \`started_at\`, UTC_TIMESTAMP(3)) DIV 1000 END,
-         \`active_operator_id\` = NULL
-     WHERE \`id\` = ? AND \`status\` IN ('queued', 'running')`,
-    [status, safeCode, runId],
   );
 }
 

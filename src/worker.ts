@@ -1,76 +1,41 @@
-import app from './app.js';
-import { GameOpsAiWorkflow } from './gameops-workflow.js';
-import { configureCloudflareEnvironment } from './cloudflare-environment.js';
-import { validateProductionSecrets } from './shared/validate-secrets.js';
-import { failWorkflowAiRun } from './ai/worker.js';
-import { getPool } from './db/connection.js';
-import { logger } from './shared/logger.js';
-import { rewriteAdminApiRequest } from './cloudflare-routing.js';
+import { createApiUpstreamRequest } from './cloudflare-routing.js';
 
-export { GameOpsAiWorkflow };
-
-let productionSecretsValidated = false;
-
-async function startWorkflow(env: Env, runId: string): Promise<boolean> {
-  try {
-    await env.AI_ANALYSIS_WORKFLOW.create({ id: runId, params: { runId } });
-    return true;
-  } catch {
-    // Replayed Idempotency-Key requests can reach the same Workflow instance.
-    try {
-      await env.AI_ANALYSIS_WORKFLOW.get(runId);
-      return true;
-    } catch {
-      logger.error({ runId, event: 'ai.workflow_start_failed' }, 'Unable to start GameOps AI Workflow');
-      await failWorkflowAiRun(runId, 'AI_WORKFLOW_START_FAILED').catch(() => undefined);
-      return false;
-    }
-  }
+function isBackendRequest(pathname: string): boolean {
+  return pathname === '/api'
+    || pathname.startsWith('/api/')
+    || pathname === '/health'
+    || pathname.startsWith('/health/')
+    || pathname === '/ready'
+    || pathname === '/metrics';
 }
 
-async function handleReady(): Promise<Response> {
-  try {
-    await getPool().query('SELECT 1');
-    return Response.json({ status: 'ready', checks: { database: 'connected' } });
-  } catch {
-    return Response.json({ status: 'not ready', checks: { database: 'disconnected' } }, { status: 503 });
-  }
+function unavailable(message: string, status: 502 | 503): Response {
+  return Response.json({ error: message }, { status, headers: { 'Cache-Control': 'no-store' } });
 }
 
 const worker = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === '/health' || url.pathname === '/health/live') {
-      return Response.json({ status: 'ok', runtime: 'cloudflare-workers' });
-    }
-    if (url.pathname === '/ready') {
-      configureCloudflareEnvironment(env);
-      return handleReady();
+    if (!isBackendRequest(url.pathname)) return env.ASSETS.fetch(request);
+
+    const apiOrigin = env.API_ORIGIN?.trim();
+    if (!apiOrigin || apiOrigin.includes('replace-with-node-api')) {
+      return unavailable('관리자 API 서버 주소가 설정되지 않았습니다.', 503);
     }
 
-    const isApiRequest = url.pathname === '/api' || url.pathname.startsWith('/api/');
-    if (!isApiRequest && url.pathname !== '/metrics') {
-      return env.ASSETS.fetch(request);
+    try {
+      const upstreamRequest = createApiUpstreamRequest(request, apiOrigin);
+      const upstreamResponse = await fetch(upstreamRequest);
+      const headers = new Headers(upstreamResponse.headers);
+      headers.set('Cache-Control', 'no-store');
+      return new Response(upstreamResponse.body, {
+        status: upstreamResponse.status,
+        statusText: upstreamResponse.statusText,
+        headers,
+      });
+    } catch {
+      return unavailable('관리자 API 서버에 연결할 수 없습니다.', 502);
     }
-
-    configureCloudflareEnvironment(env);
-    if (isApiRequest && !productionSecretsValidated) {
-      validateProductionSecrets({ requireMysqlRootPassword: false });
-      productionSecretsValidated = true;
-    }
-
-    const internalRequest = rewriteAdminApiRequest(request);
-    const response = await app.fetch(internalRequest);
-    if (url.pathname === '/api/admin/ai/analyze' && request.method === 'POST' && response.ok) {
-      const body = await response.clone().json().catch(() => null) as { id?: string; status?: string } | null;
-      if (body?.id && body.status === 'queued') {
-        const started = await startWorkflow(env, body.id);
-        if (!started) {
-          return Response.json({ error: 'AI 분석 작업 실행을 시작하지 못했습니다.', code: 'AI_WORKFLOW_START_FAILED' }, { status: 503 });
-        }
-      }
-    }
-    return response;
   },
 };
 

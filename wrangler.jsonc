@@ -3,33 +3,15 @@
   "name": "idle-game-server",
   "main": "src/worker.ts",
   "compatibility_date": "2026-09-29",
-  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "assets": {
     "directory": "./admin/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/health", "/health/*", "/ready", "/metrics"]
+    "run_worker_first": ["/api", "/api/*", "/health", "/health/*", "/ready", "/metrics"]
   },
-  "hyperdrive": [
-    {
-      "binding": "HYPERDRIVE",
-      "id": "00000000000000000000000000000000",
-      "localConnectionString": "mysql://gameuser:local-only@127.0.0.1:3306/idle_game"
-    }
-  ],
-  "workflows": [
-    {
-      "name": "gameops-ai-analysis",
-      "binding": "AI_ANALYSIS_WORKFLOW",
-      "class_name": "GameOpsAiWorkflow"
-    }
-  ],
   "vars": {
-    "NODE_ENV": "production",
-    "DB_DRIVER": "mysql",
-    "DB_CONNECTION_LIMIT": "1",
-    "LOG_LEVEL": "info"
+    "API_ORIGIN": "https://replace-with-node-api.example.com"
   },
   "observability": {
     "logs": {
