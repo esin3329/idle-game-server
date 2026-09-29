@@ -17,24 +17,12 @@ const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 /** 캐시 정리 간격: 1시간 */
 const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
-// 주기적 만료 항목 정리
-let cleanupTimer: ReturnType<typeof setInterval> | null = null;
-function ensureCleanup() {
-  if (!cleanupTimer) {
-    cleanupTimer = setInterval(() => {
-      const now = Date.now();
-      for (const [key, entry] of cache) {
-        if (entry.expiresAt < now) cache.delete(key);
-      }
-      if (cache.size === 0 && cleanupTimer) {
-        clearInterval(cleanupTimer);
-        cleanupTimer = null;
-      }
-    }, CLEANUP_INTERVAL_MS);
-    // cleanupTimer가 프로세스 종료를 막지 않도록
-    if (cleanupTimer && typeof cleanupTimer === 'object' && 'unref' in cleanupTimer) {
-      cleanupTimer.unref();
-    }
+let lastCleanupAt = 0;
+function cleanupExpiredEntries(now: number): void {
+  if (now - lastCleanupAt < CLEANUP_INTERVAL_MS) return;
+  lastCleanupAt = now;
+  for (const [key, entry] of cache) {
+    if (entry.expiresAt < now) cache.delete(key);
   }
 }
 
@@ -60,8 +48,10 @@ export async function idempotencyGuard(c: Context<{ Variables: { idempotencyKey:
   }
 
   // ─── 캐시 확인 ──────────────────────────────────
+  const now = Date.now();
+  cleanupExpiredEntries(now);
   const cached = cache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
+  if (cached && cached.expiresAt > now) {
     return c.json(cached.body, cached.status as Parameters<typeof c.json>[1]);
   }
   if (cached) cache.delete(key); // 만료됨
@@ -76,8 +66,9 @@ export async function idempotencyGuard(c: Context<{ Variables: { idempotencyKey:
     try {
       const cloned = c.res.clone();
       const body = await cloned.json();
-      cache.set(key, { status, body, expiresAt: Date.now() + CACHE_TTL_MS });
-      ensureCleanup();
+      const cachedAt = Date.now();
+      cleanupExpiredEntries(cachedAt);
+      cache.set(key, { status, body, expiresAt: cachedAt + CACHE_TTL_MS });
     } catch {
       // JSON이 아닌 응답(리다이렉트 등)은 캐시하지 않음
     }

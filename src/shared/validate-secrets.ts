@@ -7,12 +7,15 @@ const REQUIRED_IN_PRODUCTION: { name: string; defaultHint: string }[] = [
   { name: 'MYSQL_ROOT_PASSWORD', defaultHint: 'changeme' },
 ];
 
-export function validateProductionSecrets(): void {
+export function validateProductionSecrets(options: { requireMysqlRootPassword?: boolean } = {}): void {
   if (process.env.NODE_ENV !== 'production') return;
 
   const missing: string[] = [];
 
-  for (const { name, defaultHint } of REQUIRED_IN_PRODUCTION) {
+  const required = options.requireMysqlRootPassword === false
+    ? REQUIRED_IN_PRODUCTION.filter(({ name }) => name !== 'MYSQL_ROOT_PASSWORD')
+    : REQUIRED_IN_PRODUCTION;
+  for (const { name, defaultHint } of required) {
     const value = process.env[name];
     if (!value || value === defaultHint || value === '') {
       missing.push(name);

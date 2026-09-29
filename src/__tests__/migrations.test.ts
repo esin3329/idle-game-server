@@ -12,11 +12,12 @@ describe('Drizzle migrations', () => {
       '0000_init',
       '0001_battle',
       '0002_remaining',
+      '0005_gameops_ai',
     ]);
   });
 
   it('separates SQL statements for the Drizzle migrator', async () => {
-    for (const tag of ['0000_init', '0001_battle', '0002_remaining']) {
+    for (const tag of ['0000_init', '0001_battle', '0002_remaining', '0005_gameops_ai']) {
       const migration = await readFile(resolve(`src/db/migrations/${tag}.sql`), 'utf8');
       const stmtCount = (migration.match(/--> statement-breakpoint/g) ?? []).length;
       expect(stmtCount).toBeGreaterThanOrEqual(1);

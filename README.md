@@ -764,6 +764,8 @@ npm run dev
 
 배포 확인은 우선 Node 서버에 올려 MySQL 마이그레이션과 실제 모델 호출을 점검한 뒤 진행합니다. 최종 배포 대상은 Cloudflare입니다. 현재 `src/index.ts`의 Node 서버 시작과 프로세스 폴링 워커는 Cloudflare용 진입점이 아니므로, Cloudflare 배포 작업은 별도 워크트리·브랜치에서 Worker 진입점과 내구성 AI 작업 처리로 전환합니다. 계획은 Cloudflare Workers 정적 자산으로 관리자 SPA를 제공하고, MySQL은 Hyperdrive로 연결하며, 다단계 분석 실행은 Workflows에 맡기는 구조입니다. 비용이 발생할 수 있는 모델 단계에는 자동 재시도 정책을 명시적으로 설정합니다.
 
+Cloudflare Worker 배포 설정과 실제 배포 전후 확인 절차는 [docs/CLOUDFLARE_DEPLOY.md](docs/CLOUDFLARE_DEPLOY.md)를 참고하세요.
+
 참고 운영 절차는 `docs/runbooks/`에 있습니다. 이 도구는 보상 지급이나 제재를 실행하지 않으며, 답변 초안은 운영자가 검토한 뒤 사용합니다.
 
 ## 테스트

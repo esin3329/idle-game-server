@@ -15,7 +15,8 @@ export function getPool(): Pool {
     const password = process.env.DB_PASSWORD || '';
     const database = process.env.DB_NAME || 'idle_game';
 
-    pool = createPool({ host, port, user, password, database, waitForConnections: true, connectionLimit: 10 });
+    const connectionLimit = Math.max(1, parseInt(process.env.DB_CONNECTION_LIMIT || '10', 10));
+    pool = createPool({ host, port, user, password, database, waitForConnections: true, connectionLimit });
     logger.info({ host, port, database }, 'MySQL connection pool created');
   }
   return pool;

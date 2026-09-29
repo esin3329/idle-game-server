@@ -22,20 +22,15 @@ export function clearRateLimits(): void {
   store.clear();
 }
 
-// 60초마다 만료된 엔트리 정리
+// Opportunistic cleanup avoids timers in runtimes such as Cloudflare Workers.
 const CLEANUP_INTERVAL_MS = 60_000;
-const cleanupTimer = setInterval(() => {
-  const now = Date.now();
+let lastCleanupAt = 0;
+function cleanupExpiredEntries(now: number): void {
+  if (now - lastCleanupAt < CLEANUP_INTERVAL_MS) return;
+  lastCleanupAt = now;
   for (const [key, entry] of store) {
-    if (now > entry.resetAt) {
-      store.delete(key);
-    }
+    if (now > entry.resetAt) store.delete(key);
   }
-}, CLEANUP_INTERVAL_MS);
-
-// Node.js 종료 시 타이머 해제 (테스트 환경에서 hang 방지)
-if (cleanupTimer.unref) {
-  cleanupTimer.unref();
 }
 
 export function rateLimit(maxRequests: number, windowMs: number) {
@@ -44,6 +39,7 @@ export function rateLimit(maxRequests: number, windowMs: number) {
     const key = `${c.req.path}:${id}`;
 
     const now = Date.now();
+    cleanupExpiredEntries(now);
     const entry = store.get(key);
 
     if (!entry || now > entry.resetAt) {
