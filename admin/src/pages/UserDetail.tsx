@@ -7,6 +7,7 @@ import {
   createGrant,
 } from '../api';
 import type { Sanction, WalletLedgerEntry } from '../types';
+import GameOpsAnalysis from '../components/GameOpsAnalysis';
 
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
@@ -214,6 +215,8 @@ export default function UserDetail() {
           </div>
         </div>
       </div>
+
+      <GameOpsAnalysis userId={id!} />
 
       {/* Tabs */}
       <div className="flex gap-2 mb-4">

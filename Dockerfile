@@ -24,6 +24,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist/ ./dist/
+COPY docs/runbooks/ ./docs/runbooks/
 
 USER node
 # EXPOSE는 반드시 숫자여야 함. PORT 기본값(3000) 유지.

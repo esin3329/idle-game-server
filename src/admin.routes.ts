@@ -8,6 +8,9 @@ import { AppError } from './shared/errors.js';
 import { getDb } from './db/connection.js';
 import { users, accountSanctions, securityEvents, operatorAuditLogs, operatorAccounts } from './db/schema.js';
 import { eq, and, or, gte, lte } from 'drizzle-orm';
+import { analysisInputSchema, sanitizeQuestion } from './ai/game-ops.js';
+import { listProviders } from './ai/provider.js';
+import { enqueueAiRun, getAiRun, hashAiRequest } from './ai/runs.js';
 
 const adminRoutes = new Hono<{ Variables: { userId: string; role: string } }>();
 
@@ -476,4 +479,71 @@ adminRoutes.get('/admin/audit-logs', requirePermission('admin.audit_logs.read'),
     })),
     limit, offset,
   });
+});
+
+// ─── GameOps AI: 읽기 전용 운영 분석 ──────────────
+
+adminRoutes.get('/admin/ai/providers', async (c) => {
+  await checkPerm(c, 'admin.users.read');
+  return c.json({ providers: listProviders() });
+});
+
+adminRoutes.post('/admin/ai/analyze', async (c) => {
+  await checkPerm(c, 'admin.users.read');
+  const body = await c.req.json().catch(() => null);
+  const parsed = analysisInputSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: '분석 요청 형식이 올바르지 않습니다.', code: 'BAD_REQUEST' }, 400);
+  }
+  if (process.env.DB_DRIVER === 'json') {
+    return c.json({ error: 'AI 분석 큐에는 MySQL 저장소가 필요합니다.', code: 'AI_QUEUE_REQUIRES_MYSQL' }, 503);
+  }
+
+  const idempotencyKey = c.req.header('Idempotency-Key') || '';
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) {
+    return c.json({ error: '유효한 Idempotency-Key가 필요합니다.', code: 'BAD_REQUEST' }, 400);
+  }
+
+  const provider = listProviders().find((item) => item.id === parsed.data.provider);
+  if (!provider?.enabled) {
+    return c.json({ error: '선택한 AI 제공자가 서버에 설정되지 않았습니다.', code: 'AI_PROVIDER_NOT_CONFIGURED' }, 503);
+  }
+
+  let run;
+  try {
+    run = await enqueueAiRun({
+      operatorId: c.get('userId'),
+      targetUserId: parsed.data.targetUserId,
+      caseType: parsed.data.caseType,
+      provider: parsed.data.provider,
+      model: provider.model,
+      question: sanitizeQuestion(parsed.data.question),
+      idempotencyKey,
+      requestHash: hashAiRequest(parsed.data),
+    });
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    logger.error({ operatorId: c.get('userId'), error: error instanceof Error ? error.message : String(error), event: 'ai.run_enqueue_failed' }, 'Unable to enqueue GameOps AI analysis');
+    return c.json({ error: 'AI 분석 작업을 저장하지 못했습니다. MySQL 연결과 마이그레이션 상태를 확인해 주세요.', code: 'AI_QUEUE_UNAVAILABLE' }, 503);
+  }
+
+  auditLog.info({ operatorId: c.get('userId'), targetUserId: parsed.data.targetUserId, runId: run.id, provider: parsed.data.provider, replayed: run.replayed, event: 'ai.game_ops_analysis_queued' }, 'GameOps AI analysis queued');
+  return c.json(run, run.replayed ? 200 : 202);
+});
+
+adminRoutes.get('/admin/ai/runs/:id', async (c) => {
+  await checkPerm(c, 'admin.users.read');
+  if (process.env.DB_DRIVER === 'json') {
+    return c.json({ error: 'AI 분석 큐에는 MySQL 저장소가 필요합니다.', code: 'AI_QUEUE_REQUIRES_MYSQL' }, 503);
+  }
+  const targetUserId = c.req.query('targetUserId') || '';
+  if (!targetUserId) return c.json({ error: 'targetUserId가 필요합니다.', code: 'BAD_REQUEST' }, 400);
+  try {
+    const run = await getAiRun(c.req.param('id'), c.get('userId'), targetUserId);
+    return c.json(run);
+  } catch (error) {
+    if (error instanceof AppError) throw error;
+    logger.error({ runId: c.req.param('id'), error: error instanceof Error ? error.message : String(error), event: 'ai.run_read_failed' }, 'Unable to read GameOps AI run');
+    return c.json({ error: 'AI 분석 상태를 읽지 못했습니다.', code: 'AI_QUEUE_UNAVAILABLE' }, 503);
+  }
 });

@@ -209,6 +209,7 @@ export interface AdminRepository {
   getUserDetail(userId: string): Promise<any>;
   getUserWallet(userId: string): Promise<WalletSummary | null>;
   getUserLedger(userId: string, limit?: number): Promise<any[]>;
+  getUserSecurityEvents(userId: string, limit?: number): Promise<any[]>;
   getUserItems(userId: string, limit?: number): Promise<any[]>;
   getIdleRewardLogs(userId: string, limit?: number): Promise<any[]>;
   getUserBattles(userId: string, limit?: number): Promise<any[]>;

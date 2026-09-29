@@ -40,6 +40,7 @@ export const jsonAdminRepo: AdminRepository = {
 
   async getUserWallet() { return null; },
   async getUserLedger() { return []; },
+  async getUserSecurityEvents() { return []; },
   async getUserBattles() { return []; },
 
   async createSanction(data: any) {

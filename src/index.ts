@@ -18,6 +18,7 @@ import { logger } from './shared/logger.js';
 import { recordRequest, getMetrics } from './shared/metrics.js';
 import { DEFAULT_PORT } from './config.js';
 import { validateProductionSecrets } from './shared/validate-secrets.js';
+import { startAiRunWorker, stopAiRunWorker } from './ai/worker.js';
 
 // ─── Production secrets 검증 ──────────────────────
 validateProductionSecrets();
@@ -186,12 +187,14 @@ const PORT = parseInt(process.env.PORT || String(DEFAULT_PORT), 10);
 const server = serve({ fetch: app.fetch, port: PORT }, (info) => {
   logger.info(`Server running on http://localhost:${info.port}`);
 });
+startAiRunWorker();
 
 // ─── Graceful Shutdown ─────────────────────────────
 
 const shutdown = (signal: string) => {
   logger.info(`${signal} received, shutting down...`);
   isReady = false;
+  stopAiRunWorker();
 
   // 10초 후 강제 종료
   const forceExit = setTimeout(() => {
@@ -222,5 +225,6 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
   logger.fatal({ event: 'uncaught_exception', error: err.message }, 'Uncaught exception, shutting down');
   isReady = false;
+  stopAiRunWorker();
   server.close(() => process.exit(1));
 });

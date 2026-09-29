@@ -728,6 +728,44 @@ npm run db:import-json  # 기존 data.json → MySQL import (중복 무시)
 
 > ⚠️ `db:generate`는 MySQL 연결이 필요합니다. 생성된 SQL을 커밋하기 전에 반드시 리뷰하세요.
 
+## GameOps AI 분석 (GameSpring 포트폴리오 선행 기능)
+
+사용자 상세 화면에서 보상 누락, 중복 지급 의심, 전투 결과 거절을 선택해 AI 분석을 요청할 수 있습니다. 서버는 권한이 있는 범위에서만 지갑·원장·전투·보안 데이터를 조회하고 운영 문서를 검색합니다. 결과에는 확인된 사실, 가설, 다음 확인 항목과 답변 초안이 포함됩니다. 이 기능의 AI 도구는 읽기 전용입니다.
+
+### 모델 설정
+
+서버 `.env` 파일에 Gemini 또는 Hugging Face Inference Providers 설정을 추가합니다. 키는 React 화면으로 전달되지 않습니다.
+
+```env
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-3.8-flash
+
+# Hugging Face도 함께 비교할 때 설정
+HF_TOKEN=...
+HF_MODEL=openai/gpt-oss-120b
+```
+
+Gemini 기본 모델은 공식 OpenAI 호환 API 문서의 예시를 사용합니다. Hugging Face 모델은 Inference Providers에서 사용할 수 있고 도구 호출을 지원하는 ID를 설정해야 합니다. 모델별 지원 범위는 [Gemini API](https://ai.google.dev/gemini-api/docs/openai)와 [Hugging Face Chat Completion](https://huggingface.co/docs/inference-providers/en/tasks/chat-completion) 문서에서 확인합니다. 모델 API 호출에는 제공자별 사용량 또는 요금이 발생할 수 있습니다.
+
+MySQL 8에 접속 가능한 환경에서 마이그레이션을 적용한 뒤 서버와 관리자 웹을 실행합니다. `ai_runs`, `ai_tool_calls` 테이블이 실행 상태·결과·도구 호출 감사 기록을 보존합니다.
+
+```bash
+DB_DRIVER=mysql npm run db:migrate
+npm run dev
+cd admin
+npm run dev
+```
+
+관리자 계정으로 로그인하고 사용자 상세의 **GameOps AI 분석**에서 제공자와 문의 유형을 선택합니다. 오픈웨이트 모델 분석이 필요한 계정은 `admin.wallets.read`, `admin.battles.read`, `admin.security.read` 권한에 따라 사용할 수 있는 조회 도구가 제한됩니다. 기본 권한을 갱신하려면 `npm run db:seed-operator`를 다시 실행합니다.
+
+분석 요청은 DB에 저장한 뒤 202 응답으로 접수하며, 화면은 run ID를 URL에 보관하고 완료될 때까지 상태를 조회합니다. worker는 2초 간격으로 대기 작업을 가져오고, 작업은 대기 최대 10분·실행 최대 65초로 제한합니다. 운영자별 동시 대기는 1건, 시간당 접수는 10건이며 MySQL 잠금과 유일 키로 여러 서버의 중복 실행을 막습니다. provider 호출이 있었을 수 있는 실패는 자동 재시도하지 않습니다. 다시 실행하면 새 run이 생성됩니다. 비용 추정은 하지 않으며 제공자가 돌려준 토큰 사용량만 저장합니다.
+
+이 큐 기능은 MySQL 저장소가 필요합니다. `DB_DRIVER=json`에서는 AI 큐 API가 `503 AI_QUEUE_REQUIRES_MYSQL`을 반환합니다. 실제 모델 키가 설정되지 않으면 AI 제공자 호출과 품질 평가는 실행할 수 없습니다. 실제 사용자 데이터 대신 합성 계정으로 시연합니다.
+
+배포 확인은 우선 Node 서버에 올려 MySQL 마이그레이션과 실제 모델 호출을 점검한 뒤 진행합니다. 최종 배포 대상은 Cloudflare입니다. 현재 `src/index.ts`의 Node 서버 시작과 프로세스 폴링 워커는 Cloudflare용 진입점이 아니므로, Cloudflare 배포 작업은 별도 워크트리·브랜치에서 Worker 진입점과 내구성 AI 작업 처리로 전환합니다. 계획은 Cloudflare Workers 정적 자산으로 관리자 SPA를 제공하고, MySQL은 Hyperdrive로 연결하며, 다단계 분석 실행은 Workflows에 맡기는 구조입니다. 비용이 발생할 수 있는 모델 단계에는 자동 재시도 정책을 명시적으로 설정합니다.
+
+참고 운영 절차는 `docs/runbooks/`에 있습니다. 이 도구는 보상 지급이나 제재를 실행하지 않으며, 답변 초안은 운영자가 검토한 뒤 사용합니다.
+
 ## 테스트
 
 ```bash
