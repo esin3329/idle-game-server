@@ -6,7 +6,7 @@
  *       npm run db:battle-seed
  */
 
-import { getDb } from './connection.js';
+import { closePool, getDb } from './connection.js';
 import { stages, stageRewards } from './schema.js';
 import { eq } from 'drizzle-orm';
 
@@ -186,7 +186,20 @@ async function seed() {
   console.log('\n✅ Battle content seeded (4 stages + 12 reward rows)');
 }
 
-seed().catch((err) => {
-  console.error('Seed failed:', err);
-  process.exit(1);
-});
+async function main() {
+  try {
+    await seed();
+  } catch (err) {
+    console.error('Seed failed:', err);
+    process.exitCode = 1;
+  } finally {
+    try {
+      await closePool();
+    } catch (err) {
+      console.error('Failed to close database pool:', err);
+      process.exitCode = 1;
+    }
+  }
+}
+
+void main();

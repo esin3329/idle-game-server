@@ -75,10 +75,10 @@ async function seedOperator() {
   const allPerms = await db.select().from(operatorPermissions);
   const rolePermMap: Record<string, string[]> = {
     admin: ['admin.users.read', 'admin.users.write', 'admin.grants.low', 'admin.grants.high', 'admin.security.read', 'admin.security.review', 'admin.operators.manage'],
-    operator: ['admin.users.read', 'admin.users.write', 'admin.grants.low', 'admin.security.read', 'admin.security.review'],
+    operator: ['admin.users.read', 'admin.wallets.read', 'admin.battles.read', 'admin.users.write', 'admin.grants.low', 'admin.security.read', 'admin.security.review'],
     viewer: ['admin.users.read', 'admin.security.read'],
     support: ['admin.users.read', 'admin.security.read'],
-    game_master: ['admin.users.read', 'admin.users.write', 'admin.grants.low', 'admin.security.read', 'admin.security.review'],
+    game_master: ['admin.users.read', 'admin.wallets.read', 'admin.battles.read', 'admin.users.write', 'admin.grants.low', 'admin.security.read', 'admin.security.review'],
     administrator: ['admin.users.read', 'admin.users.write', 'admin.grants.low', 'admin.grants.high', 'admin.security.read', 'admin.security.review', 'admin.operators.manage'],
   };
 

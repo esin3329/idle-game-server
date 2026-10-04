@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node", "@cloudflare/workers-types"],
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["src/worker.ts", "src/gameops-workflow.ts", "src/cloudflare-environment.ts", "src/cloudflare-routing.ts", "worker-configuration.d.ts"],
+  "exclude": ["node_modules", "admin"]
+}

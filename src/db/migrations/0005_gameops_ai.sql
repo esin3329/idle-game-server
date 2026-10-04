@@ -1,0 +1,45 @@
+-- Persistent queue and audit history for GameOps AI.
+CREATE TABLE `ai_runs` (
+  `id` varchar(36) NOT NULL,
+  `operator_id` varchar(36) NOT NULL,
+  `target_user_id` varchar(36) NOT NULL,
+  `case_type` varchar(40) NOT NULL,
+  `input_json` longtext NOT NULL,
+  `provider` varchar(24) NOT NULL,
+  `model` varchar(255) NOT NULL,
+  `status` varchar(20) NOT NULL,
+  `active_operator_id` varchar(36) DEFAULT NULL,
+  `idempotency_key` varchar(128) NOT NULL,
+  `request_hash` varchar(64) NOT NULL,
+  `prompt_version` varchar(32) NOT NULL,
+  `created_at` datetime(3) NOT NULL,
+  `started_at` datetime(3) DEFAULT NULL,
+  `finished_at` datetime(3) DEFAULT NULL,
+  `deadline_at` datetime(3) NOT NULL,
+  `elapsed_ms` int DEFAULT NULL,
+  `result_json` longtext DEFAULT NULL,
+  `error_code` varchar(64) DEFAULT NULL,
+  `token_usage_json` longtext DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_ai_runs_operator_idempotency` (`operator_id`, `idempotency_key`),
+  UNIQUE KEY `uq_ai_runs_active_operator` (`active_operator_id`),
+  KEY `idx_ai_runs_status_created` (`status`, `created_at`),
+  KEY `idx_ai_runs_operator_created` (`operator_id`, `created_at`)
+);
+--> statement-breakpoint
+CREATE TABLE `ai_tool_calls` (
+  `id` varchar(36) NOT NULL,
+  `run_id` varchar(36) NOT NULL,
+  `sequence` int NOT NULL,
+  `tool_name` varchar(64) NOT NULL,
+  `sanitized_args` longtext NOT NULL,
+  `evidence_json` longtext DEFAULT NULL,
+  `elapsed_ms` int NOT NULL,
+  `status` varchar(16) NOT NULL,
+  `error_code` varchar(64) DEFAULT NULL,
+  `created_at` datetime(3) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_ai_tool_calls_run_sequence` (`run_id`, `sequence`),
+  KEY `idx_ai_tool_calls_run_created` (`run_id`, `created_at`),
+  CONSTRAINT `fk_ai_tool_calls_run` FOREIGN KEY (`run_id`) REFERENCES `ai_runs` (`id`) ON DELETE CASCADE
+);

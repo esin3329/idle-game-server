@@ -1,4 +1,4 @@
-import { mysqlTable, varchar, int, datetime, index, unique } from 'drizzle-orm/mysql-core';
+import { mysqlTable, varchar, int, datetime, index, unique, longtext } from 'drizzle-orm/mysql-core';
 
 /** players — 게임 플레이어 데이터 */
 export const players = mysqlTable('players', {
@@ -567,4 +567,50 @@ export const craftingQueue = mysqlTable('crafting_queue', {
   createdAt: datetime('created_at').notNull(),
 }, (table) => [
   index('idx_cq_player_id').on(table.playerId),
+]);
+
+/** ai_runs — GameOps AI 분석 요청 및 결과 */
+export const aiRuns = mysqlTable('ai_runs', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  operatorId: varchar('operator_id', { length: 36 }).notNull(),
+  targetUserId: varchar('target_user_id', { length: 36 }).notNull(),
+  caseType: varchar('case_type', { length: 40 }).notNull(),
+  inputJson: longtext('input_json').notNull(),
+  provider: varchar('provider', { length: 24 }).notNull(),
+  model: varchar('model', { length: 255 }).notNull(),
+  status: varchar('status', { length: 20 }).notNull(),
+  activeOperatorId: varchar('active_operator_id', { length: 36 }),
+  idempotencyKey: varchar('idempotency_key', { length: 128 }).notNull(),
+  requestHash: varchar('request_hash', { length: 64 }).notNull(),
+  promptVersion: varchar('prompt_version', { length: 32 }).notNull(),
+  createdAt: datetime('created_at', { fsp: 3 }).notNull(),
+  startedAt: datetime('started_at', { fsp: 3 }),
+  finishedAt: datetime('finished_at', { fsp: 3 }),
+  deadlineAt: datetime('deadline_at', { fsp: 3 }).notNull(),
+  elapsedMs: int('elapsed_ms'),
+  resultJson: longtext('result_json'),
+  errorCode: varchar('error_code', { length: 64 }),
+  tokenUsageJson: longtext('token_usage_json'),
+}, (table) => [
+  unique('uq_ai_runs_operator_idempotency').on(table.operatorId, table.idempotencyKey),
+  unique('uq_ai_runs_active_operator').on(table.activeOperatorId),
+  index('idx_ai_runs_status_created').on(table.status, table.createdAt),
+  index('idx_ai_runs_operator_created').on(table.operatorId, table.createdAt),
+]);
+
+/** ai_tool_calls — 분석 중 호출된 도구와 근거의 감사 기록 */
+export const aiToolCalls = mysqlTable('ai_tool_calls', {
+  id: varchar('id', { length: 36 }).primaryKey(),
+  runId: varchar('run_id', { length: 36 }).notNull(),
+  sequence: int('sequence').notNull(),
+  toolName: varchar('tool_name', { length: 64 }).notNull(),
+  sanitizedArgs: longtext('sanitized_args').notNull(),
+  evidenceJson: longtext('evidence_json'),
+  elapsedMs: int('elapsed_ms').notNull(),
+  status: varchar('status', { length: 16 }).notNull(),
+  errorCode: varchar('error_code', { length: 64 }),
+  createdAt: datetime('created_at', { fsp: 3 }).notNull(),
+}, (table) => [
+  unique('uq_ai_tool_calls_run_sequence').on(table.runId, table.sequence),
+  index('idx_ai_tool_calls_run_created').on(table.runId, table.createdAt),
 ]);

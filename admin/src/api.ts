@@ -82,6 +82,65 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
+export interface GameOpsEvidence {
+  id: string;
+  type: string;
+  title: string;
+  occurredAt?: string;
+  data: unknown;
+}
+
+export type GameOpsRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out';
+
+export interface GameOpsRun {
+  id: string;
+  targetUserId: string;
+  status: GameOpsRunStatus;
+  caseType: 'missing_reward' | 'duplicate_suspected' | 'battle_rejected';
+  provider: 'gemini' | 'huggingface';
+  model: string;
+  elapsedMs?: number;
+  errorCode?: string;
+  toolsUsed: string[];
+  tokenUsage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  result?: {
+    verdict: 'confirmed' | 'suspected' | 'insufficient_evidence';
+    facts: Array<{ text: string; evidenceIds: string[] }>;
+    hypotheses: Array<{ text: string; evidenceIds: string[]; confidence: 'low' | 'medium' | 'high' }>;
+    nextChecks: string[];
+    replyDraft: string;
+    evidence: GameOpsEvidence[];
+  };
+}
+
+export interface AiProviderInfo {
+  id: 'gemini' | 'huggingface';
+  name: string;
+  enabled: boolean;
+  model: string;
+}
+
+export async function listAiProviders(): Promise<{ providers: AiProviderInfo[] }> {
+  return request('/admin/ai/providers');
+}
+
+export async function analyzeGameOpsIssue(input: {
+  targetUserId: string;
+  caseType: GameOpsRun['caseType'];
+  provider: AiProviderInfo['id'];
+  question: string;
+}): Promise<{ id: string; status: GameOpsRunStatus; replayed: boolean }> {
+  return request('/admin/ai/analyze', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getGameOpsRun(id: string, targetUserId: string): Promise<GameOpsRun> {
+  const q = new URLSearchParams({ targetUserId });
+  return request(`/admin/ai/runs/${encodeURIComponent(id)}?${q}`);
+}
+
 async function tryRefresh(): Promise<boolean> {
   try {
     const res = await fetch(`${BASE_URL}/auth/refresh`, {

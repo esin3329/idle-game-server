@@ -2,8 +2,11 @@
  * MySQL 기반 Admin 저장소
  */
 import { getDb } from './connection.js';
-import { users, operatorRoles, operatorRolePermissions, operatorPermissions } from './schema.js';
-import { eq, and } from 'drizzle-orm';
+import {
+  users, operatorRoles, operatorRolePermissions, operatorPermissions,
+  playerProfiles, walletBalances, currencyLedger, battleSessions, battleResults, securityEvents,
+} from './schema.js';
+import { eq, and, or, inArray, desc } from 'drizzle-orm';
 import type { AdminRepository } from '../repository.js';
 
 export const mysqlAdminRepo: AdminRepository = {
@@ -25,9 +28,79 @@ export const mysqlAdminRepo: AdminRepository = {
     const rows = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     return rows[0] || null;
   },
-  async getUserWallet() { return null; },
-  async getUserLedger() { return []; },
-  async getUserBattles() { return []; },
+  async getUserWallet(userId: string) {
+    const db = getDb();
+    const rows = await db.select({
+      playerId: walletBalances.playerId,
+      electricity: walletBalances.electricity,
+      scrap: walletBalances.scrap,
+      electricityPerSecond: walletBalances.electricityPerSecond,
+      lastClaimedAt: walletBalances.lastClaimedAt,
+    }).from(walletBalances).where(eq(walletBalances.userId, userId)).limit(1);
+    const wallet = rows[0];
+    return wallet ? { ...wallet, lastClaimedAt: wallet.lastClaimedAt.toISOString() } : null;
+  },
+  async getUserLedger(userId: string, limit = 50) {
+    const db = getDb();
+    return db.select({
+      id: currencyLedger.id,
+      playerId: currencyLedger.playerId,
+      currency: currencyLedger.currency,
+      amount: currencyLedger.amount,
+      balanceAfter: currencyLedger.balanceAfter,
+      source: currencyLedger.source,
+      reason: currencyLedger.reason,
+      referenceType: currencyLedger.referenceType,
+      referenceId: currencyLedger.referenceId,
+      createdAt: currencyLedger.createdAt,
+    }).from(currencyLedger)
+      .where(eq(currencyLedger.userId, userId))
+      .orderBy(desc(currencyLedger.createdAt), desc(currencyLedger.id))
+      .limit(Math.max(1, Math.min(limit, 50)));
+  },
+  async getUserSecurityEvents(userId: string, limit = 50) {
+    const db = getDb();
+    const profiles = await db.select({ playerId: playerProfiles.playerId })
+      .from(playerProfiles).where(eq(playerProfiles.userId, userId));
+    const playerIds = profiles.map((profile) => profile.playerId);
+    const conditions = [eq(securityEvents.userId, userId)];
+    if (playerIds.length > 0) conditions.push(inArray(securityEvents.playerId, playerIds) as any);
+    return db.select({
+      id: securityEvents.id,
+      eventType: securityEvents.eventType,
+      code: securityEvents.code,
+      severity: securityEvents.severity,
+      source: securityEvents.source,
+      safeDetails: securityEvents.safeDetails,
+      occurredAt: securityEvents.occurredAt,
+    }).from(securityEvents)
+      .where(or(...conditions))
+      .orderBy(desc(securityEvents.occurredAt), desc(securityEvents.id))
+      .limit(Math.max(1, Math.min(limit, 50)));
+  },
+  async getUserBattles(userId: string, limit = 50) {
+    const db = getDb();
+    const profiles = await db.select({ playerId: playerProfiles.playerId })
+      .from(playerProfiles).where(eq(playerProfiles.userId, userId));
+    const playerIds = profiles.map((profile) => profile.playerId);
+    const conditions = [eq(battleSessions.userId, userId)];
+    if (playerIds.length > 0) conditions.push(inArray(battleSessions.playerId, playerIds) as any);
+    return db.select({
+      id: battleSessions.id,
+      stageId: battleSessions.stageId,
+      status: battleSessions.status,
+      resultCode: battleSessions.resultCode,
+      totalKills: battleSessions.totalKills,
+      rewardScrap: battleSessions.rewardScrap,
+      createdAt: battleSessions.createdAt,
+      result: battleResults.result,
+      scrapReward: battleResults.scrapReward,
+    }).from(battleSessions)
+      .leftJoin(battleResults, eq(battleResults.battleSessionId, battleSessions.id))
+      .where(or(...conditions))
+      .orderBy(desc(battleSessions.createdAt), desc(battleSessions.id))
+      .limit(Math.max(1, Math.min(limit, 50)));
+  },
   async createSanction(d: any) { return d; },
   async revokeSanction() {},
   async createGrant(d: any) {
