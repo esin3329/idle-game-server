@@ -34,3 +34,15 @@ data.json
 dist/
 data-*.json
 *.bak
+
+# Unity client and local MCP runtime
+.tools/
+unity/**/[Ll]ibrary/
+unity/**/[Tt]emp/
+unity/**/[Oo]bj/
+unity/**/[Ll]ogs/
+unity/**/[Uu]ser[Ss]ettings/
+unity/**/Builds/
+unity/**/*.csproj
+unity/**/*.sln
+unity/**/TestResults/
