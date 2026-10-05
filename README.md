@@ -1,782 +1,130 @@
 # Idle Game Server
 
-![CI](https://github.com/esin3329/idle-game-server/actions/workflows/ci.yml/badge.svg)
-![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)
-[![License](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+[![CI](https://github.com/esin3329/idle-game-server/actions/workflows/ci.yml/badge.svg)](https://github.com/esin3329/idle-game-server/actions/workflows/ci.yml)
+![Node.js](https://img.shields.io/badge/Node.js-20%2B-brightgreen)
 
-Hono + TypeScript + MySQL 기반 방치형(idle) 게임 서버 API
+Hono와 TypeScript로 만든 방치형 메카 게임 서버입니다. 인증, 재화, 스테이지, 전투 세션, 장비·연구·제작, 운영자 API를 구현하고 Node.js/MySQL 경로와 Cloudflare Workers/PostgreSQL 경로를 함께 관리합니다.
 
-## 기능
+- 저장소: [GitHub](https://github.com/esin3329/idle-game-server)
+- Unity 클라이언트: [unity/README.md](./unity/README.md)
+- 주요 운영 및 배포 문서: [docs/](./docs/)
 
-- ⚡ **전기 생산** — 오프라인 상태에서도 자동 생산 (최대 8시간 적립)
-- 🔼 **업그레이드** — 전기를 소모하여 초당 생산량 증가
-- ⚔️ **전투** — 랜덤 적과 전투, 승리 시 전기 보상
-- 🏆 **랭킹** — totalWealth 기준 실시간 순위
-- 🎁 **방치 보상** — 오프라인 시간에 비례한 보상 지급
-- 🔐 **JWT 인증** — 회원가입/로그인, Access/Refresh Token
-- 💰 **재화 지갑** — electricity, scrap 잔액 및 원장 추적
-- 🤖 **전투 시스템 (v2)** — 서버 권위 전투 세션, 4개 스테이지, 30개 강화 선택지, 단일 트랜잭션 보상
-- 🧩 **파츠 시스템** — 프레임3/무기6/코어3/모듈4, 인벤토리+장착+강화
-- 🔧 **메카 구성** — 프레임+무기+코어+모듈 프리셋 저장/전환
-- 🔬 **연구 트리** — 21개 연구 노드, 선행 조건, 방치 보상/전투력/경제 효과
-- 📐 **설계도+제작** — 16종 설계도 드롭, 스크랩 소비 파츠 제작, 제작 대기열
-- 👮 **운영자 관리** — user/operator/admin 3단계 권한, 계정 제재, 재화 지급
-- 📊 **관리자 대시보드** — React 웹 UI (사용자 검색·제재·지급·보안 이벤트·감사 로그)
+## 현재 상태
+
+**2026-10-06 기준 저장소와 문서에 기록된 상태입니다.**
+
+- PostgreSQL 저장소와 Cloudflare Worker 진입점을 구현했고, Cloudflare Worker 배포 및 원격 API 확인 기록이 있습니다.
+- 기존 MySQL 경로도 유지하고 있습니다. 원본 서버는 계속 운영 중이며, Unity API 주소 변경과 최종 데이터 동기화가 남아 있어 전체 운영 전환이 끝났다고 표현하지 않습니다.
+- Unity 클라이언트는 로그인 후 기본 기지 흐름과 스테이지·전투 세션 API를 연결했습니다. Editor에서 일부 흐름을 확인했지만 회원가입 전체 흐름, Android 기기 실행은 검증되지 않았습니다.
+- Unity 실제 전투와 전투 보상 수령은 아직 구현되지 않았습니다. 서버의 전투 API는 별도로 동작하지만 클라이언트와의 완성된 전투 루프는 아닙니다.
+
+자세한 전환 현황과 검증 범위는 [Cloudflare 배포 기록](./docs/CLOUDFLARE_DEPLOY.md)과 [Unity 클라이언트 문서](./unity/README.md)를 참고하세요.
+
+## 주요 기능
+
+- **인증** — JWT 액세스·리프레시 토큰, bcrypt 비밀번호 해시, 계정·세션 관리
+- **방치형 경제** — 전기 생산·수령, 생산 업그레이드, 전기·스크랩 잔액과 재화 원장
+- **전투 세션** — 스테이지 입장, 세션 상태, 진행 이벤트, 강화 선택, 종료 및 보상 API
+- **메카 성장** — 파츠 인벤토리·장착·강화, 구성 프리셋, 연구 트리, 설계도와 제작
+- **운영 도구** — 역할 기반 관리자 API와 React 관리자 페이지, 제재·재화 지급·보안 이벤트·감사 로그
+- **운영 엔드포인트** — health/ready, metrics, 구조화 로그, Cloudflare Worker의 정적 관리자 페이지 제공
+
+## 전투 검증 경계
+
+전투 세션은 서버가 생성하고 관리합니다. 진행 요청의 경과 시간·처치 수·코어 에너지·보스 정보와 강화 선택을 검증하며, 종료 요청에서는 세션에 누적된 값과 결과 보고를 대조하고 서버가 보상을 계산합니다.
+
+이 구현은 **서버 권위 전투 MVP**입니다. 현재 Unity 클라이언트는 실제 전투 시뮬레이션과 보상 수령까지 연결하지 않았고, 서버도 모든 전투 프레임을 재시뮬레이션하지 않습니다. 따라서 이를 완성된 치트 방지 전투 시뮬레이터로 설명하지 않습니다.
+
+~~~text
+Client
+  ├─ POST /battles/start
+  ├─ POST /battles/:sessionId/progress
+  ├─ POST /battles/:sessionId/upgrades/select
+  └─ POST /battles/:sessionId/finish
+                 ↓
+      session state validation
+                 ↓
+       reward calculation + storage
+~~~
+
+## 재화 정합성과 멱등성
+
+재화 잔액과 변동 내역을 지갑 테이블과 재화 원장에 함께 기록합니다. PostgreSQL 지갑 경로는 DB 트랜잭션 안에서 재요청 키를 확인하고, 동일 키 요청을 잠근 뒤 잔액 변경과 원장 기록을 처리합니다. MySQL 지갑 경로도 트랜잭션과 원장의 유일 키를 사용합니다.
+
+멱등성 동작은 저장소 구현에 따라 세부가 다를 수 있습니다. README에서는 이를 모든 API·모든 DB에 동일한 보장으로 일반화하지 않습니다. 재시도와 동시 요청에 관한 구현은 [PostgreSQL 지갑 저장소](./src/db/postgres-wallet.repository.ts)와 [MySQL 지갑 저장소](./src/db/mysql-wallet.repository.ts)에서 확인할 수 있습니다.
+
+## 구성과 저장소 경로
+
+| 경로 | 용도와 상태 |
+|---|---|
+| PostgreSQL | Cloudflare Worker 대상 저장소. <code>DB_DRIVER=postgres</code>와 <code>DATABASE_URL</code> 또는 Worker Hyperdrive 연결을 사용합니다. |
+| MySQL 8 | 기존 Node.js/Docker 경로 및 현재 CI 통합 작업에서 사용합니다. PostgreSQL과 기능·운영 절차가 완전히 같다고 가정하지 않습니다. |
+| JSON | 로컬 개발·테스트용 저장소입니다. 운영 데이터 저장소로 사용하지 않습니다. |
+
+Worker는 Hono API와 <code>admin/dist</code> 정적 파일을 함께 제공합니다. PostgreSQL 스키마는 [src/db/postgres-schema.ts](./src/db/postgres-schema.ts), 초기 마이그레이션은 [supabase/migrations/](./supabase/migrations/)에 있습니다. MySQL 마이그레이션과 Docker 설정은 별도로 남아 있습니다.
+
+## 로컬 실행
+
+### Cloudflare Worker + PostgreSQL 개발
+
+Node.js 20 이상이 필요합니다.
+
+~~~bash
+npm ci
+npm ci --prefix admin
+~~~
+
+<code>.dev.vars.example</code>을 참고해 로컬 <code>.dev.vars</code>를 만들고 PostgreSQL 연결 주소와 개발용 JWT 비밀값을 설정합니다. 실제 비밀값은 저장소에 커밋하지 마세요.
+
+~~~bash
+npm run db:migrate:postgres
+npm run dev:cloudflare
+~~~
+
+<code>db:migrate:postgres</code>는 <code>DATABASE_URL</code>이 가리키는 PostgreSQL 데이터베이스에 마이그레이션을 적용합니다. Cloudflare 원격 DB를 대상으로 실행할 때는 [배포 문서](./docs/CLOUDFLARE_DEPLOY.md)의 절차와 대상을 먼저 확인하세요.
+
+### 기존 MySQL 경로
+
+~~~bash
+docker compose up -d mysql
+npm run db:migrate
+DB_DRIVER=mysql npm run dev
+~~~
+
+필요한 MySQL 및 JWT 환경 변수는 [.env.example](./.env.example)을 참고하세요. 백업·복구 스크립트와 현재 운영 가이드는 MySQL 중심입니다.
+
+## 관리자 페이지
+
+<code>admin/</code>은 React, Vite, Tailwind CSS로 만든 운영자 UI입니다. 사용자 검색·상세 조회, 제재, 재화 지급, 보안 이벤트 검토, 감사 로그 확인 기능을 제공합니다. 권한은 <code>user</code>, <code>operator</code>, <code>admin</code>으로 구분합니다.
+
+Cloudflare 개발 실행 명령은 관리자 UI를 빌드한 뒤 Worker와 함께 제공합니다. 별도 UI 개발은 <code>admin/</code>의 안내와 [관리자 UI 설계 문서](./docs/admin-ui-design.md)를 참고하세요.
+
+## 테스트와 CI
+
+~~~bash
+npm run type-check
+npm test
+npm run build
+npm run test:postgres
+~~~
+
+GitHub Actions의 현재 workflow는 Node.js 20·22에서 타입 검사, Vitest, 빌드, npm audit를 실행합니다. 별도 통합 작업은 MySQL 8을 띄워 마이그레이션·전투 시드·테스트를 실행합니다. <code>npm run test:postgres</code>는 별도 PostgreSQL 통합 확인 스크립트이며 현재 GitHub Actions workflow 단계에는 포함되어 있지 않습니다. 저장소에는 아직 미완료 TODO 테스트도 있으므로 테스트 수나 DB 통합 범위를 완성된 커버리지로 해석하지 않습니다.
+
+## 문서
+
+- [Cloudflare + PostgreSQL 배포 및 전환 기록](./docs/CLOUDFLARE_DEPLOY.md)
+- [운영 가이드](./docs/operations.md) — 현재 MySQL 운영 절차 중심
+- [Unity 클라이언트와 검증 상태](./unity/README.md)
+- [관리자 UI 설계](./docs/admin-ui-design.md)
+- [문제 대응 runbook](./docs/runbooks/)
 
 ## 기술 스택
 
-| 구분 | 기술 |
-|------|------|
-| Runtime | Node.js 20+ |
-| Framework | Hono |
-| Language | TypeScript (strict) |
-| Validation | Zod |
-| Logging | Pino |
-| Database | MySQL 8 + Drizzle ORM |
-| Auth | JWT (jsonwebtoken + bcryptjs) |
-| Test | Vitest |
-| CI | GitHub Actions |
-| Container | Docker Compose |
-
-### 운영자 관리
-
-```bash
-# 최초 운영자 생성 (CLI)
-OPERATOR_EMAIL=admin@example.com OPERATOR_PASSWORD=secure123 npm run db:seed-operator
-
-# 역할: user, operator, admin
-# - user: 일반 API만 접근
-# - operator: /admin API 접근 (고액 지급 제한)
-# - admin: 모든 권한 (고액 지급 가능)
-```
-
-### 권한 목록
-
-| 권한 | operator | admin |
-|---|---|---|
-| 사용자 조회·상세 | ✅ | ✅ |
-| 재화·아이템 지급 (<10,000) | ✅ | ✅ |
-| 재화·아이템 지급 (≥10,000) | ❌ | ✅ |
-| 제재 생성·철회 | ✅ | ✅ |
-| 보안 이벤트 조회·검토 | ✅ | ✅ |
-| 감사 로그 조회 | ✅ | ✅ |
-
-### 감사 로그
-
-```bash
-# 운영 감사 로그 조회
-curl -H "Authorization: Bearer <operatorToken>" \
-  "http://localhost:3000/admin/audit-logs?action=user_suspended&limit=50"
-
-# 보안 이벤트 조회
-curl -H "Authorization: Bearer <operatorToken>" \
-  "http://localhost:3000/admin/security-events?eventType=battle_rejected"
-
-# 사용자별 원장
-curl -H "Authorization: Bearer <operatorToken>" \
-  "http://localhost:3000/admin/users/:id/wallet-ledger?currency=scrap"
-```
-
-- 실시간 프레임 단위 서버 시뮬레이션
-- 파츠 강화·랜덤 옵션·제련
-- PvP, 멀티플레이
-- 매치메이킹
-- Redis 분산 Rate Limit (단일 인스턴스 in-memory로 충분)
-- AI 기반 부정행위 탐지 (통계적 상한 + audit 로그로 충분)
-- 다중 API 서버 / 수평 확장 (단일 인스턴스 기준)
-- Unity 클라이언트 (서버 API만 구현)
-- WebSocket 실시간 동기화
-- 길드·친구·우편·출석·업적·시즌 (소셜/라이브 서비스)
-- 결제·상점·재화 구매
-
-## 운영
-
-백업, 복구, 모니터링, 로깅, 문제 해결 등 전체 운영 가이드는 **[docs/operations.md](./docs/operations.md)** 를 참고하세요.
-
-### 빠른 참조
-
-```bash
-# MySQL 백업
-./scripts/backup.sh
-
-# MySQL 복구 (dry-run 먼저)
-./scripts/recover.sh --dry-run latest
-./scripts/recover.sh latest
-
-# 헬스 체크
-curl http://localhost:3000/health
-curl http://localhost:3000/ready
-
-# 메트릭
-curl http://localhost:3000/metrics
-
-# Graceful shutdown
-docker compose stop app
-```
-
-## 관리자 대시보드
-
-웹 기반 관리자 UI (`admin/`) — React + Vite + Tailwind CSS로 구현되었습니다.
-
-| 화면 | 기능 |
-|------|------|
-| **대시보드** | 총 사용자, 최근 지급·감사 로그 요약 |
-| **사용자 검색** | 이메일/닉네임 검색, 상태 필터, 페이지네이션 |
-| **사용자 상세** | 재화 원장·제재·아이템·전투 기록 (4개 탭) |
-| **계정 제재** | 정지/전투제한/보상제한 추가, 만료일 설정, 철회 |
-| **재화 지급** | electricity/scrap 지급, 지급 내역 조회 |
-| **보안 이벤트** | 이벤트 목록 + 심각도 필터 + 검토 처리 |
-| **감사 로그** | 운영자 행위 로그 조회 + 액션 필터 |
-
-```bash
-cd admin
-npm install
-npm run dev          # http://localhost:5174 (API 프록시 → :3000)
-```
-
-상세 문서: **[docs/admin-ui-design.md](./docs/admin-ui-design.md)**
-
-## 향후 로드맵
-
-- PvP · 멀티플레이
-- WebSocket 실시간 동기화
-- Unity 클라이언트 연동
-- 길드 · 친구 · 우편 · 출석 · 업적 · 시즌
-- 결제 · 상점 · 재화 구매
-- Prometheus · Grafana 연동
-
-## 프로젝트 구조
-
-```
-src/
-├── index.ts              # 서버 진입점 (미들웨어, graceful shutdown)
-├── routes.ts             # 게임 API 라우트
-├── auth.routes.ts        # 인증 API 라우트
-├── config.ts             # 기본 설정 상수
-├── types.ts              # 저장소 모델 (Player)
-├── dto.ts                # 공개 응답 DTO + 변환 함수
-├── store.ts              # JSON Player 저장소 (개발/폴백)
-├── store-auth.ts         # JSON Auth 저장소 (회원가입/로그인/세션)
-├── store-wallet.ts       # JSON Wallet 저장소 (잔액/원장)
-├── store-parts.ts        # JSON 파츠 저장소
-├── store-research.ts     # JSON 연구 저장소
-├── store-crafting.ts     # JSON 제작 저장소
-├── store-item-ledger.ts  # JSON 아이템 원장
-├── provider.ts           # 저장소 provider (MySQL 우선, JSON 폴백)
-├── repository.ts         # PlayerRepository 인터페이스
-├── parts.routes.ts       # 파츠 인벤토리/장착/강화 API
-├── mecha.routes.ts       # 메카 구성 프리셋 API
-├── research.routes.ts    # 연구 트리 API
-├── crafting.routes.ts    # 설계도/제작 API
-├── data/
-│   ├── parts.ts          # 파츠 밸런스 데이터 (16종)
-│   ├── research.ts       # 연구 노드 데이터 (21개)
-│   ├── crafting.ts       # 설계도 데이터 (16종)
-│   ├── stages.ts         # 스테이지 + 보스 데이터 (4스테이지, 8보스)
-│   └── upgrades.ts       # 전투 강화 선택지 (30개, 13개 진화 그룹)
-├── shared/
-│   ├── errors.ts         # 커스텀 에러 클래스
-│   ├── validator.ts      # Zod 검증 + UUID 미들웨어
-│   ├── auth.ts           # API 키 인증 (레거시)
-│   ├── auth-service.ts   # JWT 인증 서비스
-│   ├── jwt-auth.ts       # JWT 미들웨어
-│   ├── wallet.ts         # 재화 잔액/원장 서비스
-│   ├── idempotency.ts    # 멱등성 키 미들웨어
-│   ├── rate-limit.ts     # Rate limiting
-│   ├── game-math.ts      # 게임 밸런스 상수 + 생산량 계산
-│   ├── logger.ts         # Pino 로거
-│   └── validate-secrets.ts # Production 비밀값 검증
-├── db/
-│   ├── schema.ts         # Drizzle MySQL 스키마 (6 테이블)
-│   ├── connection.ts     # MySQL 연결 풀
-│   ├── migrate.ts        # 마이그레이션 실행
-│   ├── seed.ts           # 개발용 시드 데이터
-│   ├── import-json.ts    # JSON → MySQL import
-│   ├── mysql.repository.ts   # MySQL PlayerRepository 구현체
-│   ├── mysql-auth.repository.ts    # MySQL AuthRepository 구현체
-│   ├── mysql-wallet.repository.ts   # MySQL WalletRepository 구현체
-│   ├── mysql-parts.repository.ts    # MySQL 파츠/메카구성 저장소
-│   ├── mysql-research.repository.ts # MySQL 연구 저장소
-│   ├── mysql-crafting.repository.ts # MySQL 제작 저장소
-│   └── migrations/         # drizzle-kit 생성 SQL (0000~0002)
-└── __tests__/
-    ├── store.test.ts     # 저장소 + 신뢰성 테스트
-    ├── routes.test.ts    # API 테스트
-    ├── idempotency.test.ts # 멱등성 테스트
-    └── integration.test.ts # MySQL 통합 테스트 (todo)
-```
-
-## 저장소 선택 (provider 패턴)
-
-`DB_DRIVER` 환경변수로 저장소를 선택합니다. MySQL 연결 실패 시 자동으로 JSON으로 폴백됩니다.
-
-| DB_DRIVER | 저장소 | 사용처 |
-|-----------|--------|--------|
-| `json` | JSON 파일 (store.ts + store-auth.ts + store-wallet.ts) | 개발/테스트, MySQL 불필요 |
-| `mysql` (기본) | MySQL + Drizzle ORM | 프로덕션, Docker Compose |
-| 미설정 | MySQL 시도 → 실패 시 JSON 자동 폴백 | 개발 편의 |
-
-### 데이터 파일
-
-| 파일 | 저장 내용 |
-|------|----------|
-| `data.json` | 플레이어 (Player) |
-| `data-users.json` | 사용자 계정 (User) |
-| `data-sessions.json` | Refresh 세션 |
-| `data-sanctions.json` | 계정 제재 |
-| `data-profiles.json` | 플레이어 프로필 |
-| `data-wallets.json` | 재화 지갑 잔액 |
-| `data-ledger.json` | 재화 원장 (currency_ledger) |
-| `data-parts.json` | 파츠 인벤토리 |
-| `data-equip.json` | 장착 상태 |
-| `data-configs.json` | 메카 구성 프리셋 |
-| `data-research.json` | 연구 진행도 |
-| `data-blueprints.json` | 보유 설계도 |
-| `data-crafts.json` | 제작 대기열 |
-| `data-item-ledger.json` | 아이템 원장 |
-| `data-battles.json` | 전투 세션 |
-| `data-battle-events.json` | 전투 이벤트 |
-| `data-battle-results.json` | 전투 결과 |
-
-> ⚠️ JSON 파일은 개발/테스트 전용입니다. 프로덕션에서는 MySQL을 사용하세요.
-
-## 실행
-
-```bash
-npm install
-cp .env.example .env     # 환경변수 설정
-
-# JSON 파일 저장소 (MySQL 불필요, 개발/테스트)
-DB_DRIVER=json npm run dev
-
-# MySQL + Docker Compose
-docker-compose up -d mysql
-npm run db:migrate
-npm run dev
-```
-
-## 환경 변수
-
-| 변수 | 기본값 | 설명 |
-|------|------|------|
-| `PORT` | `3000` | 서버 포트 |
-| `NODE_ENV` | `development` | 실행 환경 |
-| `LOG_LEVEL` | `info` | 로그 레벨 |
-| `CORS_ORIGIN` | `http://localhost:5173` | CORS 오리진 |
-| **MySQL** | | |
-| `DB_HOST` | `mysql` | MySQL 호스트 |
-| `DB_PORT` | `3306` | MySQL 포트 |
-| `DB_USER` | `gameuser` | MySQL 사용자 |
-| `DB_PASSWORD` | — | MySQL 비밀번호 |
-| `DB_NAME` | `idle_game` | 데이터베이스 이름 |
-| `DB_DRIVER` | `mysql` | 저장소 드라이버 (`json`=JSON 파일, `mysql`=MySQL).<br>MySQL 미연결 시 자동 JSON 폴백 |
-| `MYSQL_ROOT_PASSWORD` | — | MySQL root 비밀번호 |
-| **JWT** | | |
-| `JWT_ACCESS_SECRET` | — | Access Token 서명 비밀키 |
-| `JWT_REFRESH_SECRET` | — | Refresh Token 서명 비밀키 |
-| `JWT_ACCESS_EXPIRES_IN` | `15m` | Access Token 만료 시간 |
-| `JWT_REFRESH_EXPIRES_IN` | `7d` | Refresh Token 만료 시간 |
-
-## API 문서
-
-### 헬스 체크
-
-```bash
-GET /health   → {"status":"ok"}
-GET /ready    → {"status":"ready","uptime":3600,"checks":{"database":"connected"}}
-```
-
-### 인증
-
-#### 회원가입 (Idempotency-Key 필요)
-```bash
-POST /auth/register
-Idempotency-Key: register-550e8400-e29b-41d4-a716-446655440000
-Content-Type: application/json
-{"email":"user@example.com","password":"password123!","nickname":"플레이어"}
-→ 201 {userId, playerId, tokens: {accessToken, refreshToken}}
-```
-
-#### 로그인
-```bash
-POST /auth/login
-{"email":"user@example.com","password":"password123!"}
-→ 200 {userId, playerId, tokens: {accessToken, refreshToken}}
-```
-
-#### 토큰 갱신
-```bash
-POST /auth/refresh
-{"refreshToken":"..."}
-→ 200 {accessToken, refreshToken}
-```
-
-#### 로그아웃
-```bash
-POST /auth/logout
-{"refreshToken":"..."}
-→ 200 {"status":"ok"}
-```
-
-### 지갑 (JWT 인증 필요)
-
-```bash
-GET /wallet          → {playerId, electricity, electricityPerSecond}
-GET /wallet/ledger   → [{id, amount, balanceAfter, source, ...}]
-
-# 잔액/원장은 모든 재화 변경(claim/upgrade/battle) 시
-# wallet_balances + currency_ledger에 자동 기록됨
-```
-
-### 파츠 시스템
-
-```bash
-# 카탈로그 (인증 불필요)
-GET /parts                      → {frames[], weapons[], cores[], modules[]}
-GET /parts/:code                → {type, code, name, stats, ...}
-
-# 인벤토리/장착 (JWT 필요)
-GET  /parts/my                  → {inventory[], equipped}
-POST /parts/grant               # 파츠 지급
-POST /parts/equip  {partCode}   # 파츠 장착
-POST /parts/upgrade {partCode}  # 파츠 강화
-
-# 파츠 상세 조회 (JWT 필요)
-GET  /mecha/parts               # 보유 파츠 (?type=weapon 필터)
-```
-
-### 메카 구성 (JWT 필요)
-
-```bash
-GET    /mecha/configs                # 구성 목록 + 활성 구성
-POST   /mecha/configs {name,frame,weapon,core,module}  # 생성
-PUT    /mecha/configs/:id            # 수정
-POST   /mecha/configs/:id/activate   # 활성화 (프리셋 전환)
-DELETE /mecha/configs/:id            # 삭제
-```
-
-### 연구 (JWT 필요)
-
-```bash
-GET  /research                  # 연구 트리 전체 (카탈로그)
-GET  /research/my               # 내 연구 현황 + 선행 조건 + canResearch
-POST /research/:code/levelup    # 연구 레벨업 (비용 차감 + 원장 기록)
-POST /research/reset            # 연구 초기화
-```
-
-### 설계도 & 제작 (JWT 필요)
-
-```bash
-GET  /crafting/blueprints          # 설계도 카탈로그
-GET  /crafting/my-blueprints       # 내 보유 설계도
-POST /crafting/drop                # 랜덤 설계도 드롭
-GET  /crafting/queue               # 제작 대기열 + 완료 가능 수
-POST /crafting/:code/start         # 제작 시작 (설계도 소비)
-POST /crafting/:id/complete        # 제작 완료 (파츠 지급)
-```
-
-### 플레이어
-
-```bash
-POST /api/players           # 생성 (닉네임 2~20자)
-GET  /api/players/:id       # 조회
-GET  /api/players           # 전체 목록
-```
-
-### 전기 생산 (JWT 인증 필요)
-
-```bash
-# Authorization: Bearer <accessToken>
-curl -X POST http://localhost:3000/api/players/:id/claim \
-  -H "Authorization: Bearer <accessToken>" \
-  -H "Idempotency-Key: claim-$(uuidgen)"
-
-POST /api/players/:id/claim   # 수집
-GET  /api/players/:id/claim   # 대기량 조회
-GET  /api/players/:id/idle-rewards  # 방치 보상
-```
-
-### 업그레이드 (JWT 인증 + Idempotency-Key 필요)
-
-```bash
-GET  /api/players/:id/upgrade                 # 비용 조회
-POST /api/players/:id/upgrade                 # 구매
-Idempotency-Key: upgrade-550e8400-e29b-41d4-a716-446655440000
-```
-
-### 전투 (v2) (JWT 인증 + Idempotency-Key 필요)
-
-```bash
-POST /battles/start                       # 세션 생성 (출격 조건 검증)
-Idempotency-Key: start-...
-  Body: { "stageCode": "stage_01_ruins" }
-  → 출격 조건: 이전 스테이지 클리어 + 권장 전투력 + 장비 장착
-
-GET  /battles/:sessionId                  # 세션 상태 + recovery
-
-POST /battles/:sessionId/progress         # 진행 이벤트 (kills/coreEnergy/boss 검증)
-Idempotency-Key: progress-...
-  Body: { "sequence": 1, "killsDelta": 5, "coreEnergyDelta": 25, "bossId": "boss_0" }
-
-POST /battles/:sessionId/upgrades/select  # 강화 3지선다 (서버 생성·검증)
-Idempotency-Key: select-...
-  Body: { "selectedUpgradeCode": "machine_gun_1" }
-  → 서버가 3개 선택지 생성 → 클라이언트 선택 → 서버 검증
-
-POST /battles/:sessionId/finish           # 전투 종료 (6단계 서버 검증)
-Idempotency-Key: finish-...
-  Body: { "totalKills": 245, "totalCoreEnergy": 480, "bossDefeated": ["boss_0"], "elapsedSeconds": 292 }
-  → 검증: 시간/처치/core/보스/업그레이드/중복 → scrap+설계도 보상
-
-POST /battles/:sessionId/abandon          # 포기 (보상 없음)
-Idempotency-Key: abandon-...
-
-GET  /stages                              # 스테이지 목록 + 보스 + 진행도 + 해금 상태
-GET  /stages/:id                          # 스테이지 상세 + 보스 정보
-GET  /stages/:id/bosses                   # 스테이지 보스 목록
-GET  /stages/:id/requirements             # 출격 조건 (선행스테이지/권장전투력/장비)
-```
-
-### 강화 카탈로그
-
-```bash
-GET /upgrades                        # 30개 강화 전체 + 13개 진화 그룹
-GET /upgrades/:id                    # 단일 강화 상세 (스탯 효과 포함)
-GET /upgrades/group/:groupId         # 그룹별 강화 목록
-```
-
-```
-
-## 전투 시스템 (v2)
-
-### 서버·클라이언트 책임 경계
-
-| 서버 (권위) | 클라이언트 |
+| 영역 | 기술 |
 |---|---|
-| 세션 생성, 스탯 스냅샷, 콘텐츠 버전 | 스테이지 선택 요청 |
-| 이벤트 검증 (처치/core/보스 상한) | 전투 시뮬레이션, 이동/대시/궁극기 |
-| 강화 선택지 생성·저장·검증 | 3지선다 선택 |
-| 보상 계산, 단일 트랜잭션 지급 | 결과 확인 |
-| 위반 시 audit 로그 + 400/409 | — |
-
-클라이언트는 보상량, 결과 유형, 강화 선택지를 직접 결정할 수 없다.
-
-### 세션 생명주기
-
-```mermaid
-stateDiagram-v2
-    [*] --> active: POST /start
-    active --> active: POST /progress
-    active --> active: POST /upgrades/select
-    active --> completing: POST /finish (CAS)
-    completing --> completed: 보상 지급 성공
-    completing --> active: ROLLBACK (실패)
-    active --> abandoned: POST /abandon
-    active --> auto_abandoned: 만료 + POST /start
-    completed --> [*]
-    abandoned --> [*]
-    auto_abandoned --> [*]
-```
-
-### 결과 확정 트랜잭션
-
-```mermaid
-flowchart TD
-    A[POST /finish] --> B{CAS UPDATE<br/>status=active?}
-    B -->|실패| C[409 SESSION_NOT_ACTIVE]
-    B -->|성공| D[검증: 시간/처치/core/보스]
-    D -->|실패| E[400 + audit 로그]
-    D -->|통과| F[battleResults INSERT]
-    F --> G[walletBalances UPDATE]
-    G --> H[currencyLedger INSERT]
-    H --> I[itemLedger INSERT]
-    I --> J[playerRecords UPSERT]
-    J --> K[다음 스테이지 해금]
-    K --> L[COMMIT]
-    L --> M[200 reward]
-```
-
-### 이벤트 처리
-
-- progress 이벤트는 2~5초 간격 배치 전송
-- 각 이벤트는 `sequence` (1부터 단조증가) 필수
-- DB UNIQUE(battleSessionId, sequence)로 중복 차단
-- 프레임 단위 이벤트를 저장하지 않는다
-
-### core_energy와 레벨업
-
-- 각 스테이지의 `corePerKill` × kills만큼 core_energy 획득
-- `corePerLevel` 누적 시 레벨업 → 서버가 3개 강화 선택지 생성
-- 선택지는 세션 시드 기반 결정론적 생성, DB에 저장
-- 미선택 강화가 있으면 progress/finish 차단
-
-### 강화 선택지
-
-- 30개 강화, 13개 진화 그룹, 3티어 진화 (machine_gun_1 → _2 → _3)
-- 5개 카테고리: weapon, drone, armor, ultimate, utility
-- 가중치 랜덤 (weight), prerequisites, maxTier, enabled 필터
-- 같은 그룹 중복 제시 안 함, 서버가 제공한 선택지만 선택 가능
-
-### 보상
-
-| 유형 | 내용 |
-|---|---|
-| scrap | kills × scrapPerKill + stageRewards bonus |
-| blueprint | dropRate 확률, 최초 클리어 확정 |
-| part | MVP: null (파츠 시스템 구현 시) |
-| unlock | 최초 클리어 시 다음 스테이지 해금 |
-| record | 최고 처치/최단 시간 갱신 |
-
-모든 보상은 단일 DB 트랜잭션으로 처리된다.
-
-### 멱등성과 동시성
-
-| 메커니즘 | 적용 대상 |
-|---|---|
-| Idempotency-Key 헤더 | start, upgrades/select, finish, abandon |
-| DB UNIQUE(battleSessionId, sequence) | progress 이벤트 |
-| CAS UPDATE (WHERE status='active') | finish (단 하나만 성공) |
-| battleResults.battleSessionId UNIQUE | 이중 확정 방지 |
-| currencyLedger.idempotencyKey UNIQUE | 이중 입금 방지 |
-
-동시 finish 요청 시 CAS에 성공한 하나만 보상을 지급하고,
-다른 요청은 409 SESSION_NOT_ACTIVE로 거부된다.
-다른 사용자의 세션은 독립적이며 불필요하게 직렬화되지 않는다.
-
-### 세션 만료와 재접속
-
-- `expiresAt = startTime + durationSeconds + 120s` (BATTLE_POLICY)
-- 만료된 세션은 progress/upgrade/finish 거부 (400 SESSION_EXPIRED)
-- POST /start 시 만료 세션 자동 abandon 후 새 세션 생성
-- GET /battles/:sessionId로 클라이언트 재접속 시 상태 복원 가능
-- 별도 Worker 없이 요청 시점에 만료 판정
-
-### MVP 부정행위 방지 범위
-
-**보호됨 (서버 권위)**
-- 세션 생성, 스탯 스냅샷, 콘텐츠 버전
-- core_energy/kills 상한 검증 (스테이지 정의 + 메카 스탯 기반)
-- 보스 처치 타이밍·순서 검증
-- 강화 선택지 생성·저장·검증 (클라이언트 위조 불가)
-- 최종 보상량 계산 + 단일 트랜잭션 지급
-
-**경계 밖 (클라이언트 책임)**
-- 실시간 전투 시뮬레이션 (이동, 충돌, 프레임별 데미지)
-- 개별 적 처치 순서와 정확한 타이밍
-- 플레이어 컨트롤 (대시, 궁극기)
-
-**Unity 연동 예정**
-- 클라이언트가 progress로 2~5초 간격 누적 수치 보고
-- 서버는 통계적 상한 + sessionSeed 기반 재현 검증으로 확장 가능
-
-### 멱등성
-
-변경 요청(POST)에 `Idempotency-Key` 헤더를 사용하면 중복 처리를 방지합니다:
-```bash
-POST /api/players/:id/claim
-Idempotency-Key: claim-550e8400-e29b-41d4-a716-446655440000
-```
-
-### 에러 응답 형식
-
-```json
-{ "error": "사람이 읽는 메시지", "code": "ERROR_CODE" }
-```
-
-| Status | Code | 설명 |
-|:---:|------|------|
-| 400 | `BAD_REQUEST` | 잘못된 입력 |
-| 400 | `INVALID_JSON` | JSON 파싱 실패 |
-| 400 | `INSUFFICIENT_RESOURCE` | 전기 부족 |
-| 400 | `MISSING_IDEMPOTENCY_KEY` | 멱등성 키(Idempotency-Key) 헤더 없음 |
-| 401 | `UNAUTHORIZED` | 인증 필요 |
-| 401 | `INVALID_TOKEN` | 유효하지 않은 토큰 |
-| 401 | `TOKEN_EXPIRED` | 만료된 토큰 |
-| 401 | `INVALID_CREDENTIALS` | 이메일/비밀번호 불일치 |
-| 403 | `FORBIDDEN` | 권한 없음 |
-| 400 | `IDEMPOTENCY_KEY_TOO_LONG` | 멱등성 키 64자 초과 |
-| 403 | `ACCOUNT_DISABLED` | 비활성화된 계정 |
-| 403 | `ACCOUNT_SUSPENDED` | 제재된 계정 |
-| 404 | `NOT_FOUND` | 리소스 없음 |
-| 404 | `ROUTE_NOT_FOUND` | 정의되지 않은 경로 |
-| 404 | `WALLET_NOT_FOUND` | 지갑 없음 |
-| 409 | `NICKNAME_CONFLICT` | 닉네임 중복 |
-| 409 | `DUPLICATE_ACCOUNT` | 이메일/닉네임 중복 |
-| 400 | `STAGE_LOCKED` | 스테이지 해금 안 됨 |
-| 400 | `TIME_OUT_OF_RANGE` | 전투 경과 시간 이상 |
-| 400 | `FINAL_KILLS_MISMATCH` | 최종 처치 수 불일치 |
-| 400 | `CORE_ENERGY_MISMATCH` | Core Energy 불일치 |
-| 400 | `BOSS_MISMATCH` | 보스 처치 정보 불일치 |
-| 400 | `PENDING_UPGRADES` | 미선택 강화 존재 |
-| 400 | `CHOICES_GENERATED` | 강화 선택지 생성됨 (재요청) |
-| 400 | `INVALID_CHOICE` | 유효하지 않은 강화 선택 |
-| 409 | `ALREADY_FINISHED` | 이미 종료된 전투 |
-| 409 | `SESSION_NOT_ACTIVE` | 세션이 활성 상태 아님 |
-| 429 | `RATE_LIMITED` | 요청 제한 초과 |
-| 500 | `INTERNAL_ERROR` | 서버 내부 오류 |
-
-## 데이터베이스
-
-### 스키마 (32개 테이블)
-
-| 카테고리 | 테이블 | 수 |
-|------|------|:---:|
-| 계정·플레이어 | `users`, `refresh_sessions`, `players`, `player_profiles`, `player_records` | 5 |
-| 재화 | `wallet_balances`, `currency_ledger` | 2 |
-| 전투 | `stages`, `stage_bosses`, `stage_rewards`, `mecha_stats`, `battle_sessions`, `battle_events`, `battle_upgrade_offers`, `battle_results`, `player_stage_progress` | 9 |
-| 파츠·메카 | `parts_inventory`, `equip_slots`, `mecha_configs` | 3 |
-| 연구·제작 | `player_research`, `player_blueprints`, `crafting_queue` | 3 |
-| 아이템 | `item_ledger` | 1 |
-| 운영·감사 | `account_sanctions`, `operator_grants`, `operator_audit_logs`, `security_events`, `operator_accounts`, `operator_roles`, `operator_permissions`, `operator_role_permissions`, `operator_account_roles` | 9 |
-
-### 재화 트랜잭션 설계
-
-모든 재화 변동은 `adjustBalance()` 단일 진입점을 통해 처리:
-
-```
-BEGIN TRANSACTION
-  1. idempotencyKey SELECT → 중복 확인
-  2. wallet_balances SELECT ... FOR UPDATE → 행 잠금
-  3. balance < 0 검증 → 실패 시 400
-  4. wallet_balances UPDATE → 원자적 증감
-  5. currency_ledger INSERT → 감사 기록
-COMMIT
-```
-
-- `currency_ledger` 는 append-only, 수정/삭제 불가
-- `idempotency_key` UNIQUE 제약으로 2중 중복 방지
-- 같은 키 + 다른 payload → `request_hash` 비교 후 409
-
-### 멱등성
-
-클라이언트가 `Idempotency-Key` 헤더를 전송하면 동일 요청이 두 번 처리되지 않음:
-
-| 상황 | 결과 |
-|------|------|
-| 새 요청 | 정상 처리, ledger 기록 |
-| 동일 키 + 동일 payload 재요청 | `{ success: false }` + 원본 balanceAfter |
-| 동일 키 + 다른 payload | 409 충돌 |
-
-### ERD
-
-```mermaid
-erDiagram
-    users ||--o{ refresh_sessions : "1:N"
-    users ||--o{ player_profiles : "1:N"
-    players ||--|| wallet_balances : "1:1"
-    players ||--o{ currency_ledger : "1:N"
-    players ||--|| player_profiles : "1:1"
-
-    users {
-        varchar id PK
-        varchar email UK
-        varchar nickname UK
-        varchar password_hash
-        varchar status
-    }
-    refresh_sessions {
-        varchar id PK
-        varchar user_id
-        varchar token_hash
-        datetime expires_at
-        datetime revoked_at
-    }
-    players {
-        varchar id PK
-        varchar nickname
-        varchar api_key
-        int electricity
-        int electricity_per_second
-    }
-    wallet_balances {
-        varchar id PK
-        varchar player_id UK
-        varchar user_id
-        varchar currency
-        int electricity
-        int scrap
-        int balance
-    }
-    currency_ledger {
-        varchar id PK
-        varchar player_id
-        varchar user_id
-        varchar currency
-        int amount
-        int balance_after
-        varchar source
-        varchar idempotency_key UK
-    }
-    player_profiles {
-        varchar id PK
-        varchar player_id UK
-        varchar user_id
-        varchar nickname
-        int highest_stage
-    }
-```
-
-### 마이그레이션
-
-```bash
-npm run db:generate     # schema.ts → SQL 생성 (MySQL 필요)
-npm run db:migrate      # 마이그레이션 실행
-npm run db:seed         # 시드 데이터 (20명)
-npm run db:battle-seed  # 전투 콘텐츠 시드
-npm run db:import-json  # 기존 data.json → MySQL import (중복 무시)
-```
-
-> ⚠️ `db:generate`는 MySQL 연결이 필요합니다. 생성된 SQL을 커밋하기 전에 반드시 리뷰하세요.
-
-## GameOps AI 분석 (GameSpring 포트폴리오 선행 기능)
-
-사용자 상세 화면에서 보상 누락, 중복 지급 의심, 전투 결과 거절을 선택해 AI 분석을 요청할 수 있습니다. 서버는 권한이 있는 범위에서만 지갑·원장·전투·보안 데이터를 조회하고 운영 문서를 검색합니다. 결과에는 확인된 사실, 가설, 다음 확인 항목과 답변 초안이 포함됩니다. 이 기능의 AI 도구는 읽기 전용입니다.
-
-### 모델 설정
-
-서버 `.env` 파일에 Gemini 또는 Hugging Face Inference Providers 설정을 추가합니다. 키는 React 화면으로 전달되지 않습니다.
-
-```env
-GEMINI_API_KEY=...
-GEMINI_MODEL=gemini-3.8-flash
-
-# Hugging Face도 함께 비교할 때 설정
-HF_TOKEN=...
-HF_MODEL=openai/gpt-oss-120b
-```
-
-Gemini 기본 모델은 공식 OpenAI 호환 API 문서의 예시를 사용합니다. Hugging Face 모델은 Inference Providers에서 사용할 수 있고 도구 호출을 지원하는 ID를 설정해야 합니다. 모델별 지원 범위는 [Gemini API](https://ai.google.dev/gemini-api/docs/openai)와 [Hugging Face Chat Completion](https://huggingface.co/docs/inference-providers/en/tasks/chat-completion) 문서에서 확인합니다. 모델 API 호출에는 제공자별 사용량 또는 요금이 발생할 수 있습니다.
-
-MySQL 8에 접속 가능한 환경에서 마이그레이션을 적용한 뒤 서버와 관리자 웹을 실행합니다. `ai_runs`, `ai_tool_calls` 테이블이 실행 상태·결과·도구 호출 감사 기록을 보존합니다.
-
-```bash
-DB_DRIVER=mysql npm run db:migrate
-npm run dev
-cd admin
-npm run dev
-```
-
-관리자 계정으로 로그인하고 사용자 상세의 **GameOps AI 분석**에서 제공자와 문의 유형을 선택합니다. 오픈웨이트 모델 분석이 필요한 계정은 `admin.wallets.read`, `admin.battles.read`, `admin.security.read` 권한에 따라 사용할 수 있는 조회 도구가 제한됩니다. 기본 권한을 갱신하려면 `npm run db:seed-operator`를 다시 실행합니다.
-
-분석 요청은 DB에 저장한 뒤 202 응답으로 접수하며, 화면은 run ID를 URL에 보관하고 완료될 때까지 상태를 조회합니다. worker는 2초 간격으로 대기 작업을 가져오고, 작업은 대기 최대 10분·실행 최대 65초로 제한합니다. 운영자별 동시 대기는 1건, 시간당 접수는 10건이며 MySQL 잠금과 유일 키로 여러 서버의 중복 실행을 막습니다. provider 호출이 있었을 수 있는 실패는 자동 재시도하지 않습니다. 다시 실행하면 새 run이 생성됩니다. 비용 추정은 하지 않으며 제공자가 돌려준 토큰 사용량만 저장합니다.
-
-이 큐 기능은 MySQL 저장소가 필요합니다. `DB_DRIVER=json`에서는 AI 큐 API가 `503 AI_QUEUE_REQUIRES_MYSQL`을 반환합니다. 실제 모델 키가 설정되지 않으면 AI 제공자 호출과 품질 평가는 실행할 수 없습니다. 실제 사용자 데이터 대신 합성 계정으로 시연합니다.
-
-배포 확인은 우선 Node 서버에 올려 MySQL 마이그레이션과 실제 모델 호출을 점검한 뒤 진행합니다. 최종 배포 대상은 Cloudflare입니다. 현재 `src/index.ts`의 Node 서버 시작과 프로세스 폴링 워커는 Cloudflare용 진입점이 아니므로, Cloudflare 배포 작업은 별도 워크트리·브랜치에서 Worker 진입점과 내구성 AI 작업 처리로 전환합니다. 계획은 Cloudflare Workers 정적 자산으로 관리자 SPA를 제공하고, MySQL은 Hyperdrive로 연결하며, 다단계 분석 실행은 Workflows에 맡기는 구조입니다. 비용이 발생할 수 있는 모델 단계에는 자동 재시도 정책을 명시적으로 설정합니다.
-
-Cloudflare Worker 배포 설정과 실제 배포 전후 확인 절차는 [docs/CLOUDFLARE_DEPLOY.md](docs/CLOUDFLARE_DEPLOY.md)를 참고하세요.
-
-참고 운영 절차는 `docs/runbooks/`에 있습니다. 이 도구는 보상 지급이나 제재를 실행하지 않으며, 답변 초안은 운영자가 검토한 뒤 사용합니다.
-
-## 테스트
-
-```bash
-npm test              # 유닛 테스트 (209개)
-npm run test:watch    # watch 모드
-npm run type-check    # 타입 검사
-
-# MySQL 통합 테스트
-docker-compose up -d mysql
-DB_DRIVER=mysql DB_NAME=idle_game_test npm run db:migrate
-DB_DRIVER=mysql DB_NAME=idle_game_test npm test -- --include
-```
+| API | Node.js, Hono, TypeScript, Zod |
+| 데이터베이스 | PostgreSQL, MySQL 8, Drizzle ORM |
+| 인증·로그 | JWT, bcryptjs, Pino |
+| 관리자 UI | React, Vite, Tailwind CSS |
+| 실행·배포 | Docker Compose, Cloudflare Workers, Hyperdrive |
+| 검증·CI | Vitest, GitHub Actions |
