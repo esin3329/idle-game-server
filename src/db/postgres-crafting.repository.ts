@@ -1,0 +1,112 @@
+/**
+ * PostgreSQL 기반 제작(Crafting) 저장소
+ */
+import { eq, and } from 'drizzle-orm';
+import { getDb } from './postgres-connection.js';
+import { playerBlueprints, craftingQueue, itemLedger, partsInventory } from './postgres-schema.js';
+import type { PlayerBlueprint, PartCrafting } from '../types.js';
+import type { CraftingRepository } from '../repository.js';
+import { getBlueprint, BLUEPRINTS } from '../data/crafting.js';
+
+function rowToBp(row: typeof playerBlueprints.$inferSelect): PlayerBlueprint {
+  return { id: row.id, playerId: row.playerId, blueprintCode: row.blueprintCode, acquiredAt: row.acquiredAt.toISOString() };
+}
+
+function rowToCraft(row: typeof craftingQueue.$inferSelect): PartCrafting {
+  return {
+    id: row.id, playerId: row.playerId, resultCode: row.resultCode,
+    materials: row.materials, startedAt: row.startedAt.toISOString(),
+    completesAt: row.completesAt.toISOString(),
+    completed: row.completed as 0 | 1, createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export const postgresCraftingRepo: CraftingRepository = {
+  async getBlueprints(playerId: string): Promise<PlayerBlueprint[]> {
+    const db = getDb();
+    const rows = await db.select().from(playerBlueprints).where(eq(playerBlueprints.playerId, playerId));
+    return rows.map(rowToBp);
+  },
+
+  async hasBlueprint(playerId: string, blueprintCode: string): Promise<boolean> {
+    const db = getDb();
+    const rows = await db.select({ id: playerBlueprints.id }).from(playerBlueprints)
+      .where(and(eq(playerBlueprints.playerId, playerId), eq(playerBlueprints.blueprintCode, blueprintCode)))
+      .limit(1);
+    return rows.length > 0;
+  },
+
+  async grantBlueprint(playerId: string, blueprintCode: string): Promise<PlayerBlueprint> {
+    const db = getDb();
+    const now = new Date();
+    const id = crypto.randomUUID();
+    await db.insert(playerBlueprints).values({ id, playerId, blueprintCode, acquiredAt: now });
+    // 아이템 원장 기록
+    await db.insert(itemLedger).values({
+      id: crypto.randomUUID(), playerId, userId: playerId,
+      itemType: 'blueprint', itemId: blueprintCode, quantity: 1,
+      source: 'drop', referenceType: 'blueprint', referenceId: id,
+      idempotencyKey: id, createdAt: now,
+    });
+    return { id, playerId, blueprintCode, acquiredAt: now.toISOString() };
+  },
+
+  async getQueue(playerId: string): Promise<PartCrafting[]> {
+    const db = getDb();
+    const rows = await db.select().from(craftingQueue).where(eq(craftingQueue.playerId, playerId));
+    return rows.map(rowToCraft);
+  },
+
+  async startCraft(playerId: string, blueprintCode: string): Promise<PartCrafting> {
+    const db = getDb();
+    const bpData = getBlueprint(blueprintCode);
+    if (!bpData) throw new Error('UNKNOWN_BLUEPRINT');
+
+    const now = new Date();
+    const completesAt = new Date(now.getTime() + bpData.craftSeconds * 1000);
+    const id = crypto.randomUUID();
+    await db.insert(craftingQueue).values({
+      id, playerId, resultCode: bpData.partCode,
+      materials: JSON.stringify(bpData.materials),
+      startedAt: now, completesAt, completed: 0, createdAt: now,
+    });
+    return {
+      id, playerId, resultCode: bpData.partCode,
+      materials: JSON.stringify(bpData.materials),
+      startedAt: now.toISOString(), completesAt: completesAt.toISOString(),
+      completed: 0, createdAt: now.toISOString(),
+    };
+  },
+
+  async completeCraft(playerId: string, craftId: string): Promise<{ partId: string; partCode: string }> {
+    return getDb().transaction(async (db) => {
+    const rows = await db.select().from(craftingQueue).where(eq(craftingQueue.id, craftId)).limit(1).for('update');
+    if (rows.length === 0 || rows[0].playerId !== playerId) throw new Error('CRAFT_NOT_FOUND');
+    const craft = rows[0];
+    if (new Date(craft.completesAt).getTime() > Date.now()) throw new Error('CRAFT_NOT_READY');
+    if (craft.completed) throw new Error('ALREADY_COMPLETED');
+
+    await db.update(craftingQueue).set({ completed: 1 }).where(eq(craftingQueue.id, craftId));
+
+    // 파츠 지급
+    const partId = crypto.randomUUID();
+    const bpData = BLUEPRINTS.find((bp) => bp.partCode === craft.resultCode);
+    if (!bpData) throw new Error('UNKNOWN_BLUEPRINT');
+    await db.insert(partsInventory).values({ id: partId, playerId, partCode: craft.resultCode, partType: bpData.partType, level: 1, equipped: 0, createdAt: new Date() });
+    await db.insert(itemLedger).values({ id: crypto.randomUUID(), playerId, userId: playerId, itemType: 'part', itemId: craft.resultCode, source: 'craft', referenceType: 'craft', referenceId: craftId, idempotencyKey: craftId, createdAt: new Date() });
+
+    return { partId, partCode: craft.resultCode };
+    });
+  },
+
+  async getCompletable(playerId: string): Promise<PartCrafting[]> {
+    const db = getDb();
+    const now = new Date();
+    const rows = await db.select().from(craftingQueue)
+      .where(and(eq(craftingQueue.playerId, playerId), eq(craftingQueue.completed, 0)))
+      .then((all) => all.filter((r) => r.completesAt <= now));
+    return rows.map(rowToCraft);
+  },
+};
+
+

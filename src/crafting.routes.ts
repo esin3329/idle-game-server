@@ -78,13 +78,16 @@ craftingRoutes.post('/crafting/:craftId/complete', jwtAuth, async (c) => {
   const repo = await getCraftingRepo();
   const result = await repo.completeCraft(userId, craftId);
 
+  if (process.env.DB_DRIVER !== 'postgres') {
   // 파츠 지급 (PartsRepository)
   const partsRepo = await getPartsRepo();
   const bpData = BLUEPRINTS.find((b) => b.partCode === result.partCode);
   const partType = bpData?.partType || 'module';
   await partsRepo.grantPart(userId, result.partCode, partType);
+  }
 
   return c.json({ message: '제작 완료!', partId: result.partId, partCode: result.partCode }, 200);
 });
 
 export default craftingRoutes;
+

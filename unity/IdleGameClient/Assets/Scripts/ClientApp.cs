@@ -19,6 +19,7 @@ namespace IdleGame
         private Text notice;
         private CanvasGroup controls;
         private InputField server, email, password, nickname;
+        private RectTransform loginError;
         private bool busy;
         private static readonly Color Background = new Color32(12, 20, 30, 255);
         private static readonly Color Panel = new Color32(23, 38, 51, 255);
@@ -43,8 +44,10 @@ namespace IdleGame
             safeArea = Box(background, "SafeArea", Color.clear);
             if (FindFirstObjectByType<EventSystem>() == null)
                 new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
+            serverUrl = PlayerPrefs.GetString("CoreForge.Server", serverUrl);
             api = new GameApi(serverUrl);
-            ShowLogin();
+            ShowStart();
+            if (api.Session.HasSavedLogin) Run(async () => { await api.RestoreLogin(); ShowStart(); });
         }
 
         private void Update()
@@ -59,6 +62,7 @@ namespace IdleGame
 
         private void Clear(string section)
         {
+            loginError = null;
             foreach (Transform child in safeArea) { child.gameObject.SetActive(false); Destroy(child.gameObject); }
             var scrollRoot = Box(safeArea, "Page", Color.clear);
             Stretch(scrollRoot);
@@ -86,6 +90,21 @@ namespace IdleGame
             notice.gameObject.name = "Status";
         }
 
+        private void ShowStart()
+        {
+            Clear("메카를 깨울 시간");
+            notice.text = "폐허에서 코어를 회수하고\n당신의 메카를 성장시키세요.";
+            DrawMecha();
+            ActionButton("시작", () => Run(async () =>
+            {
+                if (!api.Session.IsAuthenticated && !await api.RestoreLogin()) { ShowLogin(); return; }
+                await ShowBase();
+            }), true);
+            if (api.Session.IsAuthenticated)
+                ActionButton("계정 변경 · 로그아웃", () => Run(async () => { try { await api.Logout(); } finally { ShowLogin(); } }));
+            else ActionButton("로그인 / 회원가입", ShowLogin);
+        }
+
         public void ShowLogin()
         {
             Clear("메카를 깨울 시간");
@@ -98,13 +117,14 @@ namespace IdleGame
             ActionButton("로그인", () => Authenticate(false), true);
             ActionButton("새 파일럿 등록", () => Authenticate(true));
             ActionButton("서버 연결 확인", CheckServer);
+            ActionButton("시작 화면으로", ShowStart);
             Label("세로형 클라이언트 · 개발 버전", 15, Muted, 30);
         }
 
         private void Authenticate(bool register)
         {
             if (string.IsNullOrWhiteSpace(email.text) || string.IsNullOrEmpty(password.text))
-            { notice.text = "이메일과 비밀번호를 입력해 주세요."; return; }
+            { ShowLoginError("이메일과 비밀번호를 입력해 주세요."); return; }
             if (register && (password.text.Length < 8 || nickname.text.Trim().Length < 2))
             { notice.text = "비밀번호는 8자 이상, 닉네임은 2자 이상 입력해 주세요."; return; }
             string address = server.text.Trim(), mail = email.text.Trim(), secret = password.text, name = nickname.text.Trim();
@@ -112,10 +132,57 @@ namespace IdleGame
             {
                 api = new GameApi(address);
                 serverUrl = address;
-                if (register) await api.Register(mail, secret, name); else await api.Login(mail, secret);
+                try
+                {
+                    if (register) await api.Register(mail, secret, name); else await api.Login(mail, secret);
+                }
+                catch (ApiException error) when (!register && error.Status == 401)
+                {
+                    password.text = "";
+                    notice.text = "";
+                    ShowLoginError("이메일 또는 비밀번호가 일치하지 않습니다.");
+                    return;
+                }
+                PlayerPrefs.SetString("CoreForge.Server", api.BaseUrl);
+                PlayerPrefs.Save();
                 password.text = "";
-                await ShowBase();
+                ShowStart();
             });
+        }
+
+        private void ShowLoginError(string message)
+        {
+            if (loginError) { loginError.gameObject.SetActive(false); Destroy(loginError.gameObject); }
+            loginError = Box(safeArea, "LoginErrorPopup", new Color(0, 0, 0, .75f));
+            controls.interactable = false;
+            Stretch(loginError);
+            var overlay = loginError;
+            var dialog = Box(overlay, "LoginErrorDialog", Panel);
+            dialog.anchorMin = dialog.anchorMax = new Vector2(.5f, .5f);
+            dialog.sizeDelta = new Vector2(Mathf.Min(440, safeArea.rect.width - 40), 250);
+            var textObject = new GameObject("LoginErrorMessage", typeof(RectTransform), typeof(Text));
+            textObject.transform.SetParent(dialog, false);
+            var text = textObject.GetComponent<Text>();
+            text.font = font; text.fontSize = 20; text.color = Color.white;
+            text.text = "로그인 실패\n\n" + message;
+            text.alignment = TextAnchor.MiddleCenter; text.raycastTarget = false;
+            text.rectTransform.anchorMin = new Vector2(0, .35f);
+            text.rectTransform.anchorMax = new Vector2(1, 1);
+            text.rectTransform.offsetMin = new Vector2(20, 0);
+            text.rectTransform.offsetMax = new Vector2(-20, -10);
+            BattleButton(dialog, "확인", () =>
+            {
+                overlay.gameObject.SetActive(false);
+                Destroy(overlay.gameObject);
+                loginError = null;
+                controls.interactable = true;
+                if (password) EventSystem.current.SetSelectedGameObject(password.gameObject);
+            }, true);
+            var confirm = dialog.GetChild(dialog.childCount - 1).GetComponent<RectTransform>();
+            confirm.anchorMin = confirm.anchorMax = new Vector2(.5f, 0);
+            confirm.sizeDelta = new Vector2(dialog.sizeDelta.x - 40, 52);
+            confirm.anchoredPosition = new Vector2(0, 38);
+            EventSystem.current.SetSelectedGameObject(confirm.gameObject);
         }
 
         private void CheckServer()
@@ -144,7 +211,7 @@ namespace IdleGame
             ActionButton("전기 수집", () => Run(async () => { await api.Claim(); await ShowBase(); }), true);
             Label($"생산 강화 비용: {cost["cost"] ?? cost["upgradeCost"]} E", 18, Muted, 32);
             ActionButton("생산 시설 강화", () => Run(async () => { await api.Upgrade(); await ShowBase(); }));
-            ActionButton("스테이지 확인", () => Run(ShowStages));
+            ActionButton("전투 시작 · 스테이지 선택", () => Run(ShowStages));
             ActionButton("새로고침", () => Run(ShowBase));
             ActionButton("로그아웃", () => Run(async () => { try { await api.Logout(); } finally { ShowLogin(); } }));
         }
@@ -221,7 +288,7 @@ namespace IdleGame
             finally
             {
                 busy = false;
-                if (controls) controls.interactable = true;
+                if (controls) controls.interactable = !loginError;
             }
         }
 
@@ -279,18 +346,10 @@ namespace IdleGame
         {
             var root = Box(content, "MechaPreview", Panel);
             root.gameObject.AddComponent<LayoutElement>().preferredHeight = 168;
-            Piece(root, -24, -43, 30, 36, Muted); Piece(root, 24, -43, 30, 36, Muted);
-            Piece(root, 0, 0, 86, 74, new Color32(58, 94, 113, 255));
-            Piece(root, -57, -4, 24, 60, Muted); Piece(root, 57, -4, 24, 60, Muted);
-            Piece(root, 0, 49, 54, 38, Muted); Piece(root, 0, 48, 36, 10, Accent);
-            Piece(root, 0, 0, 22, 22, Accent);
-        }
-
-        private static void Piece(Transform parent, float x, float y, float w, float h, Color color)
-        {
-            var rect = Box(parent, "PixelPart", color);
-            rect.anchorMin = rect.anchorMax = new Vector2(.5f, .5f);
-            rect.sizeDelta = new Vector2(w, h); rect.anchoredPosition = new Vector2(x, y);
+            var art = Box(root, "MechaArtwork", Color.white);
+            art.anchorMin = art.anchorMax = new Vector2(.5f, .5f);
+            art.sizeDelta = new Vector2(150, 156);
+            MechaArt.Apply(art.GetComponent<Image>(), "front");
         }
     }
 }

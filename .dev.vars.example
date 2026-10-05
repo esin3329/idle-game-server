@@ -1,2 +1,8 @@
-# Local Node API server for `wrangler dev`.
-API_ORIGIN=http://127.0.0.1:3000
+DB_DRIVER=postgres
+AUTH_PROVIDER=local
+DATABASE_URL=postgresql://postgres:replace-me@127.0.0.1:5432/postgres
+JWT_ACCESS_SECRET=replace-with-a-development-secret
+JWT_REFRESH_SECRET=replace-with-a-different-development-secret
+# Enable Supabase Auth only after importing and verifying existing accounts.
+# SUPABASE_URL=https://your-project.supabase.co
+# SUPABASE_PUBLISHABLE_KEY=your-publishable-key

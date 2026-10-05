@@ -43,7 +43,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
   };
-  if (accessToken) {
+  if (accessToken && path !== '/auth/login') {
     headers['Authorization'] = `Bearer ${accessToken}`;
   }
 
@@ -56,7 +56,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
 
-  if (res.status === 401) {
+  if (res.status === 401 && path !== '/auth/login') {
     // Try token refresh
     if (refreshToken) {
       const refreshed = await tryRefresh();
@@ -171,7 +171,7 @@ export async function login(email: string, password: string): Promise<AuthResult
     method: 'POST',
     body: JSON.stringify({ email, password }),
   });
-  setTokens(data.accessToken, data.refreshToken);
+  setTokens(data.tokens.accessToken, data.tokens.refreshToken);
   return data;
 }
 
@@ -308,3 +308,5 @@ export async function listAuditLogs(params: {
   if (params.operator_id) q.set('operator_id', params.operator_id);
   return request(`/admin/audit-logs?${q}`);
 }
+
+

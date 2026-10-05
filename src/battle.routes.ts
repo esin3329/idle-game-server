@@ -14,8 +14,8 @@ import {
 } from './shared/battle-session.js';
 import type { BattleEventReport, BattleEndReport } from './shared/battle-session.js';
 import { logger } from './shared/logger.js';
-import { getDb } from './db/connection.js';
-import { stages, playerStageProgress, playerRecords } from './db/schema.js';
+import { getDb } from './db/postgres-connection.js';
+import { stages, playerStageProgress, playerRecords } from './db/postgres-schema.js';
 import { asc, eq } from 'drizzle-orm';
 
 const battleRoutes = new Hono<{ Variables: { userId: string; idempotencyKey: string } }>();

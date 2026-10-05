@@ -45,6 +45,10 @@ async function loadMysqlRepo(): Promise<PlayerRepository> {
 let _repo: PlayerRepository | null = null;
 
 export async function getRepo(): Promise<PlayerRepository> {
+  if (process.env.DB_DRIVER === 'postgres') {
+    const { postgresPlayerRepo } = await import('./db/postgres.repository.js');
+    return postgresPlayerRepo;
+  }
   if (!_repo) {
     if (process.env.DB_DRIVER === 'json') {
       _repo = await loadJsonRepo();
@@ -86,6 +90,10 @@ let _authRepo: AuthRepository | null = null;
 let _authRepoMode: 'json' | 'mysql' | null = null;
 
 export async function getAuthRepo(): Promise<AuthRepository> {
+  if (process.env.DB_DRIVER === 'postgres') {
+    const { postgresAuthRepo } = await import('./db/postgres-auth.repository.js');
+    return postgresAuthRepo;
+  }
   if (!_authRepo) {
     if (process.env.DB_DRIVER === 'json') {
       _authRepo = await loadJsonAuthRepo();
@@ -110,7 +118,8 @@ export async function getAuthRepo(): Promise<AuthRepository> {
 }
 
 /** 현재 Auth 저장소 모드 반환 ('json' | 'mysql') */
-export function getAuthRepoMode(): 'json' | 'mysql' {
+export function getAuthRepoMode(): 'json' | 'mysql' | 'postgres' {
+  if (process.env.DB_DRIVER === 'postgres') return 'postgres';
   return _authRepoMode || 'json';
 }
 
@@ -136,6 +145,10 @@ let _walletRepo: WalletRepository | null = null;
 let _walletRepoMode: 'json' | 'mysql' | null = null;
 
 export async function getWalletRepo(): Promise<WalletRepository> {
+  if (process.env.DB_DRIVER === 'postgres') {
+    const { postgresWalletRepo } = await import('./db/postgres-wallet.repository.js');
+    return postgresWalletRepo;
+  }
   if (!_walletRepo) {
     if (process.env.DB_DRIVER === 'json') {
       _walletRepo = await loadJsonWalletRepo();
@@ -160,7 +173,8 @@ export async function getWalletRepo(): Promise<WalletRepository> {
 }
 
 /** 현재 Wallet 저장소 모드 반환 */
-export function getWalletRepoMode(): 'json' | 'mysql' {
+export function getWalletRepoMode(): 'json' | 'mysql' | 'postgres' {
+  if (process.env.DB_DRIVER === 'postgres') return 'postgres';
   return _walletRepoMode || 'json';
 }
 
@@ -185,6 +199,10 @@ async function loadMysqlPartsRepo(): Promise<PartsRepository> {
 let _partsRepo: PartsRepository | null = null;
 
 export async function getPartsRepo(): Promise<PartsRepository> {
+  if (process.env.DB_DRIVER === 'postgres') {
+    const { postgresPartsRepo } = await import('./db/postgres-parts.repository.js');
+    return postgresPartsRepo;
+  }
   if (!_partsRepo) {
     if (process.env.DB_DRIVER === 'json') {
       _partsRepo = await loadJsonPartsRepo();
@@ -211,6 +229,10 @@ export function resetPartsRepo(): void {
 let _configsRepo: MechaConfigRepository | null = null;
 
 export async function getMechaConfigRepo(): Promise<MechaConfigRepository> {
+  if (process.env.DB_DRIVER === 'postgres') {
+    const { postgresMechaConfigRepo } = await import('./db/postgres-parts.repository.js');
+    return postgresMechaConfigRepo;
+  }
   if (!_configsRepo) {
     if (process.env.DB_DRIVER === 'json') {
       const { jsonMechaConfigRepo } = await import('./store-parts.js');
@@ -240,6 +262,10 @@ export function resetMechaConfigRepo(): void {
 let _researchRepo: ResearchRepository | null = null;
 
 export async function getResearchRepo(): Promise<ResearchRepository> {
+  if (process.env.DB_DRIVER === 'postgres') {
+    const { postgresResearchRepo } = await import('./db/postgres-research.repository.js');
+    return postgresResearchRepo;
+  }
   if (!_researchRepo) {
     if (process.env.DB_DRIVER === 'json') {
       const { jsonResearchRepo } = await import('./store-research.js');
@@ -269,6 +295,10 @@ export function resetResearchRepo(): void {
 let _craftingRepo: CraftingRepository | null = null;
 
 export async function getCraftingRepo(): Promise<CraftingRepository> {
+  if (process.env.DB_DRIVER === 'postgres') {
+    const { postgresCraftingRepo } = await import('./db/postgres-crafting.repository.js');
+    return postgresCraftingRepo;
+  }
   if (!_craftingRepo) {
     if (process.env.DB_DRIVER === 'json') {
       const { jsonCraftingRepo } = await import('./store-crafting.js');
@@ -298,6 +328,10 @@ export function resetCraftingRepo(): void {
 let _battleRepo: BattleRepository | null = null;
 
 export async function getBattleRepo(): Promise<BattleRepository> {
+  if (process.env.DB_DRIVER === 'postgres') {
+    const { postgresBattleRepo } = await import('./db/postgres-battle.repository.js');
+    return postgresBattleRepo;
+  }
   if (!_battleRepo) {
     if (process.env.DB_DRIVER === 'json') {
       const { jsonBattleRepo } = await import('./store-battle.js');
@@ -327,6 +361,10 @@ export function resetBattleRepo(): void {
 let _adminRepo: AdminRepository | null = null;
 
 export async function getAdminRepo(): Promise<AdminRepository> {
+  if (process.env.DB_DRIVER === 'postgres') {
+    const { postgresAdminRepo } = await import('./db/postgres-admin.repository.js');
+    return postgresAdminRepo;
+  }
   if (!_adminRepo) {
     if (process.env.DB_DRIVER === 'json') {
       const { jsonAdminRepo } = await import('./store-admin.js');

@@ -1,11 +1,7 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { z } from 'zod';
 import { getAdminRepo } from '../provider.js';
 import { AppError } from '../shared/errors.js';
-import { getDb } from '../db/connection.js';
-import { users } from '../db/schema.js';
-import { eq } from 'drizzle-orm';
+import { bundledRunbooks } from './runbooks.js';
 import type { AdminRepository } from '../repository.js';
 import { createCompletion, type ChatMessage, type ProviderId, type ToolDefinition } from './provider.js';
 import type { AiTokenUsage, AiToolAuditInput } from './runs.js';
@@ -63,13 +59,11 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
 ];
 
 async function currentOperatorRole(operatorId: string): Promise<string> {
-  const db = getDb();
-  const rows = await db.select({ role: users.role, status: users.status }).from(users).where(eq(users.id, operatorId)).limit(1);
-  const operator = rows[0];
+  const repo = await getAdminRepo();
+  const operator = await repo.getUserDetail(operatorId);
   if (!operator || operator.status !== 'active' || !['admin', 'administrator', 'operator'].includes(operator.role)) {
     throw new AppError('운영자 계정이 비활성 상태이거나 권한이 없습니다.', 403, 'FORBIDDEN');
   }
-  const repo = await getAdminRepo();
   if (operator.role !== 'admin' && operator.role !== 'administrator' && !await repo.checkPermission(operator.role, 'admin.users.read')) {
     throw new AppError('AI 분석 권한이 없습니다.', 403, 'FORBIDDEN');
   }
@@ -109,20 +103,10 @@ function iso(value: unknown): string | undefined {
   return undefined;
 }
 
-async function searchRunbooks(query: string): Promise<Evidence[]> {
-  const directory = join(process.cwd(), 'docs', 'runbooks');
-  let filenames: string[];
-  try {
-    const { readdir } = await import('node:fs/promises');
-    filenames = (await readdir(directory)).filter((name) => name.endsWith('.md')).sort();
-  } catch {
-    throw new AppError('운영 가이드 문서를 읽을 수 없습니다.', 503, 'AI_RUNBOOKS_UNAVAILABLE');
-  }
-
+export async function searchRunbooks(query: string): Promise<Evidence[]> {
   const terms = query.toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u).filter((term) => term.length >= 2);
   const matches: Array<{ score: number; evidence: Evidence }> = [];
-  for (const filename of filenames) {
-    const content = await readFile(join(directory, filename), 'utf8');
+  for (const [filename, content] of Object.entries(bundledRunbooks)) {
     const sections = content.split(/(?=^##? )/m).filter((section) => section.trim());
     for (const [index, section] of sections.entries()) {
       const normalized = section.toLocaleLowerCase();

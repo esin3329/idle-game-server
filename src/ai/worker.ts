@@ -52,9 +52,16 @@ async function executeRun(run: ClaimedAiRun): Promise<void> {
       await failAiRun(run.id, errorCode, Date.now() - startedAt);
     } catch (persistenceError) {
       logger.error({ runId: run.id, error: persistenceError instanceof Error ? persistenceError.message : String(persistenceError), event: 'ai.run_failure_not_persisted' }, 'Unable to persist failed GameOps AI run');
+      throw persistenceError;
     }
     logger.warn({ runId: run.id, operatorId: run.operatorId, errorCode, elapsedMs: Date.now() - startedAt, event: 'ai.game_ops_analysis_failed' }, 'GameOps AI analysis failed');
   }
+}
+
+export async function processAiRun(runId: string): Promise<void> {
+  await expireStaleAiRuns();
+  const run = await claimNextAiRun(runId);
+  if (run) await executeRun(run);
 }
 
 async function poll(): Promise<void> {

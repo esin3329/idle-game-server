@@ -73,6 +73,7 @@ export function hashAiRequest(input: Pick<EnqueueAiRunInput, 'targetUserId' | 'c
 }
 
 export async function enqueueAiRun(input: EnqueueAiRunInput): Promise<EnqueuedAiRun> {
+  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).enqueueAiRun(input);
   const pool = getPool();
   const connection = await pool.getConnection();
 
@@ -159,6 +160,7 @@ export async function enqueueAiRun(input: EnqueueAiRunInput): Promise<EnqueuedAi
 }
 
 export async function expireStaleAiRuns(): Promise<void> {
+  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).expireStaleAiRuns();
   await getPool().execute(
     `UPDATE \`ai_runs\`
      SET \`status\` = 'timed_out', \`error_code\` = 'AI_RUN_TIMEOUT', \`finished_at\` = UTC_TIMESTAMP(3),
@@ -168,12 +170,14 @@ export async function expireStaleAiRuns(): Promise<void> {
   );
 }
 
-export async function claimNextAiRun(): Promise<ClaimedAiRun | null> {
+export async function claimNextAiRun(runId?: string): Promise<ClaimedAiRun | null> {
+  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).claimNextAiRun(runId);
   const connection = await getPool().getConnection();
   try {
     await connection.beginTransaction();
     const [rows] = await connection.execute<RowDataPacket[]>(
-      "SELECT `id`, `operator_id`, `target_user_id`, `case_type`, `provider`, `model`, `input_json` FROM `ai_runs` WHERE `status` = 'queued' AND `deadline_at` > UTC_TIMESTAMP(3) ORDER BY `created_at`, `id` LIMIT 1 FOR UPDATE SKIP LOCKED",
+      "SELECT `id`, `operator_id`, `target_user_id`, `case_type`, `provider`, `model`, `input_json` FROM `ai_runs` WHERE `status` = 'queued' AND `deadline_at` > UTC_TIMESTAMP(3)" + (runId ? ' AND `id` = ?' : '') + ' ORDER BY `created_at`, `id` LIMIT 1 FOR UPDATE SKIP LOCKED',
+      runId ? [runId] : [],
     );
     const row = rows[0];
     if (!row) {
@@ -204,6 +208,7 @@ export async function claimNextAiRun(): Promise<ClaimedAiRun | null> {
 }
 
 export async function appendAiToolCall(runId: string, input: AiToolAuditInput): Promise<void> {
+  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).appendAiToolCall(runId, input);
   await getPool().execute(
     `INSERT INTO \`ai_tool_calls\`
       (\`id\`, \`run_id\`, \`sequence\`, \`tool_name\`, \`sanitized_args\`, \`evidence_json\`, \`elapsed_ms\`, \`status\`, \`error_code\`, \`created_at\`)
@@ -229,6 +234,7 @@ export interface AiTokenUsage {
 }
 
 export async function updateAiRunTokenUsage(runId: string, tokenUsage: AiTokenUsage): Promise<void> {
+  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).updateAiRunTokenUsage(runId, tokenUsage);
   await getPool().execute(
     "UPDATE `ai_runs` SET `token_usage_json` = ? WHERE `id` = ? AND `status` = 'running'",
     [JSON.stringify(tokenUsage), runId],
@@ -243,6 +249,7 @@ export async function completeAiRun(
   elapsedMs: number,
   tokenUsage: AiTokenUsage | null,
 ): Promise<void> {
+  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).completeAiRun(runId, result, toolsUsed, model, elapsedMs, tokenUsage);
   await getPool().execute<ResultSetHeader>(
     `UPDATE \`ai_runs\`
      SET \`status\` = 'succeeded', \`result_json\` = ?, \`model\` = ?, \`elapsed_ms\` = ?,
@@ -259,6 +266,7 @@ export async function completeAiRun(
 }
 
 export async function failAiRun(runId: string, errorCode: string, elapsedMs?: number): Promise<void> {
+  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).failAiRun(runId, errorCode, elapsedMs);
   const safeCode = safeErrorCode(errorCode);
   const status = safeCode === 'AI_RUN_TIMEOUT' ? 'timed_out' : 'failed';
   await getPool().execute(
@@ -270,6 +278,7 @@ export async function failAiRun(runId: string, errorCode: string, elapsedMs?: nu
 }
 
 export async function getAiRun(runId: string, operatorId: string, expectedTargetUserId: string) {
+  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).getAiRun(runId, operatorId, expectedTargetUserId);
   const pool = getPool();
   await pool.execute(
     `UPDATE \`ai_runs\`
@@ -323,4 +332,12 @@ export async function getAiRun(runId: string, operatorId: string, expectedTarget
     toolsUsed: saved?.toolsUsed || [],
     result: saved?.result,
   };
+}
+
+export async function listQueuedAiRunIds(): Promise<string[]> {
+  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).listQueuedAiRunIds();
+  const [rows] = await getPool().execute<RowDataPacket[]>(
+    "SELECT `id` FROM `ai_runs` WHERE `status` = 'queued' AND `deadline_at` > UTC_TIMESTAMP(3) ORDER BY `created_at`, `id` LIMIT 100",
+  );
+  return rows.map((row) => String(row.id));
 }

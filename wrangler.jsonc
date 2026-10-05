@@ -8,14 +8,56 @@
     "directory": "./admin/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api", "/api/*", "/health", "/health/*", "/ready", "/metrics"]
+    "run_worker_first": [
+      "/api",
+      "/api/*",
+      "/health",
+      "/health/*",
+      "/ready",
+      "/metrics"
+    ]
   },
   "vars": {
-    "API_ORIGIN": "https://replace-with-node-api.example.com"
+    "DB_DRIVER": "postgres",
+    "AUTH_PROVIDER": "local",
+    "NODE_ENV": "production",
+    "LOG_LEVEL": "info"
   },
   "observability": {
     "logs": {
       "enabled": true
     }
-  }
+  },
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "AI_RUNS_QUEUE",
+        "queue": "idle-game-ai-runs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "idle-game-ai-runs",
+        "max_batch_size": 1,
+        "max_retries": 0
+      }
+    ]
+  },
+  "triggers": {
+    "crons": [
+      "* * * * *"
+    ]
+  },
+  "placement": {
+    "mode": "smart"
+  },
+  "hyperdrive": [
+    {
+      "id": "ed9baf444863475ea51556edc2459094",
+      "binding": "HYPERDRIVE"
+    }
+  ]
 }

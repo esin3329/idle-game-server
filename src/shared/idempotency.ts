@@ -59,6 +59,11 @@ export async function idempotencyGuard(c: Context<{ Variables: { idempotencyKey:
     throw new AppError('Idempotency-Key가 너무 깁니다 (최대 64자).', 400, 'IDEMPOTENCY_KEY_TOO_LONG');
   }
 
+  if (process.env.DB_DRIVER === 'postgres') {
+    const { postgresIdempotency } = await import('./postgres-idempotency.js');
+    return postgresIdempotency(c, next, key);
+  }
+
   // ─── 캐시 확인 ──────────────────────────────────
   const cached = cache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
@@ -93,3 +98,4 @@ export function clearIdempotencyCache(): void {
 export function idempotencyCacheSize(): number {
   return cache.size;
 }
+

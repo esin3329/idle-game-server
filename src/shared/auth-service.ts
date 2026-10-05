@@ -4,10 +4,11 @@ import { createHash } from 'node:crypto';
 import { getAuthRepo, getAuthRepoMode } from '../provider.js';
 import { AppError } from './errors.js';
 import { logger, auditLog } from './logger.js';
+import { activeGameUser, sessionTokens, supabaseLogout, supabasePasswordLogin, supabaseRefresh, supabaseSignup, usesSupabaseAuth } from './supabase-auth.js';
 
 const SALT_ROUNDS = 10;
 const ACCESS_EXPIRES = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
-const REFRESH_EXPIRES = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
+const REFRESH_EXPIRES = process.env.JWT_REFRESH_EXPIRES_IN || '21d';
 
 function jwtSecret(name: string): string {
   return process.env[name] || 'dev-secret-change-in-production';
@@ -58,12 +59,37 @@ function issueTokens(userId: string, role: string = 'user'): TokenPair {
 // ─── 회원가입 ──────────────────────────────────────
 
 export async function registerUser(email: string, password: string, nickname: string): Promise<AuthResult> {
+  if (usesSupabaseAuth()) {
+    if (process.env.DB_DRIVER !== 'postgres') {
+      throw new AppError('Supabase 회원가입에는 PostgreSQL 저장소가 필요합니다.', 503, 'AUTH_NOT_CONFIGURED');
+    }
+    const repo = await getAuthRepo();
+    if (await repo.findUserByEmail(email) || await repo.findUserByNickname(nickname)) {
+      throw new AppError('이미 사용 중인 이메일 또는 닉네임입니다.', 409, 'DUPLICATE_ACCOUNT');
+    }
+    let session;
+    try {
+      session = await supabaseSignup(email, password);
+    } catch (error) {
+      if (!(error instanceof AppError) || error.code !== 'DUPLICATE_ACCOUNT') throw error;
+      session = await supabasePasswordLogin(email, password);
+    }
+    const { registerUserTransaction } = await import('../db/postgres-auth.repository.js');
+    const account = await registerUserTransaction(email, nickname, '', session.user.id);
+    return { ...account, tokens: sessionTokens(session) };
+  }
+  await getAuthRepo();
   const mode = getAuthRepoMode();
 
   let userId: string;
   let playerId: string;
 
-  if (mode === 'mysql') {
+  if (mode === 'postgres') {
+    const { registerUserTransaction } = await import('../db/postgres-auth.repository.js');
+    const result = await registerUserTransaction(email, nickname, await hash(password, SALT_ROUNDS));
+    userId = result.userId;
+    playerId = result.playerId;
+  } else if (mode === 'mysql') {
     // MySQL: 트랜잭션 최적화
     const { registerUserTransaction } = await import('../db/mysql-auth.repository.js');
     const passwordHash = await hash(password, SALT_ROUNDS);
@@ -118,6 +144,12 @@ export async function registerUser(email: string, password: string, nickname: st
 
 export async function loginUser(email: string, password: string): Promise<AuthResult> {
   const repo = await getAuthRepo();
+  if (usesSupabaseAuth()) {
+    const session = await supabasePasswordLogin(email, password);
+    const user = await activeGameUser(session.user.id);
+    const profile = await repo.findProfileByUserId(user.id);
+    return { userId: user.id, playerId: profile?.playerId || '', tokens: sessionTokens(session) };
+  }
 
   const user = await repo.findUserByEmail(email);
   if (!user) {
@@ -158,6 +190,7 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
 // ─── 토큰 갱신 (rotation) ───────────────────────────
 
 export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
+  if (usesSupabaseAuth()) return supabaseRefresh(refreshToken);
   const repo = await getAuthRepo();
   const now = new Date();
   const tokenHash = sha256(refreshToken);
@@ -190,6 +223,7 @@ export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
 
 /** 로그아웃: Refresh Token 폐기 */
 export async function revokeRefreshToken(refreshToken: string): Promise<void> {
+  if (usesSupabaseAuth()) return supabaseLogout(refreshToken);
   const repo = await getAuthRepo();
   const tokenHash = sha256(refreshToken);
   await repo.revokeSession(tokenHash);

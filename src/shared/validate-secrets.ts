@@ -13,6 +13,7 @@ export function validateProductionSecrets(): void {
   const missing: string[] = [];
 
   for (const { name, defaultHint } of REQUIRED_IN_PRODUCTION) {
+    if (process.env.DB_DRIVER === 'postgres' && ['DB_PASSWORD', 'MYSQL_ROOT_PASSWORD'].includes(name)) continue;
     const value = process.env[name];
     if (!value || value === defaultHint || value === '') {
       missing.push(name);
@@ -26,3 +27,4 @@ export function validateProductionSecrets(): void {
 
   logger.info('Production secrets validated');
 }
+

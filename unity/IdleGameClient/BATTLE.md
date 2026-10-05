@@ -1,0 +1,13 @@
+# Bullet combat
+
+The player automatically fires visible homing shots at the closest threat. Damage, kills, core, and boss defeat are recorded when a shot hits, rather than when it is emitted. Player and boss stats still come from the existing battle session and stage responses.
+
+Enemies enter from the top, right, bottom, and left and pursue the player, who starts in the center. Green security robots have 12 HP, move at 32 units per second, deal 3 damage on contact, and never fire bullets. Bosses alternate a nine-shot fan toward the player with a fan plus three faster aimed shots. Boss sprites brighten before firing. Automatic fire selects the nearest enemy by distance in both axes.
+
+Controls: drag in any direction inside the arena or hold WASD / arrow keys. Space or the two dash buttons dash horizontally. A dash moves 100 units, grants 0.25 seconds of invulnerability, and has a 0.75-second cooldown. The bright center on the player indicates the small collision area. Both contact and projectile hits share 0.4 seconds of protection and flash the player, preventing overlapping enemies from multiplying damage in the same frame.
+
+BattleRun limits each simulation step to 0.1 seconds, checks swept projectile segments against the collision radius in both axes, expires offscreen/old bullets, and bounds the total bullet population at 256. Movement is limited to 360 units per second, including diagonals, within X ±160 and Y ±180. The compact combat layout keeps the arena, both dash buttons, and session controls visible together at the portrait reference size.
+
+For local testing in Unity, open Bootstrap and select **Idle Game > Verify Bullet Patterns**. **Idle Game > Preview Bullet Battle** starts an Editor-only practice battle labeled as granting no rewards; it does not contact the server. This preview is not available in player builds. It exits to login with the practice exit button or when its duration/health runs out.
+
+The first half contains security robots only. At 50% progress, blue rifle robots join and fire one aimed shot every 2.2 seconds. At 70%, larger white armored robots join with 60 base HP, slower movement, and 6 contact damage. At 80%, red machine-gun robots join with 36 base HP and six-shot bursts followed by a 2.6-second reload; each burst holds its initial aim. Rifle robots have 24 base HP. Newly spawned enemies gain health continuously during the second half, reaching three times base HP at the end. Existing enemies keep their spawn-time health. Boss timing remains the later of the server timing and the halfway point. The verification menu covers this progression alongside movement, contact, bullets, and rewards. Device/Android gameplay and real server completion remain separate integration checks.

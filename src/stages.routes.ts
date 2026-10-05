@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { jwtAuth } from './shared/jwt-auth.js';
 import { getBattleRepo } from './provider.js';
 import { STAGES, getStageBosses } from './data/stages.js';
 
@@ -12,9 +13,7 @@ stagesRoutes.get('/stages', async (c) => {
 
   if (authHeader?.startsWith('Bearer ')) {
     try {
-      const jwt = await import('jsonwebtoken');
-      const payload = jwt.default.verify(authHeader.slice(7), process.env.JWT_ACCESS_SECRET || 'dev-secret-change-in-production') as any;
-      playerId = payload.sub;
+      await jwtAuth(c, async () => { playerId = c.get('userId'); });
     } catch { /* ignore */ }
   }
 

@@ -1,6 +1,7 @@
 import type { Context, Next } from 'hono';
 import jwt from 'jsonwebtoken';
 import { AppError } from './errors.js';
+import { activeGameUser, usesSupabaseAuth, verifySupabaseAccess } from './supabase-auth.js';
 
 function jwtSecret(name: string): string {
   return process.env[name] || 'dev-secret-change-in-production';
@@ -44,6 +45,16 @@ export async function operatorAuth(c: Context<{ Variables: { userId: string; rol
   }
 
   const token = authHeader.slice(7);
+  if (usesSupabaseAuth()) {
+    const user = await verifySupabaseAccess(token);
+    if (user.role !== 'operator' && user.role !== 'admin') {
+      throw new AppError('운영자 권한이 필요합니다.', 403, 'FORBIDDEN');
+    }
+    c.set('userId', user.id);
+    c.set('role', user.role);
+    await next();
+    return;
+  }
 
   let payload: unknown;
   try {
@@ -63,12 +74,13 @@ export async function operatorAuth(c: Context<{ Variables: { userId: string; rol
   }
 
   const p = payload as JwtPayload;
-  if (!p.role || (p.role !== 'operator' && p.role !== 'admin')) {
+  const role = process.env.DB_DRIVER === 'postgres' ? (await activeGameUser(p.sub)).role : p.role;
+  if (!role || (role !== 'operator' && role !== 'admin')) {
     throw new AppError('운영자 권한이 필요합니다.', 403, 'FORBIDDEN');
   }
 
   c.set('userId', p.sub);
-  c.set('role', p.role);
+  c.set('role', role);
   await next();
 }
 
@@ -82,6 +94,19 @@ export function requirePermission(permission: string) {
 
     // admin/administrator는 모든 권한 통과
     if (role === 'admin' || role === 'administrator') {
+      return next();
+    }
+
+    if (process.env.DB_DRIVER === 'postgres') {
+      const { getDb } = await import('../db/postgres-connection.js');
+      const { operatorRoles, operatorRolePermissions, operatorPermissions } = await import('../db/postgres-schema.js');
+      const { eq, and } = await import('drizzle-orm');
+      const rows = await getDb().select({ id: operatorRolePermissions.id })
+        .from(operatorRolePermissions)
+        .innerJoin(operatorRoles, eq(operatorRolePermissions.roleId, operatorRoles.id))
+        .innerJoin(operatorPermissions, eq(operatorRolePermissions.permissionId, operatorPermissions.id))
+        .where(and(eq(operatorRoles.code, role), eq(operatorPermissions.code, permission))).limit(1);
+      if (!rows.length) throw new AppError('권한이 없습니다.', 403, 'FORBIDDEN');
       return next();
     }
 
@@ -127,6 +152,12 @@ export async function jwtAuth(c: Context<{ Variables: { userId: string } }>, nex
   }
 
   const token = authHeader.slice(7);
+  if (usesSupabaseAuth()) {
+    const user = await verifySupabaseAccess(token);
+    c.set('userId', user.id);
+    await next();
+    return;
+  }
 
   let payload: unknown;
   try {

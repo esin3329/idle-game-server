@@ -5,14 +5,14 @@ import { idempotencyGuard } from './shared/idempotency.js';
 import { logger, auditLog } from './shared/logger.js';
 import { getAdminRepo } from './provider.js';
 import { AppError } from './shared/errors.js';
-import { getDb } from './db/connection.js';
-import { users, accountSanctions, securityEvents, operatorAuditLogs, operatorAccounts } from './db/schema.js';
+import { getDb } from './db/postgres-connection.js';
+import { users, accountSanctions, securityEvents, operatorAuditLogs, operatorAccounts } from './db/postgres-schema.js';
 import { eq, and, or, gte, lte } from 'drizzle-orm';
 import { analysisInputSchema, sanitizeQuestion } from './ai/game-ops.js';
 import { listProviders } from './ai/provider.js';
 import { enqueueAiRun, getAiRun, hashAiRequest } from './ai/runs.js';
 
-const adminRoutes = new Hono<{ Variables: { userId: string; role: string } }>();
+const adminRoutes = new Hono<{ Variables: { userId: string; role: string; idempotencyKey: string } }>();
 
 // 운영 API CORS: localhost만 허용
 adminRoutes.use('/admin/*', cors({
@@ -216,7 +216,7 @@ adminRoutes.post('/admin/users/:id/grants', idempotencyGuard, async (c) => {
   const { resourceType, resourceCode, amount, reasonText, externalReference } = await c.req.json();
   if (!resourceType || !resourceCode) return c.json({ error: 'resourceType, resourceCode는 필수입니다.', code: 'BAD_REQUEST' }, 400);
   if (!reasonText || reasonText.length < 5) return c.json({ error: '충분한 사유가 필요합니다 (5자 이상).', code: 'BAD_REQUEST' }, 400);
-  if (typeof amount !== 'number' || amount === 0) return c.json({ error: '유효한 amount가 필요합니다.', code: 'BAD_REQUEST' }, 400);
+  if (!Number.isSafeInteger(amount) || amount === 0) return c.json({ error: '유효한 amount가 필요합니다.', code: 'BAD_REQUEST' }, 400);
 
   const repo = await getAdminRepo();
   const user = await repo.getUserDetail(targetUserId);
@@ -225,7 +225,7 @@ adminRoutes.post('/admin/users/:id/grants', idempotencyGuard, async (c) => {
   const result = await repo.createGrant({
     targetUserId, operatorId, grantType: resourceType, resourceCode, amount,
     reasonCode: resourceType, reasonText, externalReference: externalReference || '',
-    status: 'completed', idempotencyKey: c.req.header('Idempotency-Key') || '',
+    status: 'completed', idempotencyKey: c.get('idempotencyKey'),
   });
 
   auditLog.warn({ operatorId, targetUserId, grantType: resourceType, resourceCode, amount, reasonText, grantId: result.id, event: 'operator_grant' });
@@ -496,7 +496,7 @@ adminRoutes.post('/admin/ai/analyze', async (c) => {
     return c.json({ error: '분석 요청 형식이 올바르지 않습니다.', code: 'BAD_REQUEST' }, 400);
   }
   if (process.env.DB_DRIVER === 'json') {
-    return c.json({ error: 'AI 분석 큐에는 MySQL 저장소가 필요합니다.', code: 'AI_QUEUE_REQUIRES_MYSQL' }, 503);
+    return c.json({ error: 'AI 분석 큐에는 DB 저장소가 필요합니다.', code: 'AI_QUEUE_REQUIRES_MYSQL' }, 503);
   }
 
   const idempotencyKey = c.req.header('Idempotency-Key') || '';
@@ -524,7 +524,7 @@ adminRoutes.post('/admin/ai/analyze', async (c) => {
   } catch (error) {
     if (error instanceof AppError) throw error;
     logger.error({ operatorId: c.get('userId'), error: error instanceof Error ? error.message : String(error), event: 'ai.run_enqueue_failed' }, 'Unable to enqueue GameOps AI analysis');
-    return c.json({ error: 'AI 분석 작업을 저장하지 못했습니다. MySQL 연결과 마이그레이션 상태를 확인해 주세요.', code: 'AI_QUEUE_UNAVAILABLE' }, 503);
+    return c.json({ error: 'AI 분석 작업을 저장하지 못했습니다. DB 연결과 마이그레이션 상태를 확인해 주세요.', code: 'AI_QUEUE_UNAVAILABLE' }, 503);
   }
 
   auditLog.info({ operatorId: c.get('userId'), targetUserId: parsed.data.targetUserId, runId: run.id, provider: parsed.data.provider, replayed: run.replayed, event: 'ai.game_ops_analysis_queued' }, 'GameOps AI analysis queued');
@@ -534,7 +534,7 @@ adminRoutes.post('/admin/ai/analyze', async (c) => {
 adminRoutes.get('/admin/ai/runs/:id', async (c) => {
   await checkPerm(c, 'admin.users.read');
   if (process.env.DB_DRIVER === 'json') {
-    return c.json({ error: 'AI 분석 큐에는 MySQL 저장소가 필요합니다.', code: 'AI_QUEUE_REQUIRES_MYSQL' }, 503);
+    return c.json({ error: 'AI 분석 큐에는 DB 저장소가 필요합니다.', code: 'AI_QUEUE_REQUIRES_MYSQL' }, 503);
   }
   const targetUserId = c.req.query('targetUserId') || '';
   if (!targetUserId) return c.json({ error: 'targetUserId가 필요합니다.', code: 'BAD_REQUEST' }, 400);

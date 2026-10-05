@@ -1,6 +1,6 @@
 # Core Forge Unity client
 
-Portrait Android client for the existing idle-game-server. The server is not modified.
+Portrait Android client for idle-game-server.
 
 ## Environment
 
@@ -10,7 +10,8 @@ Portrait Android client for the existing idle-game-server. The server is not mod
 - API address is editable on the login screen. It is not a credential.
 - Default API origin: `http://100.73.115.1:3007`, accessed through Tailscale. Do not append `/api`: client routes include their required prefixes.
 - HTTP is enabled for the Editor and development builds. Enable Development Build for Android testing, and connect the device to the same Tailscale network. Release builds require an HTTPS API address.
-- Tokens remain in memory; closing the application requires signing in again.
+- Login is remembered on the same device for 21 days from manual login. Windows uses DPAPI; Android uses an Android Keystore AES-GCM key. Only the refresh token and account IDs are saved in encrypted storage. Rotation updates the saved token without extending the 21-day deadline. Logout, invalid authentication, or expiry removes it; network failures retain it for retry. The start screen restores authentication automatically and has a Start button leading to the base, where Combat Start opens stage selection.
+- The server refresh-token default is now 21 days. Deploy the server change and use `JWT_REFRESH_EXPIRES_IN=21d` when overriding the default; previously issued tokens keep their original expiry. Android device storage still needs device validation.
 
 ## Open and run
 

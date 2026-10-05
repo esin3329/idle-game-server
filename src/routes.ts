@@ -80,7 +80,7 @@ routes.get('/api/players', async (c) => {
 
 // ─── Claim ─────────────────────────────────────────
 
-routes.post('/api/players/:id/claim', validatePlayerId, rateLimit(1, 1000), idempotencyGuard, jwtAuth, async (c) => {
+routes.post('/api/players/:id/claim', validatePlayerId, idempotencyGuard, rateLimit(1, 1000), jwtAuth, async (c) => {
   const id = c.req.param('id')!;
   const player = await requirePlayer(id);
 
@@ -161,7 +161,7 @@ routes.get('/api/players/:id/upgrade', validatePlayerId, async (c) => {
   });
 });
 
-routes.post('/api/players/:id/upgrade', validatePlayerId, rateLimit(2, 1000), idempotencyGuard, jwtAuth, async (c) => {
+routes.post('/api/players/:id/upgrade', validatePlayerId, idempotencyGuard, rateLimit(2, 1000), jwtAuth, async (c) => {
   const id = c.req.param('id')!;
   const player = await requirePlayer(id);
   const cost = player.electricityPerSecond * GAME.UPGRADE_COST_MULTIPLIER;

@@ -106,8 +106,7 @@ export interface Battle {
 export interface AuthResult {
   userId: string;
   playerId: string;
-  accessToken: string;
-  refreshToken: string;
+  tokens: { accessToken: string; refreshToken: string };
 }
 
 export interface PaginatedResponse<T> {
@@ -115,3 +114,5 @@ export interface PaginatedResponse<T> {
   offset: number;
   total: number;
 }
+
+
