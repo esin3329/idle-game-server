@@ -120,6 +120,8 @@ npx wrangler deploy --dry-run --outdir .tools/worker-build
 
 GitHub Actions는 Node.js 20·22에서 서버 타입 검사·Vitest·빌드·npm audit을 실행합니다. 별도 PostgreSQL 작업은 `npm run test:postgres`로 마이그레이션과 실제 PostgreSQL 통합 시나리오를 확인합니다. Worker 작업은 관리자 자산을 빌드하고 Cloudflare 타입 검사와 Wrangler dry-run 번들을 수행하며 실제 배포는 하지 않습니다. MySQL 작업은 별도 MySQL 8 서비스를 사용합니다. 저장소에는 아직 TODO 테스트가 있으므로 테스트 수나 DB 통합 범위를 완성된 커버리지로 해석하지 않습니다.
 
+`npm audit`은 개발 의존성까지 검사합니다. `package.json`의 `overrides`는 아직 수정되지 않은 상위 의존성 범위(`drizzle-kit` → `esbuild`, `wrangler` → `miniflare` → `sharp`, `autocannon` → `hyperid` → `uuid`)를 보안 수정 버전으로 재정의합니다. 상위 패키지에서 수정 버전을 제공하면 override를 재검토하고 제거하세요.
+
 ## 문서
 
 - [Cloudflare + PostgreSQL 배포 및 전환 기록](./docs/CLOUDFLARE_DEPLOY.md)
