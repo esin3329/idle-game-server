@@ -411,8 +411,8 @@ CMD ["node", "dist/index.js"]
 - [ ] `docker compose up -d app`
 - [ ] `GET /health` → 200
 - [ ] `GET /ready` → ready
-- [ ] `POST /auth/register` → 201
-- [ ] `POST /auth/login` → 200
+- [ ] `POST /api/auth/register` → 201
+- [ ] `POST /api/auth/login` → 200
 
 ### 일일 점검
 

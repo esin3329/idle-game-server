@@ -2,7 +2,8 @@ import { Hono } from 'hono';
 import { jwtAuth } from './shared/jwt-auth.js';
 import { getResearchRepo } from './provider.js';
 import { RESEARCH_TREE, getResearchNode } from './data/research.js';
-import { adjustBalance } from './shared/wallet.js';
+import { idempotencyGuard } from './shared/idempotency.js';
+import { playerIdForUser } from './shared/player-identity.js';
 import { AppError } from './shared/errors.js';
 import { logger } from './shared/logger.js';
 
@@ -18,8 +19,9 @@ researchRoutes.get('/research', (c) => {
 
 researchRoutes.get('/research/my', jwtAuth, async (c) => {
   const userId = c.get('userId');
+  const playerId = await playerIdForUser(userId);
   const repo = await getResearchRepo();
-  const myResearch = await repo.getAll(userId);
+  const myResearch = await repo.getAll(playerId);
 
   // 전체 트리에 내 진행 상태를 매핑
   const tree = RESEARCH_TREE.map((node) => {
@@ -48,65 +50,34 @@ researchRoutes.get('/research/my', jwtAuth, async (c) => {
 
 // ─── POST /research/:code/levelup — 연구 레벨업 ───
 
-researchRoutes.post('/research/:code/levelup', jwtAuth, async (c) => {
+researchRoutes.post('/research/:code/levelup', jwtAuth, idempotencyGuard, async (c) => {
   const userId = c.get('userId');
+  const playerId = await playerIdForUser(userId);
+  const requestKey = c.get('idempotencyKey');
   const code = c.req.param('code')!;
 
   const node = getResearchNode(code);
   if (!node) throw new AppError('존재하지 않는 연구입니다.', 404, 'RESEARCH_NOT_FOUND');
 
   const repo = await getResearchRepo();
+  const result = await repo.levelUp(playerId, code, requestKey);
 
-  // 선행 연구 검증
-  const myResearch = await repo.getAll(userId);
-  for (const prereq of node.prerequisites) {
-    const pMine = myResearch.find((r) => r.code === prereq.code);
-    if (!pMine || pMine.level < prereq.level) {
-      throw new AppError(
-        `선행 연구가 필요합니다: ${prereq.code} Lv.${prereq.level}`,
-        400,
-        'PREREQUISITE_NOT_MET',
-      );
-    }
-  }
-
-  // 현재 레벨 확인
-  const current = myResearch.find((r) => r.code === code);
-  if (current && current.level >= node.maxLevel) {
-    throw new AppError('이미 최대 레벨입니다.', 400, 'MAX_LEVEL');
-  }
-
-  // 비용 확인 및 차감 (트랜잭션 + 원장)
-  const nextLevel = (current?.level || 0) + 1;
-  const cost = node.costPerLevel(nextLevel);
-  const idempotencyKey = `research-${userId}-${code}-lvl${nextLevel}`;
-
-  // electricity 비용 차감
-  if (cost.electricity && cost.electricity > 0) {
-    await adjustBalance(userId, -cost.electricity, 'research', idempotencyKey, 'electricity', `${node.name} Lv.${nextLevel}`, 'research', code);
-  }
-  // scrap 비용 차감
-  if (cost.scrap && cost.scrap > 0) {
-    await adjustBalance(userId, -cost.scrap, 'research', idempotencyKey + '-scrap', 'scrap', `${node.name} Lv.${nextLevel}`, 'research', code);
-  }
-
-  logger.info({ userId, code, nextLevel, cost, event: 'research_levelup' }, 'Research level up');
-
-  const result = await repo.levelUp(userId, code);
+  logger.info({ userId, playerId, code, level: result.research.level, cost: result.cost, event: 'research_levelup' }, 'Research level up');
 
   return c.json({
-    research: result,
-    cost,
-    nextEffect: node.effectPerLevel(result.level),
+    research: result.research,
+    cost: result.cost,
+    nextEffect: node.effectPerLevel(result.research.level),
   });
+
 });
 
 // ─── POST /research/reset — 연구 초기화 (JWT) ────
 
-researchRoutes.post('/research/reset', jwtAuth, async (c) => {
-  const userId = c.get('userId');
+researchRoutes.post('/research/reset', jwtAuth, idempotencyGuard, async (c) => {
+  const playerId = await playerIdForUser(c.get('userId'));
   const repo = await getResearchRepo();
-  await repo.reset(userId);
+  await repo.reset(playerId);
   return c.json({ status: 'ok' });
 });
 

@@ -1,7 +1,8 @@
 /**
  * JSON 파일 기반 전투 세션 저장소
  */
-import { readFileSync, writeFileSync, renameSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { promoteJsonTempFile } from './shared/json-file.js';
 import { join } from 'node:path';
 import type { BattleRepository } from './repository.js';
 import { STAGES } from './data/stages.js';
@@ -32,7 +33,7 @@ function saveMap<T>(map: Map<string, T>, fp: string, name: string): void {
     writeFileSync(tmp, JSON.stringify(Array.from(map.values()), null, 2), 'utf-8');
     JSON.parse(readFileSync(tmp, 'utf-8'));
     if (existsSync(fp)) copyFileSync(fp, fp + '.bak');
-    renameSync(tmp, fp);
+    promoteJsonTempFile(tmp, fp);
   } catch (err) {
     logger.error({ operation: 'save', file: fp, name, err: (err as Error).message }, `Failed to save ${name}`);
     try { if (existsSync(tmp)) unlinkSync(tmp); } catch {}
@@ -44,7 +45,7 @@ function saveArray(fp: string, name: string): void {
     writeFileSync(tmp, JSON.stringify(events, null, 2), 'utf-8');
     JSON.parse(readFileSync(tmp, 'utf-8'));
     if (existsSync(fp)) copyFileSync(fp, fp + '.bak');
-    renameSync(tmp, fp);
+    promoteJsonTempFile(tmp, fp);
   } catch (err) {
     logger.error({ operation: 'save', file: fp, name, err: (err as Error).message }, `Failed to save ${name}`);
     try { if (existsSync(tmp)) unlinkSync(tmp); } catch {}
@@ -52,6 +53,22 @@ function saveArray(fp: string, name: string): void {
 }
 function ensure() {
   if (!_initialized) { _initialized = true; sessions = loadMap(sessionsFile, 'sessions'); events = loadArray(eventsFile, 'events'); results = loadMap(resultsFile, 'results'); }
+}
+
+const upgradeLocks = new Map<string, Promise<void>>();
+
+async function withUpgradeLock<T>(sessionId: string, action: () => Promise<T>): Promise<T> {
+  const previous = upgradeLocks.get(sessionId) || Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  upgradeLocks.set(sessionId, current);
+  await previous;
+  try {
+    return await action();
+  } finally {
+    if (upgradeLocks.get(sessionId) === current) upgradeLocks.delete(sessionId);
+    release();
+  }
 }
 
 // data/stages.ts 에서 STAGES 임포트
@@ -62,7 +79,10 @@ export const jsonBattleRepo: BattleRepository = {
   async getStageRewards() { return []; },
   async getMechStats() { return null; },
   async createMechStats() {},
-  async getActiveSanctions() { return []; },
+  async getActiveSanctions(userId: string) {
+    const { getAuthRepo } = await import('./provider.js');
+    return (await getAuthRepo()).findActiveSanctions(userId);
+  },
   async getActiveSessions(playerId: string) { ensure(); return Array.from(sessions.values()).filter((s: any) => s.playerId === playerId && s.status === 'active'); },
   async abandonSession(sessionId: string) { ensure(); const s = sessions.get(sessionId); if (s) { s.status = 'abandoned'; sessions.set(sessionId, s); saveMap(sessions, sessionsFile, 'sessions'); } },
 
@@ -73,8 +93,61 @@ export const jsonBattleRepo: BattleRepository = {
   },
 
   async saveBattleEvent(event: any) { ensure(); events.push(event); saveArray(eventsFile, 'events'); },
-  async getUpgradeOffers(sessionId: string) { ensure(); return events.filter((e: any) => e.battleSessionId === sessionId && e.eventType === 'upgrade_offer'); },
-  async saveUpgradeOffer(offer: any) { ensure(); events.push({ ...offer, eventType: 'upgrade_offer' }); saveArray(eventsFile, 'events'); },
+  async getLastBattleEventSequence(sessionId: string): Promise<number> {
+    ensure();
+    return events.reduce((last, event: { battleSessionId: string; eventType: string; sequence?: number }) => {
+      if (event.battleSessionId !== sessionId || event.eventType === 'upgrade_offer') return last;
+      return Math.max(last, event.sequence || 0);
+    }, 0);
+  },
+  async getUpgradeOffers(sessionId: string) {
+    ensure();
+    return events.filter((event: any) => event.battleSessionId === sessionId && event.eventType === 'upgrade_offer');
+  },
+  async saveUpgradeChoices(sessionId: string, level: number, choices: { slot: number; upgradeId: string }[], sessionUpdates: Record<string, unknown>): Promise<boolean> {
+    ensure();
+    return withUpgradeLock(sessionId, async () => {
+      const session = sessions.get(sessionId);
+      if (!session || session.status !== 'active') return false;
+      if (events.some((event: any) => event.battleSessionId === sessionId && event.eventType === 'upgrade_offer' && event.level === level)) {
+        return false;
+      }
+
+      Object.assign(session, sessionUpdates);
+      sessions.set(sessionId, session);
+      const now = new Date().toISOString();
+      for (const choice of choices) {
+        events.push({
+          id: crypto.randomUUID(), battleSessionId: sessionId, level, sequence: level,
+          optionSlot: choice.slot, upgradeId: choice.upgradeId, selected: 0,
+          selectedAt: null, createdAt: now, eventType: 'upgrade_offer',
+        });
+      }
+      saveMap(sessions, sessionsFile, 'sessions');
+      saveArray(eventsFile, 'events');
+      return true;
+    });
+  },
+  async selectUpgradeOffer(sessionId: string, level: number, upgradeId: string, sessionUpdates: Record<string, unknown>): Promise<boolean> {
+    ensure();
+    return withUpgradeLock(sessionId, async () => {
+      const session = sessions.get(sessionId);
+      if (!session || session.status !== 'active') return false;
+      const choices = events.filter((event: any) => event.battleSessionId === sessionId
+        && event.eventType === 'upgrade_offer' && event.level === level);
+      if (choices.length === 0 || choices.some((event: any) => event.selected === 1)) return false;
+      const selected = choices.find((event: any) => event.upgradeId === upgradeId);
+      if (!selected) return false;
+
+      selected.selected = 1;
+      selected.selectedAt = new Date().toISOString();
+      Object.assign(session, sessionUpdates);
+      sessions.set(sessionId, session);
+      saveMap(sessions, sessionsFile, 'sessions');
+      saveArray(eventsFile, 'events');
+      return true;
+    });
+  },
 
   async createBattleResult(result: any) { ensure(); results.set(result.id, result); saveMap(results, resultsFile, 'results'); },
   async getBattleResult(sessionId: string) { ensure(); return Array.from(results.values()).find((r: any) => r.battleSessionId === sessionId) || null; },
@@ -94,4 +167,5 @@ export const jsonBattleRepo: BattleRepository = {
 
 export function resetBattleStores(): void {
   sessions = new Map(); events = []; results = new Map(); _initialized = false;
+  upgradeLocks.clear();
 }

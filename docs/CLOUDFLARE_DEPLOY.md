@@ -27,7 +27,13 @@ npm run build:admin
 npx wrangler deploy --dry-run --outdir .tools/worker-build
 ```
 
-`test:postgres`는 .tools 아래에 독립 PostgreSQL 테스트 DB를 생성합니다. 스키마 재실행, RLS, 회원가입 데이터, 동시 중복 재화 지급과 트랜잭션 롤백을 실제 DB로 검증합니다. Windows에서는 테스트 서버 종료에 대한 실행 권한이 필요할 수 있습니다. 기존 133개 TODO 테스트는 검증된 테스트에 포함하지 않습니다.
+`test:postgres`는 .tools 아래에 독립 PostgreSQL 테스트 DB를 생성합니다. 스키마 재실행, RLS, 회원가입 데이터, 동시 중복 재화 지급과 트랜잭션 롤백을 실제 DB로 검증합니다. GitHub Actions의 PostgreSQL 작업도 이 스크립트를 실행합니다. Windows에서는 테스트 서버 종료에 대한 실행 권한이 필요할 수 있습니다. 기존 TODO 테스트는 이 스크립트가 검증하는 범위에 포함하지 않습니다.
+
+## CI 경로
+
+`.github/workflows/ci.yml`의 `postgres` 작업은 embedded PostgreSQL에서 스키마와 API 통합 확인을 실행합니다. `worker` 작업은 관리자 정적 자산을 빌드하고 `type-check:cloudflare`와 Wrangler dry-run으로 Worker 번들을 확인합니다. dry-run은 실제 Cloudflare 배포나 원격 DB 쓰기를 하지 않습니다.
+
+게임·인증·운영 API의 정식 접두사는 `/api`입니다. Worker는 `/api/*`를 Hono로 보내고 그 외 경로는 관리자 정적 자산으로 처리합니다. 루트 `/health`, `/ready`, `/metrics`는 운영 상태 확인 경로입니다.
 
 ## 설정과 인증 전환
 

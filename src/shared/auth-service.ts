@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { getAuthRepo, getAuthRepoMode } from '../provider.js';
 import { AppError } from './errors.js';
 import { logger, auditLog } from './logger.js';
-import { activeGameUser, sessionTokens, supabaseLogout, supabasePasswordLogin, supabaseRefresh, supabaseSignup, usesSupabaseAuth } from './supabase-auth.js';
+import { activeGameUser, sessionTokens, supabaseLogout, supabasePasswordLogin, supabaseRefresh, supabaseSignup, usesSupabaseAuth, verifySupabaseAccess } from './supabase-auth.js';
 
 const SALT_ROUNDS = 10;
 const ACCESS_EXPIRES = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
@@ -168,7 +168,7 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
 
   // 제재 확인
   const activeSanctions = await repo.findActiveSanctions(user.id);
-  if (activeSanctions.length > 0) {
+  if (activeSanctions.some((sanction) => sanction.type === 'suspension')) {
     throw new AppError('제재된 계정입니다.', 403, 'ACCOUNT_SUSPENDED');
   }
 
@@ -190,7 +190,12 @@ export async function loginUser(email: string, password: string): Promise<AuthRe
 // ─── 토큰 갱신 (rotation) ───────────────────────────
 
 export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
-  if (usesSupabaseAuth()) return supabaseRefresh(refreshToken);
+  if (usesSupabaseAuth()) {
+    const tokens = await supabaseRefresh(refreshToken);
+    const supabaseUser = await verifySupabaseAccess(tokens.accessToken);
+    await activeGameUser(supabaseUser.id);
+    return tokens;
+  }
   const repo = await getAuthRepo();
   const now = new Date();
   const tokenHash = sha256(refreshToken);
@@ -205,17 +210,15 @@ export async function refreshTokens(refreshToken: string): Promise<TokenPair> {
 
   // 2. DB에서 해시 조회 → 존재 + 만료 안 됨 + 취소 안 됨
   const session = await repo.findSessionByTokenHash(tokenHash);
-  if (!session || session.revokedAt !== undefined || new Date(session.expiresAt) < now) {
+  if (!session || session.userId !== payload.sub || session.revokedAt ||
+      !Number.isFinite(Date.parse(session.expiresAt)) || new Date(session.expiresAt) < now) {
     throw new AppError('만료되었거나 취소된 토큰입니다.', 401, 'TOKEN_EXPIRED');
   }
 
-  // 3. 기존 토큰 폐기
+  const user = await activeGameUser(payload.sub);
   await repo.revokeSession(tokenHash);
-
-  // 4. 새 토큰 발급 + 저장
-  const tokens = issueTokens(payload.sub, payload.role || 'user');
+  const tokens = issueTokens(payload.sub, user.role);
   await storeRefreshSession(payload.sub, tokens.refreshToken);
-
   return tokens;
 }
 

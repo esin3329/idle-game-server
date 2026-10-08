@@ -4,12 +4,13 @@
 import { getDb, withPostgresTransaction } from './postgres-connection.js';
 import {
   users, operatorRoles, operatorRolePermissions, operatorPermissions,
-  playerProfiles, walletBalances, currencyLedger, battleSessions, battleResults, securityEvents, operatorGrants, accountSanctions, operatorAccounts, operatorAuditLogs,
+  playerProfiles, walletBalances, currencyLedger, battleSessions, battleResults, securityEvents, operatorGrants, accountSanctions, operatorAuditLogs,
 } from './postgres-schema.js';
 import { eq, and, or, inArray, desc, count, like, type SQL } from 'drizzle-orm';
 import { AppError } from '../shared/errors.js';
 import { postgresWalletRepo } from './postgres-wallet.repository.js';
 import type { AdminRepository } from '../repository.js';
+import { postgresTimestampToIso } from './postgres-timestamps.js';
 
 export const postgresAdminRepo: AdminRepository = {
   async listUsers(limit, offset, search, status) {
@@ -21,7 +22,7 @@ export const postgresAdminRepo: AdminRepository = {
     const rows = await db.select({ id: users.id, email: users.email, nickname: users.nickname, status: users.status, role: users.role, createdAt: users.createdAt })
       .from(users).where(filter).orderBy(desc(users.createdAt), desc(users.id)).limit(limit).offset(offset);
     const total = await db.select({ value: count() }).from(users).where(filter);
-    return { users: rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() })), total: total[0].value };
+    return { users: rows.map((row) => ({ ...row, createdAt: postgresTimestampToIso(row.createdAt) })), total: total[0].value };
   },
   async getUserDetail(userId: string) {
     const db = getDb();
@@ -40,7 +41,7 @@ export const postgresAdminRepo: AdminRepository = {
       lastClaimedAt: walletBalances.lastClaimedAt,
     }).from(walletBalances).where(eq(walletBalances.userId, userId)).limit(1);
     const wallet = rows[0];
-    return wallet ? { ...wallet, lastClaimedAt: wallet.lastClaimedAt.toISOString() } : null;
+    return wallet ? { ...wallet, lastClaimedAt: postgresTimestampToIso(wallet.lastClaimedAt) } : null;
   },
   async getUserLedger(userId: string, limit = 50) {
     const db = getDb();
@@ -167,11 +168,6 @@ export const postgresAdminRepo: AdminRepository = {
     const rows = await query.limit(limit || 50).offset(offset || 0);
     return rows;
   },
-  async listOperators() { return getDb().select({ id: users.id, email: users.email, nickname: users.nickname, role: users.role }).from(users).where(or(eq(users.role, 'operator'), eq(users.role, 'admin'))); },
-  async createOperator(data: typeof operatorAccounts.$inferInsert) { await getDb().insert(operatorAccounts).values(data); return data; },
-  async changeOperatorRole(id, role) { return (await getDb().update(users).set({ role, updatedAt: new Date() }).where(eq(users.id, id)).returning({ id: users.id, role: users.role }))[0]; },
-  async listSecurityEvents(limit = 50, offset = 0, eventType) { return getDb().select().from(securityEvents).where(eventType ? eq(securityEvents.eventType, eventType) : undefined).orderBy(desc(securityEvents.occurredAt)).limit(limit).offset(offset); },
-  async reviewSecurityEvent(id, operatorId, resolution, note) { await getDb().update(securityEvents).set({ reviewedAt: new Date(), reviewedByOperatorId: operatorId, resolution, resolutionNote: note }).where(eq(securityEvents.id, id)); },
   async listAuditLogs(limit = 50, action) { return getDb().select().from(operatorAuditLogs).where(action ? eq(operatorAuditLogs.action, action) : undefined).orderBy(desc(operatorAuditLogs.createdAt)).limit(limit); },
   async getUserSanctions(userId: string) {
     const db = getDb(); const { accountSanctions } = await import("./postgres-schema.js"); const { eq } = await import("drizzle-orm"); return db.select().from(accountSanctions).where(eq(accountSanctions.userId, userId));

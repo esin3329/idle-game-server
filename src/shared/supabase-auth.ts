@@ -82,7 +82,9 @@ export async function activeGameUser(id: string) {
   const user = await repo.findUserById(id);
   if (!user) throw new AppError('게임 계정 연결이 필요합니다.', 403, 'ACCOUNT_NOT_LINKED');
   if (user.status !== 'active') throw new AppError('비활성화된 계정입니다.', 403, 'ACCOUNT_DISABLED');
-  if ((await repo.findActiveSanctions(id)).length) throw new AppError('제재된 계정입니다.', 403, 'ACCOUNT_SUSPENDED');
+  if ((await repo.findActiveSanctions(id)).some((sanction) => sanction.type === 'suspension')) {
+    throw new AppError('제재된 계정입니다.', 403, 'ACCOUNT_SUSPENDED');
+  }
   return user;
 }
 

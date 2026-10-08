@@ -95,3 +95,46 @@ jobs:
           JWT_ACCESS_SECRET: ci-test-access-secret
           JWT_REFRESH_SECRET: ci-test-refresh-secret
         run: npm test
+
+  postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: PostgreSQL schema and API integration
+        run: npm run test:postgres
+
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Install admin dependencies
+        run: npm ci --prefix admin
+
+      - name: Build Worker assets
+        run: npm run build:admin
+
+      - name: Type check Cloudflare Worker
+        run: npm run type-check:cloudflare
+
+      - name: Bundle Worker without deployment
+        run: npx wrangler deploy --dry-run --outdir .tools/worker-build

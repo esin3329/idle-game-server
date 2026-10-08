@@ -1,7 +1,7 @@
 /**
  * MySQL 기반 전투 세션 저장소
  */
-import { eq, and } from 'drizzle-orm';
+import { eq, and, gt, isNull, lte, or, inArray, desc } from 'drizzle-orm';
 import { getDb } from './connection.js';
 import { stages, stageRewards, battleSessions, playerRecords, mechaStats, walletBalances, currencyLedger, battleUpgradeOffers, battleEvents, battleResults, playerStageProgress, accountSanctions, securityEvents } from './schema.js';
 import type { BattleRepository } from '../repository.js';
@@ -24,8 +24,15 @@ export const mysqlBattleRepo: BattleRepository = {
     const db = getDb(); await db.insert(mechaStats).values({ id: crypto.randomUUID(), playerId, ...stats, createdAt: new Date(), updatedAt: new Date() });
   },
 
-  async getActiveSanctions(playerId: string) {
-    const db = getDb(); return db.select().from(accountSanctions).where(and(eq(accountSanctions.userId, playerId), eq(accountSanctions.type, 'suspension'), eq(accountSanctions.status, 'active'))).limit(1);
+  async getActiveSanctions(userId: string) {
+    const db = getDb();
+    return db.select().from(accountSanctions).where(and(
+      eq(accountSanctions.userId, userId),
+      inArray(accountSanctions.type, ['suspension', 'battle_restriction', 'reward_restriction']),
+      eq(accountSanctions.status, 'active'),
+      lte(accountSanctions.startsAt, new Date()),
+      or(isNull(accountSanctions.expiresAt), gt(accountSanctions.expiresAt, new Date())),
+    ));
   },
   async getActiveSessions(playerId: string) {
     const db = getDb(); return db.select().from(battleSessions).where(and(eq(battleSessions.playerId, playerId), eq(battleSessions.status, 'active')));
@@ -47,11 +54,64 @@ export const mysqlBattleRepo: BattleRepository = {
   async saveBattleEvent(event: any) {
     const db = getDb(); await db.insert(battleEvents).values(event);
   },
-  async getUpgradeOffers(sessionId: string) {
-    const db = getDb(); return db.select().from(battleUpgradeOffers).where(eq(battleUpgradeOffers.battleSessionId, sessionId));
+  async getLastBattleEventSequence(sessionId: string) {
+    const db = getDb();
+    const rows = await db.select({ sequence: battleEvents.sequence }).from(battleEvents)
+      .where(eq(battleEvents.battleSessionId, sessionId))
+      .orderBy(desc(battleEvents.sequence))
+      .limit(1);
+    return rows[0]?.sequence || 0;
   },
-  async saveUpgradeOffer(offer: any) {
-    const db = getDb(); await db.insert(battleUpgradeOffers).values(offer);
+  async getUpgradeOffers(sessionId: string) {
+    const db = getDb();
+    return db.select().from(battleUpgradeOffers).where(eq(battleUpgradeOffers.battleSessionId, sessionId));
+  },
+  async saveUpgradeChoices(sessionId: string, level: number, choices: { slot: number; upgradeId: string }[], sessionUpdates: Record<string, unknown>): Promise<boolean> {
+    const db = getDb();
+    return db.transaction(async (tx) => {
+      const sessions = await tx.select({ status: battleSessions.status }).from(battleSessions)
+        .where(eq(battleSessions.id, sessionId)).limit(1).for('update');
+      if (sessions.length === 0 || sessions[0].status !== 'active') return false;
+      const existing = await tx.select({ id: battleUpgradeOffers.id }).from(battleUpgradeOffers)
+        .where(and(eq(battleUpgradeOffers.battleSessionId, sessionId), eq(battleUpgradeOffers.level, level)))
+        .limit(1);
+      if (existing.length > 0) return false;
+
+      await tx.update(battleSessions).set(sessionUpdates).where(eq(battleSessions.id, sessionId));
+      const now = new Date();
+      for (const choice of choices) {
+        await tx.insert(battleUpgradeOffers).values({
+          id: crypto.randomUUID(), battleSessionId: sessionId, level, sequence: level,
+          optionSlot: choice.slot, upgradeId: choice.upgradeId, selected: 0, createdAt: now,
+        });
+      }
+      return true;
+    });
+  },
+  async selectUpgradeOffer(sessionId: string, level: number, upgradeId: string, sessionUpdates: Record<string, unknown>): Promise<boolean> {
+    const db = getDb();
+    return db.transaction(async (tx) => {
+      const sessions = await tx.select({ status: battleSessions.status }).from(battleSessions)
+        .where(eq(battleSessions.id, sessionId)).limit(1).for('update');
+      if (sessions.length === 0 || sessions[0].status !== 'active') return false;
+      const offers = await tx.select().from(battleUpgradeOffers)
+        .where(and(eq(battleUpgradeOffers.battleSessionId, sessionId), eq(battleUpgradeOffers.level, level)))
+        .for('update');
+      if (offers.length === 0 || offers.some((offer) => offer.selected === 1)
+        || !offers.some((offer) => offer.upgradeId === upgradeId)) return false;
+
+      const now = new Date();
+      await tx.update(battleUpgradeOffers)
+        .set({ selected: 1, selectedAt: now })
+        .where(and(
+          eq(battleUpgradeOffers.battleSessionId, sessionId),
+          eq(battleUpgradeOffers.level, level),
+          eq(battleUpgradeOffers.upgradeId, upgradeId),
+          eq(battleUpgradeOffers.selected, 0),
+        ));
+      await tx.update(battleSessions).set(sessionUpdates).where(eq(battleSessions.id, sessionId));
+      return true;
+    });
   },
 
   async createBattleResult(result: any) {

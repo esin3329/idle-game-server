@@ -4,7 +4,7 @@
  * DB_DRIVER=mysql 또는 MySQL 연결 가능 시 provider.ts에서 로드됨.
  * users + playerProfiles + walletBalances 생성을 트랜잭션으로 처리.
  */
-import { eq, and } from 'drizzle-orm';
+import { eq, and, gt, isNull, lte, or } from 'drizzle-orm';
 import { getDb } from './connection.js';
 import { users, playerProfiles, walletBalances, refreshSessions, accountSanctions } from './schema.js';
 import type { User, RefreshSession, Sanction, PlayerProfile } from '../types.js';
@@ -93,10 +93,10 @@ export const mysqlAuthRepo: AuthRepository = {
     const rows = await db.select().from(accountSanctions)
       .where(and(
         eq(accountSanctions.userId, userId),
-        eq(accountSanctions.type, 'suspension'),
         eq(accountSanctions.status, 'active'),
-      ))
-      .limit(1);
+        lte(accountSanctions.startsAt, new Date()),
+        or(isNull(accountSanctions.expiresAt), gt(accountSanctions.expiresAt, new Date())),
+      ));
     return rows.map((r) => ({
       id: r.id, userId: r.userId, type: r.type, status: r.status,
       reasonText: r.reasonText,

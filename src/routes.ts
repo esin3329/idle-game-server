@@ -3,14 +3,15 @@ import type { Player } from './types.js';
 import { toPublicPlayerDto } from './dto.js';
 import { jwtAuth } from './shared/jwt-auth.js';
 import { idempotencyGuard } from './shared/idempotency.js';
-import type { ClaimResponse, UpgradeResponse, BattleResponse } from './dto.js';
-import { NotFoundError, InsufficientResourceError, InternalError, AppError } from './shared/errors.js';
+import type { ClaimResponse, UpgradeResponse } from './dto.js';
+import { NotFoundError, InsufficientResourceError, AppError } from './shared/errors.js';
 import { validatePlayerId, validateJson, createPlayerSchema } from './shared/validator.js';
 import { getRepo, getResearchRepo, getAuthRepo, getWalletRepo } from './provider.js';
 import { logger } from './shared/logger.js';
 import { rateLimit } from './shared/rate-limit.js';
 import { getBalance, adjustBalance, updateEps, updateLastClaimedAt } from './shared/wallet.js';
 import { GAME, calculateProduction, calcResearchBonus, DEFAULT_RESEARCH_BONUS } from './shared/game-math.js';
+import { requirePlayerOwnership } from './shared/player-identity.js';
 
 const routes = new Hono<{ Variables: { parsedBody: { nickname: string }; player: Player; idempotencyKey: string } }>();
 
@@ -19,7 +20,30 @@ async function requirePlayer(id: string): Promise<Player> {
   const repo = await getRepo();
   const player = await repo.getPlayer(id);
   if (!player) throw new NotFoundError('플레이어');
-  return player;
+  const wallet = await getBalance(id);
+  if (!wallet) throw new AppError('지갑을 찾을 수 없습니다.', 404, 'WALLET_NOT_FOUND');
+  return {
+    ...player,
+    electricity: wallet.balance,
+    electricityPerSecond: wallet.electricityPerSecond,
+    lastClaimedAt: wallet.lastClaimedAt,
+  };
+}
+
+async function playersWithWallet(players: Player[]): Promise<Player[]> {
+  const walletRepo = await getWalletRepo();
+  const balances = await walletRepo.getBalances(players.map((player) => player.id));
+  const balancesByPlayerId = new Map(balances.map((balance) => [balance.playerId, balance]));
+  return players.map((player) => {
+    const balance = balancesByPlayerId.get(player.id);
+    if (!balance) throw new AppError('지갑을 찾을 수 없습니다.', 404, 'WALLET_NOT_FOUND');
+    return {
+      ...player,
+      electricity: balance.balance,
+      electricityPerSecond: balance.electricityPerSecond,
+      lastClaimedAt: balance.lastClaimedAt,
+    };
+  });
 }
 
 // 공통: 연구 보너스 조회
@@ -38,7 +62,7 @@ async function getResearchBonus(playerId: string) {
 
 // ─── 플레이어 ──────────────────────────────────────
 
-routes.post('/api/players', validateJson(createPlayerSchema), async (c) => {
+routes.post('/players', validateJson(createPlayerSchema), async (c) => {
   const repo = await getRepo();
   const { nickname } = c.get('parsedBody');
 
@@ -67,27 +91,25 @@ routes.post('/api/players', validateJson(createPlayerSchema), async (c) => {
   return c.json(toPublicPlayerDto(player), 201);
 });
 
-routes.get('/api/players/:id', validatePlayerId, async (c) => {
+routes.get('/players/:id', validatePlayerId, async (c) => {
   const player = await requirePlayer(c.req.param('id')!);
   return c.json(toPublicPlayerDto(player));
 });
 
-routes.get('/api/players', async (c) => {
+routes.get('/players', async (c) => {
   const repo = await getRepo();
-  const players = (await repo.getAllPlayers()).map(toPublicPlayerDto);
-  return c.json(players);
+  const players = await playersWithWallet(await repo.getAllPlayers());
+  return c.json(players.map(toPublicPlayerDto));
 });
 
 // ─── Claim ─────────────────────────────────────────
 
-routes.post('/api/players/:id/claim', validatePlayerId, idempotencyGuard, rateLimit(1, 1000), jwtAuth, async (c) => {
-  const id = c.req.param('id')!;
+routes.post('/players/:id/claim', validatePlayerId, jwtAuth, idempotencyGuard, rateLimit(1, 1000), async (c) => {
+  const id = await requirePlayerOwnership(c.get('userId'), c.req.param('id')!);
   const player = await requirePlayer(id);
 
-  // wallet_balances 기준 lastClaimedAt + eps 사용
-  const walletInfo = await getBalance(id);
-  const refLastClaimed = walletInfo?.lastClaimedAt || player.lastClaimedAt;
-  const refEps = walletInfo?.electricityPerSecond || player.electricityPerSecond;
+  const refLastClaimed = player.lastClaimedAt;
+  const refEps = player.electricityPerSecond;
 
   const researchBonus = await getResearchBonus(id);
 
@@ -104,19 +126,15 @@ routes.post('/api/players/:id/claim', validatePlayerId, idempotencyGuard, rateLi
   const nowISO = new Date().toISOString();
   const idempotencyKey = c.get('idempotencyKey');
 
-  // wallet_balances + currency_ledger (트랜잭션)
-  await adjustBalance(id, produced, 'claim', idempotencyKey, 'electricity', '방치 생산 수집', 'player', id);
-  // lastClaimedAt 갱신 (wallet)
+  const adjusted = await adjustBalance(id, produced, 'claim', idempotencyKey, 'electricity', '방치 생산 수집', 'player', id);
+  if (!adjusted.success) throw new AppError('이미 처리된 청구 요청입니다.', 409, 'DUPLICATE_REQUEST');
   await updateLastClaimedAt(id, new Date(nowISO));
 
-  // players 테이블 동기화
-  const repo = await getRepo();
-  const updated = await repo.updatePlayer(id, {
-    electricity: player.electricity + produced,
+  const updated = {
+    ...player,
+    electricity: adjusted.balanceAfter,
     lastClaimedAt: nowISO,
-  });
-
-  if (!updated) throw new InternalError();
+  };
 
   logger.info({ playerId: id, claimed: produced, elapsed: elapsedSeconds, event: 'claim' });
 
@@ -128,14 +146,12 @@ routes.post('/api/players/:id/claim', validatePlayerId, idempotencyGuard, rateLi
   } satisfies ClaimResponse);
 });
 
-routes.get('/api/players/:id/claim', validatePlayerId, async (c) => {
+routes.get('/players/:id/claim', validatePlayerId, async (c) => {
   const player = await requirePlayer(c.req.param('id')!);
   const id = c.req.param('id')!;
 
-  // wallet_balances 기준
-  const walletInfo = await getBalance(id);
-  const refLastClaimed = walletInfo?.lastClaimedAt || player.lastClaimedAt;
-  const refEps = walletInfo?.electricityPerSecond || player.electricityPerSecond;
+  const refLastClaimed = player.lastClaimedAt;
+  const refEps = player.electricityPerSecond;
 
   const researchBonus = await getResearchBonus(id);
 
@@ -149,7 +165,7 @@ routes.get('/api/players/:id/claim', validatePlayerId, async (c) => {
 
 // ─── 업그레이드 ────────────────────────────────────
 
-routes.get('/api/players/:id/upgrade', validatePlayerId, async (c) => {
+routes.get('/players/:id/upgrade', validatePlayerId, async (c) => {
   const player = await requirePlayer(c.req.param('id')!);
   const cost = player.electricityPerSecond * GAME.UPGRADE_COST_MULTIPLIER;
 
@@ -161,8 +177,8 @@ routes.get('/api/players/:id/upgrade', validatePlayerId, async (c) => {
   });
 });
 
-routes.post('/api/players/:id/upgrade', validatePlayerId, idempotencyGuard, rateLimit(2, 1000), jwtAuth, async (c) => {
-  const id = c.req.param('id')!;
+routes.post('/players/:id/upgrade', validatePlayerId, jwtAuth, idempotencyGuard, rateLimit(2, 1000), async (c) => {
+  const id = await requirePlayerOwnership(c.get('userId'), c.req.param('id')!);
   const player = await requirePlayer(id);
   const cost = player.electricityPerSecond * GAME.UPGRADE_COST_MULTIPLIER;
 
@@ -171,19 +187,16 @@ routes.post('/api/players/:id/upgrade', validatePlayerId, idempotencyGuard, rate
   }
 
   const idempotencyKey = c.get('idempotencyKey');
+  const adjusted = await adjustBalance(id, -cost, 'upgrade', idempotencyKey, 'electricity', 'EPS 업그레이드 비용', 'player', id);
+  if (!adjusted.success) throw new AppError('이미 처리된 업그레이드 요청입니다.', 409, 'DUPLICATE_REQUEST');
+  const nextEps = player.electricityPerSecond + 1;
+  await updateEps(id, nextEps);
 
-  // wallet_balances 차감 + 원장 기록 (트랜잭션)
-  await adjustBalance(id, -cost, 'upgrade', idempotencyKey, 'electricity', 'EPS 업그레이드 비용', 'player', id);
-  // wallet_balances EPS 갱신
-  await updateEps(id, player.electricityPerSecond + 1);
-
-  const repo = await getRepo();
-  const updated = await repo.updatePlayer(id, {
-    electricity: player.electricity - cost,
-    electricityPerSecond: player.electricityPerSecond + 1,
-  });
-
-  if (!updated) throw new InternalError();
+  const updated = {
+    ...player,
+    electricity: adjusted.balanceAfter,
+    electricityPerSecond: nextEps,
+  };
 
   logger.info({ playerId: id, cost, newEps: updated.electricityPerSecond, event: 'upgrade' });
 
@@ -192,14 +205,12 @@ routes.post('/api/players/:id/upgrade', validatePlayerId, idempotencyGuard, rate
 
 // ─── 방치 보상 ─────────────────────────────────────
 
-routes.get('/api/players/:id/idle-rewards', validatePlayerId, async (c) => {
+routes.get('/players/:id/idle-rewards', validatePlayerId, async (c) => {
   const player = await requirePlayer(c.req.param('id')!);
   const id = c.req.param('id')!;
 
-  // wallet_balances 기준
-  const walletInfo = await getBalance(id);
-  const refLastClaimed = walletInfo?.lastClaimedAt || player.lastClaimedAt;
-  const refEps = walletInfo?.electricityPerSecond || player.electricityPerSecond;
+  const refLastClaimed = player.lastClaimedAt;
+  const refEps = player.electricityPerSecond;
 
   const researchBonus = await getResearchBonus(id);
 
@@ -222,40 +233,6 @@ routes.get('/api/players/:id/idle-rewards', validatePlayerId, async (c) => {
   });
 });
 
-// ─── 전투 ──────────────────────────────────────────
-
-routes.post('/api/players/:id/battle', validatePlayerId, rateLimit(1, 3000), idempotencyGuard, jwtAuth, async (c) => {
-  const id = c.req.param('id')!;
-  const player = await requirePlayer(id);
-  const playerPower = player.electricityPerSecond * GAME.COMBAT_POWER_PER_EPS;
-
-  const enemyVariance = 1.0 + (Math.random() * GAME.ENEMY_POWER_VARIANCE * 2 - GAME.ENEMY_POWER_VARIANCE);
-  const enemyPower = Math.max(1, Math.floor(playerPower * enemyVariance));
-
-  const enemyNames = ['좀비', '슬라임', '고블린', '스켈레톤', '도적', '트롤', '다크메이지', '미믹'];
-  const enemyName = enemyNames[Math.floor(Math.random() * enemyNames.length)];
-
-  const won = playerPower >= enemyPower;
-  const baseReward = player.electricityPerSecond * GAME.BATTLE_REWARD_PER_EPS;
-  const reward = won
-    ? Math.floor(baseReward * (GAME.BATTLE_REWARD_MIN_RATIO + Math.random() * (GAME.BATTLE_REWARD_MAX_RATIO - GAME.BATTLE_REWARD_MIN_RATIO)))
-    : 0;
-
-  const idempotencyKey = c.get('idempotencyKey');
-
-  if (reward > 0) {
-    // wallet_balances 증가 + 원장 기록 (트랜잭션)
-    await adjustBalance(id, reward, 'battle', idempotencyKey, 'electricity', `전투 승리 (${enemyName})`, 'player', id);
-  }
-
-  const repo = await getRepo();
-  const updated = await repo.updatePlayer(id, { electricity: player.electricity + reward });
-  if (!updated) throw new InternalError();
-
-  logger.info({ playerId: id, won, reward, enemy: enemyName, event: 'battle' });
-
-  return c.json({ player: toPublicPlayerDto(updated), won, reward, enemyName, enemyPower, playerPower } satisfies BattleResponse);
-});
 
 // ─── 지갑 ──────────────────────────────────────────
 
@@ -277,15 +254,16 @@ routes.get('/wallet', jwtAuth, async (c) => {
   return c.json({
     playerId: profile.playerId,
     electricity: balance.balance,
+    scrap: balance.scrap,
     electricityPerSecond: balance.electricityPerSecond,
   });
 });
 
 // ─── 랭킹 ──────────────────────────────────────────
 
-routes.get('/api/rankings', async (c) => {
+routes.get('/rankings', async (c) => {
   const repo = await getRepo();
-  const players = await repo.getAllPlayers();
+  const players = await playersWithWallet(await repo.getAllPlayers());
 
   const rankings = players
     .map((player) => {

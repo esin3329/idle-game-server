@@ -6,13 +6,14 @@ import { getDb } from './postgres-connection.js';
 import { partsInventory, equipSlots, mechaConfigs, itemLedger } from './postgres-schema.js';
 import type { PlayerPart, EquipSlot, MechaConfig } from '../types.js';
 import type { PartsRepository, MechaConfigRepository } from '../repository.js';
+import { postgresTimestampToIso } from './postgres-timestamps.js';
 
 function rowToPart(row: typeof partsInventory.$inferSelect): PlayerPart {
   return {
     id: row.id, playerId: row.playerId,
     partCode: row.partCode, partType: row.partType as PlayerPart['partType'],
     level: row.level, equipped: row.equipped as 0 | 1,
-    createdAt: row.createdAt.toISOString(),
+    createdAt: postgresTimestampToIso(row.createdAt),
   };
 }
 
@@ -20,7 +21,7 @@ function rowToEquip(row: typeof equipSlots.$inferSelect): EquipSlot {
   return {
     id: row.id, playerId: row.playerId, frame: row.frame, weapon: row.weapon,
     core: row.core, module: row.module,
-    updatedAt: row.updatedAt.toISOString(),
+    updatedAt: postgresTimestampToIso(row.updatedAt),
   };
 }
 
@@ -57,7 +58,7 @@ export const postgresPartsRepo: PartsRepository = {
       source: 'grant', referenceType: 'part', referenceId: id,
       idempotencyKey: id, createdAt: now,
     });
-    return { id, playerId, partCode, partType: partType as PlayerPart['partType'], level: 1, equipped: 0, createdAt: now.toISOString() };
+    return { id, playerId, partCode, partType: partType as PlayerPart['partType'], level: 1, equipped: 0, createdAt: postgresTimestampToIso(now) };
   },
 
   async equipPart(playerId: string, partCode: string, partType: string): Promise<void> {
@@ -117,8 +118,8 @@ function rowToConfig(row: typeof mechaConfigs.$inferSelect): MechaConfig {
     id: row.id, playerId: row.playerId, name: row.name,
     frame: row.frame, weapon: row.weapon, core: row.core, module: row.module,
     isActive: row.isActive as 0 | 1,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
+    createdAt: postgresTimestampToIso(row.createdAt),
+    updatedAt: postgresTimestampToIso(row.updatedAt),
   };
 }
 
@@ -134,12 +135,13 @@ export const postgresMechaConfigRepo: MechaConfigRepository = {
     const now = new Date();
     const id = crypto.randomUUID();
     await db.insert(mechaConfigs).values({ id, playerId, name, frame, weapon, core, module, isActive: 0, createdAt: now, updatedAt: now });
-    return { id, playerId, name, frame, weapon, core, module, isActive: 0, createdAt: now.toISOString(), updatedAt: now.toISOString() };
+    return { id, playerId, name, frame, weapon, core, module, isActive: 0, createdAt: postgresTimestampToIso(now), updatedAt: postgresTimestampToIso(now) };
   },
 
-  async updateConfig(id: string, updates: Partial<Omit<MechaConfig, 'id' | 'playerId' | 'createdAt'>>): Promise<MechaConfig | null> {
+  async updateConfig(id: string, playerId: string, updates: Partial<Omit<MechaConfig, 'id' | 'playerId' | 'createdAt'>>): Promise<MechaConfig | null> {
     const db = getDb();
-    const existing = await db.select().from(mechaConfigs).where(eq(mechaConfigs.id, id)).limit(1);
+    const ownerFilter = and(eq(mechaConfigs.id, id), eq(mechaConfigs.playerId, playerId));
+    const existing = await db.select().from(mechaConfigs).where(ownerFilter).limit(1);
     if (existing.length === 0) return null;
     const setData: Record<string, unknown> = { updatedAt: new Date() };
     if (updates.name !== undefined) setData.name = updates.name;
@@ -148,8 +150,8 @@ export const postgresMechaConfigRepo: MechaConfigRepository = {
     if (updates.core !== undefined) setData.core = updates.core;
     if (updates.module !== undefined) setData.module = updates.module;
     if (updates.isActive !== undefined) setData.isActive = updates.isActive;
-    await db.update(mechaConfigs).set(setData).where(eq(mechaConfigs.id, id));
-    const updated = await db.select().from(mechaConfigs).where(eq(mechaConfigs.id, id)).limit(1);
+    await db.update(mechaConfigs).set(setData).where(ownerFilter);
+    const updated = await db.select().from(mechaConfigs).where(ownerFilter).limit(1);
     return updated.length > 0 ? rowToConfig(updated[0]) : null;
   },
 
@@ -169,10 +171,10 @@ export const postgresMechaConfigRepo: MechaConfigRepository = {
   async deleteConfig(id: string, playerId: string): Promise<boolean> {
     const db = getDb();
     const target = await db.select({ id: mechaConfigs.id }).from(mechaConfigs)
-      .where(eq(mechaConfigs.id, id)).limit(1);
+      .where(and(eq(mechaConfigs.id, id), eq(mechaConfigs.playerId, playerId))).limit(1);
     if (target.length === 0) return false;
-    const result = await db.delete(mechaConfigs).where(and(eq(mechaConfigs.id, id), eq(mechaConfigs.playerId, playerId)));
-    return (result.rowCount ?? 0) > 0;
+    await db.delete(mechaConfigs).where(and(eq(mechaConfigs.id, id), eq(mechaConfigs.playerId, playerId)));
+    return true;
   },
 
   async getActiveConfig(playerId: string): Promise<MechaConfig | null> {

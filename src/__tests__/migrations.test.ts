@@ -13,11 +13,13 @@ describe('Drizzle migrations', () => {
       '0001_battle',
       '0002_remaining',
       '0005_gameops_ai',
+      '0006_crafting_idempotency',
+      '0007_battle_upgrade_option_constraints',
     ]);
   });
 
   it('separates SQL statements for the Drizzle migrator', async () => {
-    for (const tag of ['0000_init', '0001_battle', '0002_remaining', '0005_gameops_ai']) {
+    for (const tag of ['0000_init', '0001_battle', '0002_remaining', '0005_gameops_ai', '0006_crafting_idempotency', '0007_battle_upgrade_option_constraints']) {
       const migration = await readFile(resolve(`src/db/migrations/${tag}.sql`), 'utf8');
       const stmtCount = (migration.match(/--> statement-breakpoint/g) ?? []).length;
       expect(stmtCount).toBeGreaterThanOrEqual(1);

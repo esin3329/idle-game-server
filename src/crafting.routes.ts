@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
+import { idempotencyGuard } from './shared/idempotency.js';
 import { jwtAuth } from './shared/jwt-auth.js';
-
-import { getCraftingRepo, getPartsRepo } from './provider.js';
-import { BLUEPRINTS, getBlueprint, randomBlueprintByDropWeight } from './data/crafting.js';
+import { getCraftingRepo } from './provider.js';
+import { BLUEPRINTS, getBlueprint } from './data/crafting.js';
 import { AppError } from './shared/errors.js';
+import { playerIdForUser } from './shared/player-identity.js';
 
 const craftingRoutes = new Hono<{ Variables: { userId: string; parsedBody: Record<string, unknown> } }>();
 
@@ -16,9 +17,9 @@ craftingRoutes.get('/crafting/blueprints', (c) => {
 // ─── GET /crafting/my-blueprints — 내 설계도 ─────
 
 craftingRoutes.get('/crafting/my-blueprints', jwtAuth, async (c) => {
-  const userId = c.get('userId');
+  const playerId = await playerIdForUser(c.get('userId'));
   const repo = await getCraftingRepo();
-  const list = await repo.getBlueprints(userId);
+  const list = await repo.getBlueprints(playerId);
   const details = list.map((bp) => {
     const data = getBlueprint(bp.blueprintCode);
     return { ...bp, ...data };
@@ -26,65 +27,39 @@ craftingRoutes.get('/crafting/my-blueprints', jwtAuth, async (c) => {
   return c.json(details);
 });
 
-// ─── POST /crafting/drop — 랜덤 설계도 드롭 ────
-
-craftingRoutes.post('/crafting/drop', jwtAuth, async (c) => {
-  const userId = c.get('userId');
-  const bp = randomBlueprintByDropWeight();
-  const repo = await getCraftingRepo();
-
-  const already = await repo.hasBlueprint(userId, bp.code);
-  if (already) {
-    return c.json({ message: '이미 보유한 설계도입니다.', blueprint: bp.code, duplicate: true });
-  }
-
-  const acquired = await repo.grantBlueprint(userId, bp.code);
-  return c.json({ message: `${bp.name} 획득!`, blueprint: { ...bp, id: acquired.id, acquiredAt: acquired.acquiredAt } }, 201);
-});
 
 // ─── GET /crafting/queue — 제작 대기열 ─────────
 
 craftingRoutes.get('/crafting/queue', jwtAuth, async (c) => {
-  const userId = c.get('userId');
+  const playerId = await playerIdForUser(c.get('userId'));
   const repo = await getCraftingRepo();
-  const queue = await repo.getQueue(userId);
-  const completable = await repo.getCompletable(userId);
+  const queue = await repo.getQueue(playerId);
+  const completable = await repo.getCompletable(playerId);
   return c.json({ queue, completable: completable.length });
 });
 
 // ─── POST /crafting/:blueprintCode/start — 제작 시작 ──
 
-craftingRoutes.post('/crafting/:blueprintCode/start', jwtAuth, async (c) => {
-  const userId = c.get('userId');
+craftingRoutes.post('/crafting/:blueprintCode/start', jwtAuth, idempotencyGuard, async (c) => {
+  const playerId = await playerIdForUser(c.get('userId'));
   const blueprintCode = c.req.param('blueprintCode')!;
 
   const bpData = getBlueprint(blueprintCode);
   if (!bpData) throw new AppError('존재하지 않는 설계도입니다.', 404, 'BLUEPRINT_NOT_FOUND');
 
   const repo = await getCraftingRepo();
-  const has = await repo.hasBlueprint(userId, blueprintCode);
-  if (!has) throw new AppError('설계도를 보유하지 않았습니다.', 400, 'BLUEPRINT_NOT_OWNED');
-
-  const craft = await repo.startCraft(userId, blueprintCode);
+  const craft = await repo.startCraft(playerId, blueprintCode, c.get('idempotencyKey'));
   return c.json(craft, 201);
 });
 
 // ─── POST /crafting/:craftId/complete — 제작 완료 ──
 
-craftingRoutes.post('/crafting/:craftId/complete', jwtAuth, async (c) => {
-  const userId = c.get('userId');
+craftingRoutes.post('/crafting/:craftId/complete', jwtAuth, idempotencyGuard, async (c) => {
+  const playerId = await playerIdForUser(c.get('userId'));
   const craftId = c.req.param('craftId')!;
 
   const repo = await getCraftingRepo();
-  const result = await repo.completeCraft(userId, craftId);
-
-  if (process.env.DB_DRIVER !== 'postgres') {
-  // 파츠 지급 (PartsRepository)
-  const partsRepo = await getPartsRepo();
-  const bpData = BLUEPRINTS.find((b) => b.partCode === result.partCode);
-  const partType = bpData?.partType || 'module';
-  await partsRepo.grantPart(userId, result.partCode, partType);
-  }
+  const result = await repo.completeCraft(playerId, craftId);
 
   return c.json({ message: '제작 완료!', partId: result.partId, partCode: result.partCode }, 200);
 });

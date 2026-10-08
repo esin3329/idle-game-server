@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, renameSync, existsSync, unlinkSync, copyFi
 import { join } from 'node:path';
 import type { Player } from './types.js';
 import { logger } from './shared/logger.js';
+import { promoteJsonTempFile } from './shared/json-file.js';
 
 // ─── 데이터 파일 경로 ────────────────────────────────
 
@@ -162,13 +163,12 @@ function saveToFile(): void {
     throw new Error(`Failed to create backup file: ${msg}`);
   }
 
-  // 5. 임시 파일을 메인으로 승격 (원자적 rename — POSIX 원자성 보장)
+  // 5. 임시 파일을 메인으로 승격 (같은 디렉터리의 검증된 임시 파일).
   try {
-    renameSync(tmpFile, dataFile);
+    promoteJsonTempFile(tmpFile, dataFile);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ operation: 'renameToMain', dataFile, tmpFile, err: msg }, 'Failed to promote temp file');
-    // tmp 정리 시도
     try { if (existsSync(tmpFile)) unlinkSync(tmpFile); } catch { /* best effort */ }
     throw new Error(`Failed to persist data: ${msg}`);
   }

@@ -156,6 +156,7 @@ app.get('/ready', async (c) => {
 app.get('/metrics', (c) => c.json(getMetrics()));
 
 const api = new Hono();
+api.route('/', routes);
 api.route('/', authRoutes);
 api.route('/', stagesRoutes);
 api.route('/', battleRoutes);
@@ -165,7 +166,5 @@ api.route('/', researchRoutes);
 api.route('/', craftingRoutes);
 api.route('/', upgradesRoutes);
 api.route('/', adminRoutes);
-app.route('/', routes);
-app.route('/', api);
 app.route('/api', api);
 app.get('/api/health', (c) => c.json({ status: 'ok' }));

@@ -143,11 +143,6 @@ export const mysqlAdminRepo: AdminRepository = {
     const rows = await query.limit(limit || 50).offset(offset || 0);
     return rows;
   },
-  async listOperators() { return []; },
-  async createOperator(d: any) { return d; },
-  async changeOperatorRole(id: string, r: string) { return { id, role: r }; },
-  async listSecurityEvents() { return []; },
-  async reviewSecurityEvent() {},
   async listAuditLogs() { return []; },
   async getUserSanctions(userId: string) {
     const db = getDb(); const { accountSanctions } = await import("./schema.js"); const { eq } = await import("drizzle-orm"); return db.select().from(accountSanctions).where(eq(accountSanctions.userId, userId));

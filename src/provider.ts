@@ -1,10 +1,16 @@
 /**
- * 저장소 provider — DB_DRIVER 환경변수에 따라 JSON 또는 MySQL 선택
+ * 저장소 provider — DB_DRIVER 환경변수에 따라 저장소를 선택
  *
- * DB_DRIVER=mysql → MySQL
- * 그 외          → JSON 파일 (기본값)
+ * DB_DRIVER=postgres → PostgreSQL
+ * DB_DRIVER=mysql    → MySQL (연결 실패 시 종료)
+ * DB_DRIVER=json     → JSON 파일 (개발/테스트 전용)
+ * 미설정             → 개발 환경에서만 MySQL 연결 실패 시 JSON으로 전환
  */
 import type { PlayerRepository, AuthRepository, WalletRepository, PartsRepository, MechaConfigRepository, ResearchRepository, CraftingRepository, BattleRepository, AdminRepository } from './repository.js';
+
+function allowDevelopmentJsonFallback(): boolean {
+  return process.env.DB_DRIVER === undefined && process.env.NODE_ENV !== 'production';
+}
 
 // ─── PlayerRepository ─────────────────────────────
 
@@ -13,7 +19,6 @@ async function loadJsonRepo(): Promise<PlayerRepository> {
   return {
     createPlayer: async (p) => {
       const player = createPlayer(p);
-      // wallet_balances도 함께 생성 (adjustBalance 호환)
       try {
         const { jsonAuthRepo } = await import('./store-auth.js');
         await jsonAuthRepo.createWallet({
@@ -27,7 +32,10 @@ async function loadJsonRepo(): Promise<PlayerRepository> {
           createdAt: p.createdAt,
           updatedAt: p.updatedAt,
         });
-      } catch { /* best effort */ }
+      } catch (err) {
+        deletePlayer(p.id);
+        throw err;
+      }
       return player;
     },
     getPlayer: (id) => Promise.resolve(getPlayer(id)),
@@ -61,8 +69,10 @@ export async function getRepo(): Promise<PlayerRepository> {
       const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
       await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
     } catch (err) {
+      _repo = null;
+      if (!allowDevelopmentJsonFallback()) throw err;
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`MySQL unavailable (${msg}), falling back to JSON store. Set DB_DRIVER=json to suppress this warning.`);
+      console.warn(`MySQL unavailable (${msg}), falling back to JSON store in development.`);
       _repo = await loadJsonRepo();
     }
   }
@@ -108,8 +118,11 @@ export async function getAuthRepo(): Promise<AuthRepository> {
       await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
       _authRepoMode = 'mysql';
     } catch (err) {
+      _authRepo = null;
+      _authRepoMode = null;
+      if (!allowDevelopmentJsonFallback()) throw err;
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`MySQL unavailable for auth repo (${msg}), falling back to JSON store.`);
+      console.warn(`MySQL unavailable for auth repo (${msg}), falling back to JSON store in development.`);
       _authRepo = await loadJsonAuthRepo();
       _authRepoMode = 'json';
     }
@@ -163,8 +176,11 @@ export async function getWalletRepo(): Promise<WalletRepository> {
       await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
       _walletRepoMode = 'mysql';
     } catch (err) {
+      _walletRepo = null;
+      _walletRepoMode = null;
+      if (!allowDevelopmentJsonFallback()) throw err;
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(`MySQL unavailable for wallet repo (${msg}), falling back to JSON store.`);
+      console.warn(`MySQL unavailable for wallet repo (${msg}), falling back to JSON store in development.`);
       _walletRepo = await loadJsonWalletRepo();
       _walletRepoMode = 'json';
     }
@@ -214,6 +230,8 @@ export async function getPartsRepo(): Promise<PartsRepository> {
       const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
       await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
     } catch (err) {
+      _partsRepo = null;
+      if (!allowDevelopmentJsonFallback()) throw err;
       _partsRepo = await loadJsonPartsRepo();
     }
   }
@@ -245,7 +263,8 @@ export async function getMechaConfigRepo(): Promise<MechaConfigRepository> {
       const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
       await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
       _configsRepo = mysqlMechaConfigRepo;
-    } catch {
+    } catch (err) {
+      if (!allowDevelopmentJsonFallback()) throw err;
       const { jsonMechaConfigRepo } = await import('./store-parts.js');
       _configsRepo = jsonMechaConfigRepo;
     }
@@ -278,7 +297,8 @@ export async function getResearchRepo(): Promise<ResearchRepository> {
       const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
       await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
       _researchRepo = mysqlResearchRepo;
-    } catch {
+    } catch (err) {
+      if (!allowDevelopmentJsonFallback()) throw err;
       const { jsonResearchRepo } = await import('./store-research.js');
       _researchRepo = jsonResearchRepo;
     }
@@ -311,7 +331,8 @@ export async function getCraftingRepo(): Promise<CraftingRepository> {
       const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
       await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
       _craftingRepo = mysqlCraftingRepo;
-    } catch {
+    } catch (err) {
+      if (!allowDevelopmentJsonFallback()) throw err;
       const { jsonCraftingRepo } = await import('./store-crafting.js');
       _craftingRepo = jsonCraftingRepo;
     }
@@ -344,7 +365,8 @@ export async function getBattleRepo(): Promise<BattleRepository> {
       const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000));
       await Promise.race([getPool().query('SELECT 1'), timeoutPromise]);
       _battleRepo = mysqlBattleRepo;
-    } catch {
+    } catch (err) {
+      if (!allowDevelopmentJsonFallback()) throw err;
       const { jsonBattleRepo } = await import('./store-battle.js');
       _battleRepo = jsonBattleRepo;
     }
@@ -377,7 +399,8 @@ export async function getAdminRepo(): Promise<AdminRepository> {
       const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 2000));
       await Promise.race([getPool().query('SELECT 1'), timeout]);
       _adminRepo = mysqlAdminRepo;
-    } catch {
+    } catch (err) {
+      if (!allowDevelopmentJsonFallback()) throw err;
       const { jsonAdminRepo } = await import('./store-admin.js');
       _adminRepo = jsonAdminRepo;
     }

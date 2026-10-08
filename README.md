@@ -29,6 +29,12 @@ Hono와 TypeScript로 만든 방치형 메카 게임 서버입니다. 인증, �
 - **운영 도구** — 역할 기반 관리자 API와 React 관리자 페이지, 제재·재화 지급·보안 이벤트·감사 로그
 - **운영 엔드포인트** — health/ready, metrics, 구조화 로그, Cloudflare Worker의 정적 관리자 페이지 제공
 
+## Public API 경로
+
+인증·플레이어·스테이지·전투·파츠·연구·제작·관리자 애플리케이션 경로는 `/api/...`를 사용합니다. 예: `/api/auth/login`, `/api/players/:id`, `/api/stages`, `/api/battles/start`, `/api/admin/users`. 루트 경로의 `/health`, `/ready`, `/metrics`는 운영 상태 확인용입니다. 레거시 애플리케이션 루트 경로(`/auth`, `/parts`, `/stages` 등)는 더 이상 API 별칭으로 제공하지 않습니다.
+
+Unity는 경로에 `/api`를 포함해 요청합니다. 서버 주소는 origin으로 설정하며, 기존 설정처럼 끝에 `/api`가 있어도 클라이언트 URL 해석기가 중복 접두사를 제거합니다. Worker는 `/api/*` 요청을 Hono API로 전달하고 그 밖의 경로는 관리자 정적 자산에 사용합니다.
+
 ## 전투 검증 경계
 
 전투 세션은 서버가 생성하고 관리합니다. 진행 요청의 경과 시간·처치 수·코어 에너지·보스 정보와 강화 선택을 검증하며, 종료 요청에서는 세션에 누적된 값과 결과 보고를 대조하고 서버가 보상을 계산합니다.
@@ -37,10 +43,10 @@ Hono와 TypeScript로 만든 방치형 메카 게임 서버입니다. 인증, �
 
 ~~~text
 Client
-  ├─ POST /battles/start
-  ├─ POST /battles/:sessionId/progress
-  ├─ POST /battles/:sessionId/upgrades/select
-  └─ POST /battles/:sessionId/finish
+  ├─ POST /api/battles/start
+  ├─ POST /api/battles/:sessionId/progress
+  ├─ POST /api/battles/:sessionId/upgrades/select
+  └─ POST /api/battles/:sessionId/finish
                  ↓
       session state validation
                  ↓
@@ -103,12 +109,18 @@ Cloudflare 개발 실행 명령은 관리자 UI를 빌드한 뒤 Worker와 함�
 
 ~~~bash
 npm run type-check
+npm run type-check:cloudflare
 npm test
 npm run build
 npm run test:postgres
+npm ci --prefix admin
+npm run build:admin
+npx wrangler deploy --dry-run --outdir .tools/worker-build
 ~~~
 
-GitHub Actions의 현재 workflow는 Node.js 20·22에서 타입 검사, Vitest, 빌드, npm audit를 실행합니다. 별도 통합 작업은 MySQL 8을 띄워 마이그레이션·전투 시드·테스트를 실행합니다. <code>npm run test:postgres</code>는 별도 PostgreSQL 통합 확인 스크립트이며 현재 GitHub Actions workflow 단계에는 포함되어 있지 않습니다. 저장소에는 아직 미완료 TODO 테스트도 있으므로 테스트 수나 DB 통합 범위를 완성된 커버리지로 해석하지 않습니다.
+GitHub Actions는 Node.js 20·22에서 서버 타입 검사·Vitest·빌드·npm audit을 실행합니다. 별도 PostgreSQL 작업은 `npm run test:postgres`로 마이그레이션과 실제 PostgreSQL 통합 시나리오를 확인합니다. Worker 작업은 관리자 자산을 빌드하고 Cloudflare 타입 검사와 Wrangler dry-run 번들을 수행하며 실제 배포는 하지 않습니다. MySQL 작업은 별도 MySQL 8 서비스를 사용합니다. 저장소에는 아직 TODO 테스트가 있으므로 테스트 수나 DB 통합 범위를 완성된 커버리지로 해석하지 않습니다.
+
+`npm audit`은 개발 의존성까지 검사합니다. `package.json`의 `overrides`는 아직 수정되지 않은 상위 의존성 범위(`drizzle-kit` → `esbuild`, `wrangler` → `miniflare` → `sharp`, `autocannon` → `hyperid` → `uuid`)를 보안 수정 버전으로 재정의합니다. 상위 패키지에서 수정 버전을 제공하면 override를 재검토하고 제거하세요.
 
 ## 문서
 

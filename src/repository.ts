@@ -63,9 +63,11 @@ export interface BalanceResult {
   playerId: string;
   currency: string;
   balance: number;
+  scrap: number;
   electricityPerSecond: number;
   lastClaimedAt: string;
 }
+
 
 export interface LedgerEntry {
   id: string;
@@ -90,6 +92,7 @@ export interface AdjustBalanceParams {
 
 export interface WalletRepository {
   getBalance(playerId: string): Promise<BalanceResult | null>;
+  getBalances(playerIds: string[]): Promise<BalanceResult[]>;
   adjustBalance(params: AdjustBalanceParams): Promise<{ balanceAfter: number; success: boolean }>;
   updateEps(playerId: string, newEps: number): Promise<void>;
   updateLastClaimedAt(playerId: string, claimedAt: string): Promise<void>;
@@ -120,7 +123,7 @@ import type { PlayerPart, EquipSlot, MechaConfig } from './types.js';
 export interface MechaConfigRepository {
   getConfigs(playerId: string): Promise<MechaConfig[]>;
   createConfig(playerId: string, name: string, frame: string, weapon: string, core: string, module: string): Promise<MechaConfig>;
-  updateConfig(id: string, updates: Partial<Omit<MechaConfig, 'id' | 'playerId' | 'createdAt'>>): Promise<MechaConfig | null>;
+  updateConfig(id: string, playerId: string, updates: Partial<Omit<MechaConfig, 'id' | 'playerId' | 'createdAt'>>): Promise<MechaConfig | null>;
   activateConfig(id: string, playerId: string): Promise<MechaConfig | null>;
   deleteConfig(id: string, playerId: string): Promise<boolean>;
   getActiveConfig(playerId: string): Promise<MechaConfig | null>;
@@ -133,8 +136,11 @@ export interface ResearchRepository {
   getAll(playerId: string): Promise<PlayerResearch[]>;
   /** 특정 연구 조회 */
   get(playerId: string, code: string): Promise<PlayerResearch | null>;
-  /** 연구 레벨업 (1 증가) */
-  levelUp(playerId: string, code: string): Promise<PlayerResearch>;
+  /** 비용 차감과 연구 레벨업을 하나의 저장소 트랜잭션으로 처리 */
+  levelUp(playerId: string, code: string, idempotencyKey: string): Promise<{
+    research: PlayerResearch;
+    cost: { electricity?: number; scrap?: number };
+  }>;
   /** 연구 초기화 (모든 연구 level=0) */
   reset(playerId: string): Promise<void>;
 }
@@ -152,8 +158,8 @@ export interface CraftingRepository {
   grantBlueprint(playerId: string, blueprintCode: string): Promise<PlayerBlueprint>;
   /** 제작 대기열 조회 */
   getQueue(playerId: string): Promise<PartCrafting[]>;
-  /** 제작 시작 */
-  startCraft(playerId: string, blueprintCode: string): Promise<PartCrafting>;
+  /** 멱등성 키를 보존해 재료 차감과 대기열 추가를 원자적으로 처리 */
+  startCraft(playerId: string, blueprintCode: string, idempotencyKey: string): Promise<PartCrafting>;
   /** 완료된 제작 확인 (완료 시 파츠 지급) */
   completeCraft(playerId: string, craftId: string): Promise<{ partId: string; partCode: string }>;
   /** 완료 가능한 제작 목록 */
@@ -177,8 +183,10 @@ export interface BattleRepository {
   getSession(sessionId: string): Promise<any>;
   updateSession(sessionId: string, data: Record<string, unknown>): Promise<void>;
   saveBattleEvent(event: any): Promise<void>;
+  getLastBattleEventSequence(sessionId: string): Promise<number>;
   getUpgradeOffers(sessionId: string): Promise<any[]>;
-  saveUpgradeOffer(offer: any): Promise<void>;
+  saveUpgradeChoices(sessionId: string, level: number, choices: { slot: number; upgradeId: string }[], sessionUpdates: Record<string, unknown>): Promise<boolean>;
+  selectUpgradeOffer(sessionId: string, level: number, upgradeId: string, sessionUpdates: Record<string, unknown>): Promise<boolean>;
   createBattleResult(result: any): Promise<void>;
   getBattleResult(sessionId: string): Promise<any>;
   getWalletBalance(playerId: string): Promise<any>;
@@ -218,11 +226,6 @@ export interface AdminRepository {
   revokeSanction(sanctionId: string, operatorId: string, reason?: string): Promise<void>;
   createGrant(data: any): Promise<any>;
   listGrants(limit?: number, offset?: number, targetUserId?: string): Promise<any[]>;
-  listOperators(): Promise<any[]>;
-  createOperator(data: any): Promise<any>;
-  changeOperatorRole(operatorId: string, newRole: string): Promise<any>;
-  listSecurityEvents(limit?: number, offset?: number, eventType?: string): Promise<any[]>;
-  reviewSecurityEvent(eventId: string, operatorId: string, resolution: string, note?: string): Promise<void>;
   listAuditLogs(limit?: number, action?: string): Promise<any[]>;
   suspendUser(userId: string, operatorId: string, reason: string): Promise<void>;
   unsuspendUser(userId: string, operatorId: string, reason: string): Promise<void>;

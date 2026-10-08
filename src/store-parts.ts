@@ -1,12 +1,14 @@
 /**
  * JSON 파일 기반 파츠 저장소 (개발/테스트용)
  */
-import { readFileSync, writeFileSync, renameSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { promoteJsonTempFile } from './shared/json-file.js';
 import { join } from 'node:path';
 import type { PlayerPart, EquipSlot, MechaConfig } from './types.js';
 import type { PartsRepository, MechaConfigRepository } from './repository.js';
 import { logItemEvent } from './store-item-ledger.js';
 import { logger } from './shared/logger.js';
+import { AppError } from './shared/errors.js';
 
 const partsFile = process.env.DATA_FILE_PARTS || join(process.cwd(), 'data-parts.json');
 const equipFile = process.env.DATA_FILE_EQUIP || join(process.cwd(), 'data-equip.json');
@@ -34,7 +36,7 @@ function saveMap<T extends { id: string }>(map: Map<string, T>, fp: string, name
     writeFileSync(tmp, JSON.stringify(Array.from(map.values()), null, 2), 'utf-8');
     JSON.parse(readFileSync(tmp, 'utf-8'));
     if (existsSync(fp)) copyFileSync(fp, fp + '.bak');
-    renameSync(tmp, fp);
+    promoteJsonTempFile(tmp, fp);
   } catch (err) {
     logger.error({ operation: 'save', file: fp, name, err: (err as Error).message }, `Failed to save ${name}`);
     try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* skip */ }
@@ -121,6 +123,40 @@ export const jsonPartsRepo: PartsRepository = {
   },
 };
 
+export function consumeJsonParts(playerId: string, materials: Record<string, number>, craftId: string): void {
+  ensure();
+  const toConsume: PlayerPart[] = [];
+  for (const [partCode, quantity] of Object.entries(materials)) {
+    if (partCode === 'scrap') continue;
+    const part = Array.from(parts.values()).find((entry) => entry.playerId === playerId && entry.partCode === partCode);
+    if (!Number.isSafeInteger(quantity) || quantity <= 0 || quantity > 1 || !part || part.equipped) {
+      throw new AppError(`제작 재료가 부족합니다: ${partCode}`, 400, 'INSUFFICIENT_MATERIALS');
+    }
+    toConsume.push(part);
+  }
+
+  for (const part of toConsume) parts.delete(part.id);
+  saveMap(parts, partsFile, 'parts');
+  for (const part of toConsume) {
+    logItemEvent(playerId, 'part', part.partCode, -1, 'craft_consume', 'craft', craftId);
+  }
+}
+
+export function grantCraftedJsonPart(playerId: string, partCode: string, partType: string, craftId: string): PlayerPart {
+  ensure();
+  if (Array.from(parts.values()).some((part) => part.playerId === playerId && part.partCode === partCode)) {
+    throw new AppError('이미 보유한 파츠는 제작할 수 없습니다.', 409, 'PART_ALREADY_OWNED');
+  }
+  const part: PlayerPart = {
+    id: crypto.randomUUID(), playerId, partCode,
+    partType: partType as PlayerPart['partType'],
+    level: 1, equipped: 0, createdAt: new Date().toISOString(),
+  };
+  parts.set(part.id, part);
+  saveMap(parts, partsFile, 'parts');
+  logItemEvent(playerId, 'part', partCode, 1, 'craft', 'craft', craftId);
+  return part;
+}
 // ─── MechaConfigRepository ─────────────────────────
 
 export const jsonMechaConfigRepo: MechaConfigRepository = {
@@ -142,10 +178,10 @@ export const jsonMechaConfigRepo: MechaConfigRepository = {
     return config;
   },
 
-  async updateConfig(id: string, updates: Partial<Omit<MechaConfig, 'id' | 'playerId' | 'createdAt'>>): Promise<MechaConfig | null> {
+  async updateConfig(id: string, playerId: string, updates: Partial<Omit<MechaConfig, 'id' | 'playerId' | 'createdAt'>>): Promise<MechaConfig | null> {
     ensure();
     const config = configs.get(id);
-    if (!config) return null;
+    if (!config || config.playerId !== playerId) return null;
     Object.assign(config, updates, { updatedAt: new Date().toISOString() });
     configs.set(id, config);
     saveMap(configs, configsFile, 'configs');
