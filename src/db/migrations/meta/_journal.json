@@ -29,6 +29,20 @@
       "when": 1790640000000,
       "tag": "0005_gameops_ai",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791189297000,
+      "tag": "0006_crafting_idempotency",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791189298000,
+      "tag": "0007_battle_upgrade_option_constraints",
+      "breakpoints": true
     }
   ]
 }

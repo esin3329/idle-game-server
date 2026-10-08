@@ -1,9 +1,11 @@
 /**
  * JSON 파일 기반 Admin 저장소 (개발/테스트용)
  */
-import { readFileSync, writeFileSync, renameSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { promoteJsonTempFile } from './shared/json-file.js';
 import { join } from 'node:path';
 import type { AdminRepository } from './repository.js';
+import { AppError } from './shared/errors.js';
 
 const grantsFile = process.env.DATA_FILE_ADMIN_GRANTS || join(process.cwd(), 'data-admin-grants.json');
 let grants: any[] = [];
@@ -11,15 +13,32 @@ let _initialized = false;
 
 function loadArray(fp: string): any[] {
   if (!existsSync(fp)) return [];
-  try { const a = JSON.parse(readFileSync(fp, 'utf-8')); return Array.isArray(a) ? a : []; }
-  catch { return []; }
+  try {
+    const value: unknown = JSON.parse(readFileSync(fp, 'utf-8'));
+    if (!Array.isArray(value)) throw new Error('Invalid grants data');
+    return value;
+  } catch (err) {
+    throw new Error(`Failed to load admin grants from ${fp}`, { cause: err });
+  }
 }
 function saveArray(fp: string): void {
   const tmp = fp + '.tmp';
-  try { writeFileSync(tmp, JSON.stringify(grants, null, 2), 'utf-8'); JSON.parse(readFileSync(tmp, 'utf-8')); if (existsSync(fp)) copyFileSync(fp, fp + '.bak'); renameSync(tmp, fp); }
-  catch { try { if (existsSync(tmp)) unlinkSync(tmp); } catch {} }
+  try {
+    writeFileSync(tmp, JSON.stringify(grants, null, 2), 'utf-8');
+    JSON.parse(readFileSync(tmp, 'utf-8'));
+    if (existsSync(fp)) copyFileSync(fp, fp + '.bak');
+    promoteJsonTempFile(tmp, fp);
+  } catch (err) {
+    try { if (existsSync(tmp)) unlinkSync(tmp); } catch {}
+    throw err;
+  }
 }
-function ensure() { if (!_initialized) { _initialized = true; grants = loadArray(grantsFile); } }
+function ensure() {
+  if (!_initialized) {
+    grants = loadArray(grantsFile);
+    _initialized = true;
+  }
+}
 
 export const jsonAdminRepo: AdminRepository = {
   async listUsers(limit, offset, search, status) {
@@ -58,25 +77,38 @@ export const jsonAdminRepo: AdminRepository = {
 
   async createGrant(data: any) {
     ensure();
+    const existing = data.idempotencyKey
+      ? grants.find((grant: any) => grant.idempotencyKey === data.idempotencyKey)
+      : undefined;
+    if (existing) {
+      const sameRequest = existing.operatorId === data.operatorId
+        && existing.targetUserId === data.targetUserId
+        && existing.grantType === data.grantType
+        && existing.amount === data.amount
+        && existing.resourceCode === data.resourceCode
+        && existing.reasonText === data.reasonText;
+      if (!sameRequest) throw new AppError('동일한 키가 다른 지급 요청에 사용되었습니다.', 409, 'IDEMPOTENCY_CONFLICT');
+      return existing;
+    }
+
     const id = crypto.randomUUID();
     const grant = { id, ...data, status: 'completed', createdAt: new Date().toISOString() };
-    grants.push(grant);
-    saveArray(grantsFile);
-    // 재화 지급 시 wallet에도 반영
     if (data.grantType === 'currency') {
-      try {
-        const { adjustBalance } = await import('./shared/wallet.js');
-        await adjustBalance(data.targetUserId, data.amount, 'operator_grant', data.idempotencyKey || id, data.resourceCode, data.reasonText, 'operator_grant', id);
-      } catch { /* best effort */ }
+      const { adjustBalance } = await import('./shared/wallet.js');
+      await adjustBalance(
+        data.targetUserId, data.amount, 'operator_grant', data.idempotencyKey || id,
+        data.resourceCode, data.reasonText, 'operator_grant', id,
+      );
+    }
+    grants.push(grant);
+    try {
+      saveArray(grantsFile);
+    } catch (err) {
+      grants.pop();
+      throw err;
     }
     return grant;
   },
-
-  async listOperators() { return [{ id: 'admin', email: 'admin@local', nickname: 'Admin', role: 'admin' }]; },
-  async createOperator(data: any) { return { id: crypto.randomUUID(), ...data, createdAt: new Date().toISOString() }; },
-  async changeOperatorRole(operatorId: string, newRole: string) { return { id: operatorId, role: newRole }; },
-  async listSecurityEvents() { return []; },
-  async reviewSecurityEvent() {},
   async listAuditLogs() { return []; },
   async getUserSanctions(userId: string) {
     ensure();

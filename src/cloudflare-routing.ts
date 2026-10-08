@@ -13,12 +13,5 @@ export function createApiUpstreamRequest(request: Request, apiOrigin: string): R
   upstreamUrl.protocol = origin.protocol;
   upstreamUrl.host = origin.host;
 
-  // The public server routes application traffic through /api/*; map the
-  // Worker health aliases to the corresponding Node API endpoints as well.
-  if (upstreamUrl.pathname === '/health' || upstreamUrl.pathname.startsWith('/health/')
-    || upstreamUrl.pathname === '/ready' || upstreamUrl.pathname === '/metrics') {
-    upstreamUrl.pathname = `/api${upstreamUrl.pathname}`;
-  }
-
   return new Request(upstreamUrl, request);
 }

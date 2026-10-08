@@ -2,7 +2,6 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { jwtAuth } from './shared/jwt-auth.js';
 import { idempotencyGuard } from './shared/idempotency.js';
-import { validatePlayerId } from './shared/validator.js';
 import { rateLimit } from './shared/rate-limit.js';
 import {
   startBattleSession,
@@ -88,29 +87,6 @@ battleRoutes.get('/stages', async (c) => {
   })));
 });
 
-// ─── GET /api/stages ─────────────────────────────────
-// (하위 호환)
-
-battleRoutes.get('/api/stages', async (c) => {
-  const db = getDb();
-  const rows = await db.select().from(stages).orderBy(asc(stages.sequence));
-  return c.json(rows.map((s) => ({
-    id: s.id,
-    name: s.name,
-    description: s.description,
-    sequence: s.sequence,
-    durationSeconds: s.durationSeconds,
-    entryRequirement: s.entryRequirement,
-    recommendedPower: s.recommendedPower,
-    enemySet: JSON.parse(s.enemySet),
-    bossTimings: JSON.parse(s.bossTimings),
-    maxKills: s.maxKills,
-    maxCoreEnergy: s.maxCoreEnergy,
-    scrapPerKill: s.scrapPerKill,
-    unlocked: s.unlocked === 1,
-    enabled: s.enabled === 1,
-  })));
-});
 
 // ─── POST /battles/start ──────────────────────────────
 // 전투 세션 생성. JWT로 userId 추출, body로 stageId 전달.
@@ -132,26 +108,6 @@ battleRoutes.post(
   },
 );
 
-// ─── POST /api/players/:id/battle/start ───────────────
-// (하위 호환)
-
-battleRoutes.post(
-  '/api/players/:id/battle/start',
-  validatePlayerId,
-  jwtAuth,
-  idempotencyGuard,
-  async (c) => {
-    const playerId = c.req.param('id')!;
-    const { stageId } = await c.req.json<{ stageId: string }>();
-    if (!stageId) {
-      return c.json({ error: 'stageId가 필요합니다.', code: 'BAD_REQUEST' }, 400);
-    }
-
-    const session = await startBattleSession(playerId, stageId);
-
-    return c.json(session, 201);
-  },
-);
 
 // ─── GET /battles/:sessionId ──────────────────────────
 // 전투 세션 상태 조회
@@ -168,24 +124,6 @@ battleRoutes.get(
   },
 );
 
-// ─── GET /api/players/:id/battle/state ─────────────────
-// (하위 호환)
-
-battleRoutes.get(
-  '/api/players/:id/battle/state',
-  validatePlayerId,
-  jwtAuth,
-  async (c) => {
-    const playerId = c.req.param('id')!;
-    const { sessionId } = c.req.query();
-    if (!sessionId) {
-      return c.json({ error: 'sessionId 쿼리 파라미터가 필요합니다.', code: 'BAD_REQUEST' }, 400);
-    }
-
-    const state = await getBattleSession(sessionId, playerId);
-    return c.json(state);
-  },
-);
 
 // ─── POST /battles/:sessionId/progress ────────────────
 // 순서가 있는 전투 진행 이벤트 제출 (처치, core_energy, 보스)
@@ -200,7 +138,7 @@ battleRoutes.post(
     const sessionId = c.req.param('sessionId')!;
     const userId = c.get('userId');
 
-    const body = await c.req.json<BattleEventReport & { sequence: number }>();
+    const body = await c.req.json<BattleEventReport>();
 
     if (!body.sequence || body.sequence <= 0) {
       return c.json({ error: 'sequence가 필요합니다 (1 이상).', code: 'BAD_REQUEST' }, 400);
@@ -216,30 +154,6 @@ battleRoutes.post(
   },
 );
 
-// ─── POST /api/players/:id/battle/event ────────────────
-// (하위 호환)
-
-battleRoutes.post(
-  '/api/players/:id/battle/event',
-  validatePlayerId,
-  jwtAuth,
-  idempotencyGuard,
-  rateLimit(5, 1000),
-  async (c) => {
-    const playerId = c.req.param('id')!;
-
-    const body = await c.req.json<{ sessionId: string } & BattleEventReport>();
-    const { sessionId, ...report } = body;
-
-    if (!sessionId) {
-      return c.json({ error: 'sessionId가 필요합니다.', code: 'BAD_REQUEST' }, 400);
-    }
-
-    const result = await reportBattleEvent(sessionId, playerId, report);
-
-    return c.json(result);
-  },
-);
 
 // ─── POST /battles/:sessionId/upgrades/select ──────────
 // 서버가 제시한 강화 선택지 중 하나 선택
@@ -262,28 +176,6 @@ battleRoutes.post(
   },
 );
 
-// ─── POST /api/players/:id/battle/upgrade ──────────────
-// (하위 호환)
-
-battleRoutes.post(
-  '/api/players/:id/battle/upgrade',
-  validatePlayerId,
-  jwtAuth,
-  idempotencyGuard,
-  async (c) => {
-    const playerId = c.req.param('id')!;
-
-    const { sessionId, selectedId } = await c.req.json<{ sessionId: string; selectedId: string }>();
-
-    if (!sessionId || !selectedId) {
-      return c.json({ error: 'sessionId와 selectedId가 필요합니다.', code: 'BAD_REQUEST' }, 400);
-    }
-
-    const result = await selectUpgrade(sessionId, playerId, selectedId);
-
-    return c.json(result);
-  },
-);
 
 // ─── POST /battles/:sessionId/abandon ──────────────────
 // active 세션 포기. 영구 보상 없이 종료.
@@ -321,31 +213,5 @@ battleRoutes.post(
   },
 );
 
-// ─── POST /api/players/:id/battle/end ──────────────────
-// (하위 호환)
-
-battleRoutes.post(
-  '/api/players/:id/battle/end',
-  validatePlayerId,
-  jwtAuth,
-  idempotencyGuard,
-  rateLimit(1, 5000),
-  async (c) => {
-    const playerId = c.req.param('id')!;
-
-    const body = await c.req.json<{ sessionId: string } & BattleEndReport>();
-    const { sessionId, ...report } = body;
-
-    if (!sessionId) {
-      return c.json({ error: 'sessionId가 필요합니다.', code: 'BAD_REQUEST' }, 400);
-    }
-
-    const result = await endBattleSession(sessionId, playerId, report);
-
-    logger.info({ playerId, sessionId, reward: result.reward, event: 'battle_complete' }, 'Battle complete');
-
-    return c.json(result);
-  },
-);
 
 export default battleRoutes;

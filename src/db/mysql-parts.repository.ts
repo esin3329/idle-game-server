@@ -138,9 +138,10 @@ export const mysqlMechaConfigRepo: MechaConfigRepository = {
     return { id, playerId, name, frame, weapon, core, module, isActive: 0, createdAt: now.toISOString(), updatedAt: now.toISOString() };
   },
 
-  async updateConfig(id: string, updates: Partial<Omit<MechaConfig, 'id' | 'playerId' | 'createdAt'>>): Promise<MechaConfig | null> {
+  async updateConfig(id: string, playerId: string, updates: Partial<Omit<MechaConfig, 'id' | 'playerId' | 'createdAt'>>): Promise<MechaConfig | null> {
     const db = getDb();
-    const existing = await db.select().from(mechaConfigs).where(eq(mechaConfigs.id, id)).limit(1);
+    const ownerFilter = and(eq(mechaConfigs.id, id), eq(mechaConfigs.playerId, playerId));
+    const existing = await db.select().from(mechaConfigs).where(ownerFilter).limit(1);
     if (existing.length === 0) return null;
     const setData: Record<string, unknown> = { updatedAt: new Date() };
     if (updates.name !== undefined) setData.name = updates.name;
@@ -149,8 +150,8 @@ export const mysqlMechaConfigRepo: MechaConfigRepository = {
     if (updates.core !== undefined) setData.core = updates.core;
     if (updates.module !== undefined) setData.module = updates.module;
     if (updates.isActive !== undefined) setData.isActive = updates.isActive;
-    await db.update(mechaConfigs).set(setData).where(eq(mechaConfigs.id, id));
-    const updated = await db.select().from(mechaConfigs).where(eq(mechaConfigs.id, id)).limit(1);
+    await db.update(mechaConfigs).set(setData).where(ownerFilter);
+    const updated = await db.select().from(mechaConfigs).where(ownerFilter).limit(1);
     return updated.length > 0 ? rowToConfig(updated[0]) : null;
   },
 
@@ -167,12 +168,12 @@ export const mysqlMechaConfigRepo: MechaConfigRepository = {
     return updated.length > 0 ? rowToConfig(updated[0]) : null;
   },
 
-  async deleteConfig(id: string, _playerId: string): Promise<boolean> {
+  async deleteConfig(id: string, playerId: string): Promise<boolean> {
     const db = getDb();
     const target = await db.select({ id: mechaConfigs.id }).from(mechaConfigs)
-      .where(eq(mechaConfigs.id, id)).limit(1);
+      .where(and(eq(mechaConfigs.id, id), eq(mechaConfigs.playerId, playerId))).limit(1);
     if (target.length === 0) return false;
-    await db.delete(mechaConfigs).where(eq(mechaConfigs.id, id));
+    await db.delete(mechaConfigs).where(and(eq(mechaConfigs.id, id), eq(mechaConfigs.playerId, playerId)));
     return true;
   },
 

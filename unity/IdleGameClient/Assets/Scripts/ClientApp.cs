@@ -218,7 +218,7 @@ namespace IdleGame
 
         private async Task ShowStages()
         {
-            var result = await api.Send("stages");
+            var result = await api.Send("api/stages");
             if (!(result is JArray stages)) throw new ApiException(0, "INVALID_RESPONSE", "스테이지 목록 형식이 올바르지 않습니다.");
             Clear("출격 준비");
             notice.text = "출격 가능한 스테이지를 선택하세요.";

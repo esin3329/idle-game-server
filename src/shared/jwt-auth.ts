@@ -47,7 +47,8 @@ export async function operatorAuth(c: Context<{ Variables: { userId: string; rol
   const token = authHeader.slice(7);
   if (usesSupabaseAuth()) {
     const user = await verifySupabaseAccess(token);
-    if (user.role !== 'operator' && user.role !== 'admin') {
+    await activeGameUser(user.id);
+    if (!['operator', 'admin', 'administrator'].includes(user.role)) {
       throw new AppError('운영자 권한이 필요합니다.', 403, 'FORBIDDEN');
     }
     c.set('userId', user.id);
@@ -74,13 +75,13 @@ export async function operatorAuth(c: Context<{ Variables: { userId: string; rol
   }
 
   const p = payload as JwtPayload;
-  const role = process.env.DB_DRIVER === 'postgres' ? (await activeGameUser(p.sub)).role : p.role;
-  if (!role || (role !== 'operator' && role !== 'admin')) {
+  const currentUser = await activeGameUser(p.sub);
+  if (!['operator', 'admin', 'administrator'].includes(currentUser.role)) {
     throw new AppError('운영자 권한이 필요합니다.', 403, 'FORBIDDEN');
   }
 
   c.set('userId', p.sub);
-  c.set('role', role);
+  c.set('role', currentUser.role);
   await next();
 }
 
@@ -154,6 +155,7 @@ export async function jwtAuth(c: Context<{ Variables: { userId: string } }>, nex
   const token = authHeader.slice(7);
   if (usesSupabaseAuth()) {
     const user = await verifySupabaseAccess(token);
+    await activeGameUser(user.id);
     c.set('userId', user.id);
     await next();
     return;
@@ -171,11 +173,12 @@ export async function jwtAuth(c: Context<{ Variables: { userId: string } }>, nex
     }
     throw new AppError('인증에 실패했습니다.', 401, 'UNAUTHORIZED');
   }
-
   if (!isValidPayload(payload)) {
     throw new AppError('유효하지 않은 토큰 형식입니다.', 401, 'INVALID_TOKEN');
   }
 
-  c.set('userId', (payload as JwtPayload).sub);
+  const p = payload as JwtPayload;
+  await activeGameUser(p.sub);
+  c.set('userId', p.sub);
   await next();
 }

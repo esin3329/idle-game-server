@@ -122,14 +122,14 @@ namespace IdleGame.Network
 
         public async Task Login(string email, string password)
         {
-            var response = await Send("auth/login", "POST", new { email, password }, false);
+            var response = await Send("api/auth/login", "POST", new { email, password }, false);
             Session.Apply((JObject)response);
             Session.Remember(BaseUrl);
         }
 
         public async Task Register(string email, string password, string nickname)
         {
-            var response = await Send("auth/register", "POST", new { email, password, nickname }, false);
+            var response = await Send("api/auth/register", "POST", new { email, password, nickname }, false);
             Session.Apply((JObject)response);
             Session.Remember(BaseUrl);
         }
@@ -148,7 +148,7 @@ namespace IdleGame.Network
             try
             {
                 if (!string.IsNullOrEmpty(refreshToken))
-                    await Send("auth/logout", "POST", new { refreshToken }, false);
+                    await Send("api/auth/logout", "POST", new { refreshToken }, false);
             }
             finally { Session.Clear(); }
         }
@@ -158,18 +158,18 @@ namespace IdleGame.Network
         public Task<JToken> Claim() => Send("api/players/" + Session.PlayerId + "/claim", "POST");
         public Task<JToken> UpgradeCost() => Send("api/players/" + Session.PlayerId + "/upgrade");
         public Task<JToken> Upgrade() => Send("api/players/" + Session.PlayerId + "/upgrade", "POST");
-        public Task<JToken> Stages() => Send("stages", authenticated: false);
-        public Task<JToken> Parts() => Send("parts/my");
+        public Task<JToken> Stages() => Send("api/stages", authenticated: false);
+        public Task<JToken> Parts() => Send("api/parts/my");
         public Task<JToken> StartBattle(string stageCode) =>
-            Send("battles/start", "POST", new { stageCode });
+            Send("api/battles/start", "POST", new { stageCode });
         public Task<JToken> BattleState(string sessionId) =>
-            Send("battles/" + Uri.EscapeDataString(sessionId));
+            Send("api/battles/" + Uri.EscapeDataString(sessionId));
         public Task<JToken> AbandonBattle(string sessionId) =>
-            Send("battles/" + Uri.EscapeDataString(sessionId) + "/abandon", "POST");
+            Send("api/battles/" + Uri.EscapeDataString(sessionId) + "/abandon", "POST");
         public Task<JToken> ReportBattle(string sessionId, object report, string key) =>
-            Send("battles/" + Uri.EscapeDataString(sessionId) + "/progress", "POST", report, idempotencyKey: key);
+            Send("api/battles/" + Uri.EscapeDataString(sessionId) + "/progress", "POST", report, idempotencyKey: key);
         public Task<JToken> FinishBattle(string sessionId, object report, string key) =>
-            Send("battles/" + Uri.EscapeDataString(sessionId) + "/finish", "POST", report, idempotencyKey: key);
+            Send("api/battles/" + Uri.EscapeDataString(sessionId) + "/finish", "POST", report, idempotencyKey: key);
 
         public async Task<JToken> Send(string route, string method = "GET", object body = null,
             bool authenticated = true, string idempotencyKey = null)
@@ -193,7 +193,7 @@ namespace IdleGame.Network
         {
             try
             {
-                var response = await SendOnce("auth/refresh", "POST",
+                var response = await SendOnce("api/auth/refresh", "POST",
                     JsonConvert.SerializeObject(new { refreshToken = Session.RefreshToken }),
                     Guid.NewGuid().ToString(), null);
                 Session.ApplyTokens((JObject)response);

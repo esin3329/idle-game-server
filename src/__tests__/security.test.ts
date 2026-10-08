@@ -7,6 +7,8 @@ import authRoutes from '../auth.routes.js';
 import adminRoutes from '../admin.routes.js';
 import partsRoutes from '../parts.routes.js';
 import craftingRoutes from '../crafting.routes.js';
+import battleRoutes from '../battle.routes.js';
+import mechaRoutes from '../mecha.routes.js';
 import { resetAllRepos } from '../provider.js';
 import { resetPartsStores } from '../store-parts.js';
 import { resetCraftingStores } from '../store-crafting.js';
@@ -15,6 +17,10 @@ import { resetItemLedger } from '../store-item-ledger.js';
 import { resetBattleStores } from '../store-battle.js';
 import { resetWalletStores } from '../store-wallet.js';
 import { resetAuthStores } from '../store-auth.js';
+import { jsonAuthRepo } from '../store-auth.js';
+import { jsonPartsRepo, jsonMechaConfigRepo } from '../store-parts.js';
+import { createHash } from 'node:crypto';
+import { refreshTokens } from '../shared/auth-service.js';
 import jwt from 'jsonwebtoken';
 
 // ─── 헬퍼 ──────────────────────────────────────────
@@ -25,6 +31,15 @@ const EXPIRED_TOKEN = jwt.sign({ sub: 'expired-user', type: 'access' }, 'dev-sec
 
 const adminAuth = () => ({ Authorization: `Bearer ${ADMIN_TOKEN}` });
 const userAuth = () => ({ Authorization: `Bearer ${USER_TOKEN}` });
+
+async function createTestWallet(playerId: string) {
+  const now = new Date().toISOString();
+  await jsonAuthRepo.createWallet({
+    id: `wallet-${playerId}`, playerId, userId: playerId,
+    electricity: 0, electricityPerSecond: 1, scrap: 0, balance: 0,
+    lastClaimedAt: now, createdAt: now, updatedAt: now,
+  });
+}
 function createFullApp() {
   const app = new Hono();
   app.onError((err, c) => {
@@ -34,11 +49,15 @@ function createFullApp() {
     return c.json({ error: err.message }, 500);
   });
   app.notFound((c) => c.json({ error: 'Not found', code: 'ROUTE_NOT_FOUND' }, 404));
-  app.route('/', authRoutes);
-  app.route('/', routes);
-  app.route('/', partsRoutes);
-  app.route('/', craftingRoutes);
-  app.route('/', adminRoutes);
+  const api = new Hono();
+  api.route('/', authRoutes);
+  api.route('/', routes);
+  api.route('/', partsRoutes);
+  api.route('/', mechaRoutes);
+  api.route('/', craftingRoutes);
+  api.route('/', adminRoutes);
+  api.route('/', battleRoutes);
+  app.route('/api', api);
   return app;
 }
 
@@ -51,33 +70,23 @@ function createApp() {
     return c.json({ error: err.message }, 500);
   });
   app.notFound((c) => c.json({ error: 'Not found', code: 'ROUTE_NOT_FOUND' }, 404));
-  app.route('/', authRoutes);
-  app.route('/', routes);
-  app.route('/', partsRoutes);
-  app.route('/', craftingRoutes);
+  const api = new Hono();
+  api.route('/', authRoutes);
+  api.route('/', routes);
+  api.route('/', partsRoutes);
+  api.route('/', craftingRoutes);
+  api.route('/', mechaRoutes);
+  api.route('/', battleRoutes);
+  app.route('/api', api);
   return app;
 }
 
-beforeEach(() => {
+
+beforeEach(async () => {
   process.env.DB_DRIVER = 'json';
-  // JSON 파일 삭제 (store 계열이 파일에서 로드하는 것 방지)
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-wallets.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-ledger.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-parts.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-equip.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-configs.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-research.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-item-ledger.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-blueprints.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-crafts.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-battles.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-battle-events.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-battle-results.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-users.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-sessions.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-sanctions.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-profiles.json')); } catch {}
-  try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-wallets.json')); } catch {}  // 재차 정리
+  for (const file of ['data-wallets.json', 'data-ledger.json', 'data-parts.json', 'data-equip.json', 'data-configs.json', 'data-research.json', 'data-item-ledger.json', 'data-blueprints.json', 'data-crafts.json', 'data-battles.json', 'data-battle-events.json', 'data-battle-results.json', 'data-users.json', 'data-sessions.json', 'data-sanctions.json', 'data-profiles.json']) {
+    try { require('fs').unlinkSync(require('path').join(process.cwd(), file)); } catch {}
+  }
   resetAuthStores();
   resetAllRepos();
   resetPartsStores();
@@ -86,6 +95,10 @@ beforeEach(() => {
   resetItemLedger();
   resetBattleStores();
   resetWalletStores();
+  const now = new Date().toISOString();
+  for (const [id, role] of [['admin-user', 'admin'], ['normal-user', 'user'], ['user1', 'user'], ['user2', 'user']]) {
+    await jsonAuthRepo.createUser({ id, email: `${id}@example.test`, nickname: id, passwordHash: '', status: 'active', role, createdAt: now, updatedAt: now });
+  }
 });
 
 // ═══════════════════════════════════════════════════════
@@ -105,57 +118,92 @@ describe('권한 우회 방지', () => {
     expect(res.status).toBe(401);
   });
 
-  it('인증 없이 /parts/my → 401', async () => {
+  it('인증 없이 /api/parts/my → 401', async () => {
     const app = createApp();
-    const res = await app.request('/parts/my');
+    const res = await app.request('/api/parts/my');
     expect(res.status).toBe(401);
   });
 
-  it('인증 없이 /crafting/drop → 401', async () => {
+  it('POST /api/crafting/drop is removed', async () => {
     const app = createApp();
-    const res = await app.request('/crafting/drop', { method: 'POST' });
-    expect(res.status).toBe(401);
+    const res = await app.request('/api/crafting/drop', { method: 'POST', headers: userAuth() });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: 'ROUTE_NOT_FOUND' });
   });
 
   // 2. 만료된 토큰으로 접근
   it('만료된 토큰 → 401 TOKEN_EXPIRED', async () => {
     const app = createApp();
-    const res = await app.request('/parts/my', { headers: { Authorization: `Bearer ${EXPIRED_TOKEN}` } });
+    const res = await app.request('/api/parts/my', { headers: { Authorization: `Bearer ${EXPIRED_TOKEN}` } });
     expect(res.status).toBe(401);
     const body = await res.json();
     expect(body.code).toBe('TOKEN_EXPIRED');
   });
 
+  it('비활성화된 계정은 기존 access token으로 보호 API를 사용할 수 없다', async () => {
+    const user = await jsonAuthRepo.findUserById('normal-user');
+    if (!user) throw new Error('test user missing');
+    await jsonAuthRepo.createUser({ ...user, status: 'suspended' });
+
+    const app = createApp();
+    const response = await app.request('/api/parts/my', { headers: userAuth() });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'ACCOUNT_DISABLED' });
+  });
+
+  it('비활성화된 계정은 기존 refresh token을 갱신할 수 없다', async () => {
+    const now = new Date();
+    const user = await jsonAuthRepo.findUserById('normal-user');
+    if (!user) throw new Error('test user missing');
+    const refreshToken = jwt.sign(
+      { sub: user.id, type: 'refresh', jti: crypto.randomUUID() },
+      process.env.JWT_REFRESH_SECRET || 'dev-secret-change-in-production',
+      { expiresIn: '1h' },
+    );
+    await jsonAuthRepo.createSession({
+      id: crypto.randomUUID(),
+      userId: user.id,
+      tokenHash: createHash('sha256').update(refreshToken).digest('hex'),
+      expiresAt: new Date(now.getTime() + 60 * 60 * 1000).toISOString(),
+      createdAt: now.toISOString(),
+    });
+    await jsonAuthRepo.createUser({ ...user, status: 'suspended' });
+
+    await expect(refreshTokens(refreshToken)).rejects.toMatchObject({
+      status: 403,
+      code: 'ACCOUNT_DISABLED',
+    });
+  });
+
   // 3. 일반 사용자 토큰으로 admin API 접근
-  it('일반 유저가 /admin/users 접근 → 403', async () => {
+  it('일반 유저가 /api/admin/users 접근 → 403', async () => {
     const app = createFullApp();
-    const res = await app.request('/admin/users', { headers: userAuth() });
+    const res = await app.request('/api/admin/users', { headers: userAuth() });
     expect(res.status).toBe(403);
   });
 
-  it('일반 유저가 /admin/users/:id 접근 → 403', async () => {
+  it('일반 유저가 /api/admin/users/:id 접근 → 403', async () => {
     const app = createFullApp();
-    const res = await app.request('/admin/users/test-id', { headers: userAuth() });
+    const res = await app.request('/api/admin/users/test-id', { headers: userAuth() });
     expect(res.status).toBe(403);
   });
 
-  it('일반 유저가 /admin/grants 접근 → 403', async () => {
+  it('일반 유저가 /api/admin/grants 접근 → 403', async () => {
     const app = createFullApp();
-    const res = await app.request('/admin/grants', { headers: userAuth() });
+    const res = await app.request('/api/admin/grants', { headers: userAuth() });
     expect(res.status).toBe(403);
   });
 
   // 4. admin 토큰으로 admin API 접근 (정상)
-  it('admin 유저가 /admin/users 접근 → 200', async () => {
+  it('admin 유저가 /api/admin/users 접근 → 200', async () => {
     const app = createFullApp();
-    const res = await app.request('/admin/users', { headers: adminAuth() });
+    const res = await app.request('/api/admin/users', { headers: adminAuth() });
     expect(res.status).toBe(200);
   });
 
-  // 5. Idempotency-Key 없이 POST 요청
   it('Idempotency-Key 없이 /api/players/:id/claim → 400 BAD_REQUEST', async () => {
     const app = createApp();
-    const res = await app.request('/api/players/test-id/claim', {
+    const res = await app.request('/api/players/00000000-0000-0000-0000-000000000000/claim', {
       method: 'POST',
       headers: userAuth(),
     });
@@ -163,21 +211,48 @@ describe('권한 우회 방지', () => {
   });
 
   // 6. 다른 사용자의 리소스 접근
-  it('다른 사용자의 /parts/my 접근 → 본인 데이터만 반환', async () => {
+  it('다른 사용자의 /api/parts/my 접근 → 본인 데이터만 반환', async () => {
     const app = createApp();
-    // user1이 파츠 지급
-    const token1 = jwt.sign({ sub: 'user1', type: 'access' }, 'dev-secret-change-in-production', { expiresIn: '1h' });
     const token2 = jwt.sign({ sub: 'user2', type: 'access' }, 'dev-secret-change-in-production', { expiresIn: '1h' });
+    await jsonPartsRepo.grantPart('user1', 'light_frame', 'frame');
 
-    await app.request('/parts/grant', {
-      method: 'POST', headers: { Authorization: `Bearer ${token1}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ partCode: 'light_frame' }),
-    });
-
-    // user2의 인벤토리에는 user1의 파츠가 없어야 함
-    const res2 = await app.request('/parts/my', { headers: { Authorization: `Bearer ${token2}` } });
+    const res2 = await app.request('/api/parts/my', { headers: { Authorization: `Bearer ${token2}` } });
     const body2 = await res2.json();
     expect(body2.inventory).toHaveLength(0);
+  });
+  it('타인의 메카 설정은 ID로 수정할 수 없다', async () => {
+    const app = createApp();
+    const config = await jsonMechaConfigRepo.createConfig(
+      'user1', 'owner config', 'light_frame', 'shotgun', 'assault_core', 'shield_module',
+    );
+    const token2 = jwt.sign({ sub: 'user2', type: 'access' }, 'dev-secret-change-in-production', { expiresIn: '1h' });
+    const response = await app.request(`/mecha/configs/${config.id}`, {
+      method: 'PUT',
+      headers: { Authorization: `Bearer ${token2}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'stolen config' }),
+    });
+    expect(response.status).toBe(404);
+    expect((await jsonMechaConfigRepo.getConfigs('user1'))[0].name).toBe('owner config');
+  });
+
+  it('타인 플레이어 claim은 403', async () => {
+    const app = createApp();
+    const res = await app.request('/api/players/00000000-0000-0000-0000-000000000000/claim', {
+      method: 'POST',
+      headers: { ...userAuth(), 'Idempotency-Key': crypto.randomUUID() },
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('중복 /api mount의 /api/api/players 경로는 없어야 한다', async () => {
+    const app = createFullApp();
+    const res = await app.request('/api/api/players/00000000-0000-0000-0000-000000000000/battle/start', {
+      method: 'POST',
+      headers: { ...userAuth(), 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({ stageCode: 'stage_01_ruins' }),
+    });
+    expect(res.status).toBe(404);
   });
 });
 
@@ -190,6 +265,7 @@ describe('중복 지급 방지', () => {
   it('adjustBalance 동일 키 중복 → 두 번째는 중복', async () => {
     const { adjustBalance } = await import('../shared/wallet.js');
     const uniqueKey = `dup-key-${Date.now()}-${Math.random()}`;
+    await createTestWallet('dup-player-1');
 
     const first = await adjustBalance('dup-player-1', 100, 'test', uniqueKey, 'electricity', 'test');
     expect(first.success).toBe(true);
@@ -198,6 +274,8 @@ describe('중복 지급 방지', () => {
     const second = await adjustBalance('dup-player-1', 100, 'test', uniqueKey, 'electricity', 'test');
     expect(second.success).toBe(false);
     expect(second.balanceAfter).toBe(100);
+    await expect(adjustBalance('dup-player-1', 101, 'test', uniqueKey, 'electricity', 'test'))
+      .rejects.toMatchObject({ code: 'IDEMPOTENCY_CONFLICT' });
   });
 
   // 8. adjustBalance 멱등성 키 검증 (다른 키)
@@ -205,6 +283,7 @@ describe('중복 지급 방지', () => {
     const { adjustBalance } = await import('../shared/wallet.js');
     const k1 = `k-${Date.now()}-a`;
     const k2 = `k-${Date.now()}-b`;
+    await createTestWallet('dup-player-2');
 
     const first = await adjustBalance('dup-player-2', 50, 'test', k1, 'electricity', 'test');
     expect(first.success).toBe(true);
@@ -215,45 +294,15 @@ describe('중복 지급 방지', () => {
     expect(second.balanceAfter).toBe(80); // 누적
   });
 
-  // 9. 파츠 중복 지급 방지
-  it('동일 파츠 중복 grant → 두 번째는 409', async () => {
+  it('일반 사용자의 직접 파츠 지급 경로는 제거되어 있다', async () => {
     const app = createApp();
-    const token = jwt.sign({ sub: 'dup-test-user', type: 'access' }, 'dev-secret-change-in-production', { expiresIn: '1h' });
-
-    // 첫 번째 지급
-    const first = await app.request('/parts/grant', {
-      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    const res = await app.request('/api/parts/grant', {
+      method: 'POST',
+      headers: { ...userAuth(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ partCode: 'machine_gun' }),
     });
-    expect(first.status).toBe(201);
-
-    // 두 번째 지급 (중복)
-    const second = await app.request('/parts/grant', {
-      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ partCode: 'machine_gun' }),
-    });
-    expect(second.status).toBe(409);
-    const body = await second.json();
-    expect(body.code).toBe('PART_ALREADY_OWNED');
-  });
-
-  // 10. 설계도 중복 드롭 방지
-  it('동일 설계도 중복 드롭 → duplicate 플래그', async () => {
-    const app = createApp();
-    const token = jwt.sign({ sub: 'dup-bp-user', type: 'access' }, 'dev-secret-change-in-production', { expiresIn: '1h' });
-
-    // 먼저 특정 설계도를 직접 지급 (machine_gun)
-    const { jsonCraftingRepo } = await import('../store-crafting.js');
-    await jsonCraftingRepo.grantBlueprint('dup-bp-user', 'bp_machine_gun');
-
-    const res = await app.request('/crafting/drop', { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
-    const body = await res.json();
-    // 랜덤 드롭이므로 bp_machine_gun과 다를 수 있음
-    // 중복 체크는 hasBlueprint에서 처리
-    expect([201, 200]).toContain(res.status);
-    if (body.duplicate === true) {
-      expect(body.message).toContain('이미 보유');
-    }
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: 'ROUTE_NOT_FOUND' });
   });
 
   // 11. 닉네임 중복 가입 방지
@@ -262,7 +311,7 @@ describe('중복 지급 방지', () => {
 
     // 첫 번째 회원가입
     const registerId = crypto.randomUUID();
-    const res1 = await app.request('/auth/register', {
+    const res1 = await app.request('/api/auth/register', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -274,7 +323,7 @@ describe('중복 지급 방지', () => {
 
     // 같은 닉네임으로 두 번째 회원가입
     const registerId2 = crypto.randomUUID();
-    const res2 = await app.request('/auth/register', {
+    const res2 = await app.request('/api/auth/register', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -287,13 +336,13 @@ describe('중복 지급 방지', () => {
     expect(body.code).toBe('DUPLICATE_ACCOUNT');
   });
 
-  // 12. GET /wallet — JWT 인증 + 본인 지갑 조회
-  it('GET /wallet → JWT 기반 본인 지갑 반환', async () => {
+  // 12. GET /api/wallet — JWT 인증 + 본인 지갑 조회
+  it('GET /api/wallet → JWT 기반 본인 지갑 반환', async () => {
     const app = createFullApp();
 
     // 회원가입
     const registerId = crypto.randomUUID();
-    const regRes = await app.request('/auth/register', {
+    const regRes = await app.request('/api/auth/register', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -310,7 +359,7 @@ describe('중복 지급 방지', () => {
     const accessToken = regBody.tokens.accessToken;
 
     // 지갑 조회
-    const walletRes = await app.request('/wallet', {
+    const walletRes = await app.request('/api/wallet', {
       method: 'GET',
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -319,14 +368,15 @@ describe('중복 지급 방지', () => {
     expect(walletBody).toHaveProperty('playerId');
     expect(walletBody).toHaveProperty('electricity');
     expect(walletBody).toHaveProperty('electricityPerSecond');
+    expect(walletBody.scrap).toBe(0);
     expect(walletBody.electricityPerSecond).toBe(1);
   });
 
-  it('GET /wallet → 다른 사용자 지갑에 접근 불가', async () => {
+  it('GET /api/wallet → 다른 사용자 지갑에 접근 불가', async () => {
     const app = createFullApp();
 
     // 사용자 A 회원가입
-    const regA = await app.request('/auth/register', {
+    const regA = await app.request('/api/auth/register', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -339,7 +389,7 @@ describe('중복 지급 방지', () => {
     const tokenA = regABody.tokens.accessToken;
 
     // 사용자 B 회원가입 (다른 사용자 존재 확인용)
-    const regB = await app.request('/auth/register', {
+    const regB = await app.request('/api/auth/register', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -350,7 +400,7 @@ describe('중복 지급 방지', () => {
     expect(regB.status).toBe(201);
 
     // 사용자 A의 토큰으로 지갑 조회 → 사용자 A의 지갑 반환
-    const walletRes = await app.request('/wallet', {
+    const walletRes = await app.request('/api/wallet', {
       method: 'GET',
       headers: { Authorization: `Bearer ${tokenA}` },
     });
