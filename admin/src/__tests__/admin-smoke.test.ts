@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError, clearTokens, createGrant, createOperator, createSanction, getAccessToken, getAdminHealth,
-  listOperators, listUsers, loadTokens, login, setTokens, suspendUser, updateOperatorRole,
+  listOperators, listUsers, loadTokens, login, requestLogin, setTokens, suspendUser, updateOperatorRole,
 } from '../api';
 import { runLoginFlow } from '../context/loginFlow';
 
@@ -276,13 +276,13 @@ describe('401 토큰 갱신', () => {
 // ─── 엔드포인트 계약 ──────────────────────────────────
 
 describe('엔드포인트 계약', () => {
-  it('login은 인증 헤더 없이 자격 증명을 POST하고 응답만 반환하며 전역 토큰은 바꾸지 않는다', async () => {
+  it('requestLogin은 인증 헤더 없이 자격 증명을 POST하고 응답만 반환하며 전역 토큰은 바꾸지 않는다', async () => {
     setTokens('stale-access', 'stale-refresh');
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {
       userId: 'op-1', playerId: 'player-1', tokens: { accessToken: 'access-login', refreshToken: 'refresh-login' },
     }));
 
-    const result = await login('op@example.test', 'pw-12345678');
+    const result = await requestLogin('op@example.test', 'pw-12345678');
 
     const call = callAt(0);
     expect(call.url).toBe('/api/auth/login');
@@ -296,14 +296,32 @@ describe('엔드포인트 계약', () => {
     expect(storage.getItem(REFRESH_KEY)).toBe('stale-refresh');
   });
 
-  it('login 실패(401)는 갱신을 시도하지 않고 서버 오류를 ApiError로 전달하며 기존 토큰을 건드리지 않는다', async () => {
-    setTokens('keep-access', 'keep-refresh');
-    fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: '이메일 또는 비밀번호가 일치하지 않습니다.', code: 'INVALID_CREDENTIALS' }));
+  it('login은 requestLogin 응답의 토큰을 저장하고 응답을 반환한다(하위 호환)', async () => {
+    setTokens('stale-access', 'stale-refresh');
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+      userId: 'op-1', playerId: 'player-1', tokens: { accessToken: 'access-login', refreshToken: 'refresh-login' },
+    }));
 
-    const error = await login('op@example.test', 'wrong').catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(ApiError);
-    expect(error).toMatchObject({ status: 401, code: 'INVALID_CREDENTIALS', message: '이메일 또는 비밀번호가 일치하지 않습니다.' });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const result = await login('op@example.test', 'pw-12345678');
+
+    const call = callAt(0);
+    expect(call.url).toBe('/api/auth/login');
+    expect(call.headers).not.toHaveProperty('Authorization');
+    expect(result.userId).toBe('op-1');
+    expect(getAccessToken()).toBe('access-login');
+    expect(storage.getItem(REFRESH_KEY)).toBe('refresh-login');
+  });
+
+  it('requestLogin/login 실패(401)는 갱신을 시도하지 않고 서버 오류를 ApiError로 전달하며 기존 토큰을 건드리지 않는다', async () => {
+    setTokens('keep-access', 'keep-refresh');
+    fetchMock.mockImplementation(async () => jsonResponse(401, { error: '이메일 또는 비밀번호가 일치하지 않습니다.', code: 'INVALID_CREDENTIALS' }));
+
+    for (const attempt of [requestLogin, login]) {
+      const error = await attempt('op@example.test', 'wrong').catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({ status: 401, code: 'INVALID_CREDENTIALS', message: '이메일 또는 비밀번호가 일치하지 않습니다.' });
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(getAccessToken()).toBe('keep-access');
   });
 
@@ -479,7 +497,7 @@ describe('로그인 흐름 세대 가드', () => {
     const gen = session.bump();
     return runLoginFlow({
       isCurrent: () => session.current() === gen,
-      requestLogin: () => login(email, 'pw-12345678'),
+      requestLogin: () => requestLogin(email, 'pw-12345678'),
       setTokens,
       fetchHealth: getAdminHealth,
       onSuccess: (health) => { signedInRoles.push(health.role); },

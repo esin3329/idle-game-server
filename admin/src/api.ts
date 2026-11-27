@@ -199,12 +199,19 @@ export class ApiError extends Error {
 
 // ─── Auth ───────────────────────────────────────────
 
-/** 서버 응답만 반환한다. 토큰 저장은 호출자가 세대 검증 후 setTokens()로 직접 수행한다. */
-export async function login(email: string, password: string): Promise<AuthResult> {
+/** 서버 응답만 반환하고 토큰은 건드리지 않는다. 세대 검증이 필요한 호출자(AuthContext)가 사용한다. */
+export async function requestLogin(email: string, password: string): Promise<AuthResult> {
   return request<AuthResult>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
   });
+}
+
+/** 로그인 후 응답 토큰을 저장한다. */
+export async function login(email: string, password: string): Promise<AuthResult> {
+  const data = await requestLogin(email, password);
+  setTokens(data.tokens.accessToken, data.tokens.refreshToken);
+  return data;
 }
 
 // ─── Admin / Operators ──────────────────────────────

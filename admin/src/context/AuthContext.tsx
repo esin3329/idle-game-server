@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useRef, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { loadTokens, clearTokens, setTokens, login as apiLogin, getAdminHealth } from '../api';
+import { loadTokens, clearTokens, setTokens, requestLogin, getAdminHealth } from '../api';
 import { runLoginFlow } from './loginFlow';
 import type { AdminHealth } from '../types';
 
@@ -77,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     resetCache();
     await runLoginFlow({
       isCurrent: () => authGenRef.current === gen,
-      requestLogin: () => apiLogin(email, password),
+      requestLogin: () => requestLogin(email, password),
       setTokens,
       fetchHealth: getAdminHealth,
       onSuccess: (health) => {
