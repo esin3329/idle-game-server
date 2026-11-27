@@ -11,11 +11,11 @@ Hono와 TypeScript로 만든 방치형 메카 게임 서버입니다. 인증, �
 
 ## 현재 상태
 
-**2026-11-26 기준 저장소와 문서에 기록된 상태입니다.**
+**2026-11-27 기준 저장소와 문서에 기록된 상태입니다.**
 
 - 백엔드는 **Supabase(PostgreSQL) + JSON(개발/테스트)** 단일 구조로 정리되었습니다(기존 MySQL·Docker 경로 제거 완료).
 - Cloudflare Worker(`https://idle-game-server.qlqlf2226.workers.dev`)가 Hyperdrive를 통해 Supabase PostgreSQL과 연결되고, Unity 클라이언트 기본 API 주소도 해당 Worker로 전환되었습니다.
-- Unity 클라이언트는 로그인 후 기지·스테이지 목록·실제 탄막/서바이버 전투(`BattleRun.cs`, `ClientBattle.cs`)·5초 주기 `progress` 동기화 및 `finish` 보상 수령까지 연결했습니다. 다만 회원가입 전체 흐름, Cloudflare 실서버 완주, Android 빌드 및 기기 실행, 최종 운영 전환 데이터 동기화는 아직 검증되지 않았습니다.
+- Unity 클라이언트는 로그인 후 기지·스테이지 목록·실제 탄막/서바이버 전투(`BattleRun.cs`, `ClientBattle.cs`)·5초 주기 `progress` 동기화 및 `finish` 보상 수령까지 연결했습니다. 기지에서 메타 화면 네 개(격납고 `ShowHangar`, 제작소 `ShowWorkshop`, 연구소 `ShowResearch`, 랭킹 `ShowRankings`)로 들어갈 수 있습니다. 다만 회원가입 전체 흐름, Cloudflare 실서버 완주, Android 빌드 및 기기 실행, 최종 운영 전환 데이터 동기화는 아직 검증되지 않았습니다.
 
 자세한 전환 현황과 검증 범위는 [Cloudflare 배포 기록](./docs/CLOUDFLARE_DEPLOY.md)과 [Unity 클라이언트 문서](./unity/README.md), [전투 클라이언트 구조](./unity/IdleGameClient/BATTLE.md)를 참고하세요.
 
@@ -98,16 +98,20 @@ npm test
 npm run build
 npm run test:postgres
 npm ci --prefix admin
+npm --prefix admin test
 npm run build:admin
 npx wrangler deploy --dry-run --outdir .tools/worker-build
 ~~~
 
-GitHub Actions(`.github/workflows/ci.yml`)는 `unit`(Node 20·22 타입 검사·Vitest·빌드·npm audit), `postgres`(`npm run test:postgres`로 embedded PostgreSQL 스키마·RLS·API 통합 검증), `worker`(관리자 빌드·Cloudflare 타입 검사·Wrangler dry-run 번들) 3개 잡을 실행합니다.
+`npm --prefix admin test`는 `admin` SPA 스모크 테스트(`admin/src/__tests__/admin-smoke.test.ts`)입니다. 실제 서버 없이 API 클라이언트 계약을 확인합니다.
+
+GitHub Actions(`.github/workflows/ci.yml`)는 `unit`(Node 20·22 타입 검사·Vitest·빌드·npm audit), `postgres`(`npm run test:postgres`로 embedded PostgreSQL 스키마·RLS·API 통합 검증), `worker`(`npm --prefix admin test` 관리자 SPA 스모크 테스트·관리자 빌드·Cloudflare 타입 검사·Wrangler dry-run 번들) 3개 잡을 실행합니다.
 
 ## 문서
 
 - [Cloudflare + Supabase 배포 및 전환 기록](./docs/CLOUDFLARE_DEPLOY.md)
 - [운영 가이드](./docs/operations.md)
+- [스테이지 ID 정규화](./docs/STAGE_MIGRATION.md)
 - [Unity 클라이언트와 검증 상태](./unity/README.md)
 - [관리자 UI 설계](./docs/admin-ui-design.md)
 - [문제 대응 runbook](./docs/runbooks/)

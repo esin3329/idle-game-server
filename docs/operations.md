@@ -1,449 +1,168 @@
-# 운영 문서 (Operations Guide)
+# 운영 가이드
 
-> idle-game-server 운영에 필요한 절차와 설정을 설명합니다.
+기준일: 2026-11-27. 런타임은 **Cloudflare Workers + Supabase PostgreSQL + Hyperdrive + Queues/Cron**입니다. 로컬 개발과 Vitest만 JSON 저장소를 사용합니다.
 
----
+배포 전환 기록은 [CLOUDFLARE_DEPLOY.md](./CLOUDFLARE_DEPLOY.md), 스테이지 ID 정규화는 [STAGE_MIGRATION.md](./STAGE_MIGRATION.md), 과거 JSON 부하 수치는 [benchmark.md](./benchmark.md)를 봅니다.
 
-## 1. 아키텍처 개요
+## 1. 저장소 드라이버
 
-### 저장소 선택 (Provider 패턴)
+`src/provider.ts`의 `usePostgres()`가 저장소를 고릅니다.
 
-`DB_DRIVER` 환경변수로 저장소를 선택합니다.
+| `DB_DRIVER` | 동작 |
+|---|---|
+| `postgres` | Supabase PostgreSQL. `DATABASE_URL` 또는 Worker의 Hyperdrive 연결 문자열이 필요합니다. |
+| `json` | 프로세스 로컬 JSON (`DATA_FILE`, 기본 `data.json`). 개발·단위 테스트 전용입니다. |
+| 미설정 | `NODE_ENV=production`이거나 `DATABASE_URL`이 있으면 PostgreSQL, 그 외에는 JSON입니다. |
+| `mysql` | 즉시 오류입니다. 드라이버가 없습니다. |
 
-| DB_DRIVER | 저장소 | 용도 |
-|-----------|--------|------|
-| `json` | JSON 파일 | 개발/테스트, MySQL 불필요 |
-| `mysql` (기본) | MySQL + Drizzle ORM | 프로덕션 |
-| 미설정 | MySQL 시도 → 실패 시 JSON 폴백 | 개발 편의 |
+Worker 변수(`wrangler.jsonc`의 `vars`)는 `DB_DRIVER=postgres`, `AUTH_PROVIDER=local`, `NODE_ENV=production`, `LOG_LEVEL=info`입니다.
 
-### 데이터 파일 (JSON 모드)
+로컬 Worker 비밀은 [.dev.vars.example](../.dev.vars.example)을 `.dev.vars`로 복사합니다. Node 개발 서버(`npm run dev`)는 [.env.example](../.env.example)을 따릅니다. 두 파일의 실제 비밀은 커밋하지 않습니다.
 
-| 파일 | 내용 | 백업 필요 |
-|------|------|:---------:|
-| `data.json` | 플레이어 | ✅ |
-| `data-users.json` | 사용자 계정 | ✅ |
-| `data-sessions.json` | Refresh 세션 | ✅ |
-| `data-wallets.json` | 재화 지갑 | ✅ |
-| `data-ledger.json` | 재화 원장 | ✅ |
-| `data-parts.json` | 파츠 인벤토리 | ✅ |
-| `data-configs.json` | 메카 구성 | ✅ |
-| `data-research.json` | 연구 진행도 | ✅ |
-| `data-blueprints.json` | 설계도 | ✅ |
-| `data-crafts.json` | 제작 대기열 | ✅ |
-| `data-item-ledger.json` | 아이템 원장 | ✅ |
-| `data-battles.json` | 전투 세션 | ✅ |
-| `data-battle-events.json` | 전투 이벤트 | ✅ |
-| `data-battle-results.json` | 전투 결과 | ✅ |
+## 2. 스키마 마이그레이션
 
-> ⚠️ JSON 파일은 프로덕션에서 사용하지 마세요. MySQL을 사용하세요.
+SQL은 [supabase/migrations/](../supabase/migrations/)에 있습니다.
 
----
+| 파일 | 역할 |
+|---|---|
+| `20261005083456_game_postgres.sql` | `game` 스키마 초기 테이블 |
+| `20261005083457_crafting_idempotency.sql` | 제작 멱등성 |
+| `20261005083458_battle_upgrade_option_constraints.sql` | 전투 강화 선택 제약 |
+| `20261127000001_normalize_stage_ids.sql` | 스테이지 ID 정규화. 절차는 [STAGE_MIGRATION.md](./STAGE_MIGRATION.md) |
 
-## 2. MySQL 운영
+`npm run db:migrate:postgres`와 `npm run db:migrate`는 같은 실행기(`src/db/postgres-migrate-cli.ts`)입니다. `DATABASE_URL`이 없으면 시작하지 않습니다. 실행기는 `supabase/migrations/*.sql`을 이름순으로 읽고, 파일 원본 SHA-256을 `game.schema_migrations`와 비교합니다. 적용된 파일을 고치면 `Applied migration changed`로 중단합니다. 한 번의 실행은 단일 트랜잭션이며 `pg_advisory_xact_lock`으로 마이그레이터끼리만 직렬화합니다.
 
-### 환경 변수
+이미 MCP 등으로 초기 스키마를 넣은 원격 DB에는 같은 초기 SQL을 다시 실행하지 않습니다. `game.schema_migrations` 유무와 체크섬 확인은 [STAGE_MIGRATION.md](./STAGE_MIGRATION.md)의 사전 확인을 따릅니다. 줄바꿈은 LF입니다.
 
-```bash
-# .env 파일 예시
-DB_HOST=mysql              # Docker Compose 내부: mysql
-DB_PORT=3306
-DB_USER=gameuser           # root 사용 금지
-DB_PASSWORD=변경필수
-DB_NAME=idle_game
-MYSQL_ROOT_PASSWORD=변경필수
-```
+### 전투 콘텐츠 시드
 
-### 마이그레이션
-
-```bash
-# MySQL 실행 후 마이그레이션 적용
-docker compose up -d mysql
-npm run db:migrate
-
-# 마이그레이션 파일 위치
-src/db/migrations/
-├── 0000_init.sql       # 계정/재화/인증
-├── 0001_battle.sql     # 전투/스테이지
-├── 0002_parts.sql      # 파츠 시스템
-├── 0003_research.sql   # 연구 시스템
-└── 0004_crafting.sql   # 설계도/제작
-```
-
-### 시드 데이터
-
-```bash
-# 개발용 시드 데이터 (더미 플레이어)
-npm run db:seed
-
-# 전투 스테이지 시드
+```powershell
+$env:DATABASE_URL = "<postgres connection string>"
 npm run db:battle-seed
-
-# 운영자 계정 생성
-OPERATOR_EMAIL=admin@example.com OPERATOR_PASSWORD=secure123 npm run db:seed-operator
-
-# JSON → MySQL 데이터 이관
-npm run db:import-json
 ```
 
----
+`src/db/battle-seed.ts`가 `src/data/stages.ts`의 스테이지와 고정 보상표(`partial` / `normal` / `first`)를 upsert합니다. 스테이지 ID를 바꾼 뒤에는 마이그레이션 런북의 시드 순서를 따릅니다.
 
-## 3. 백업 (Backup)
+### 운영자 시드
 
-### MySQL 백업
-
-`scripts/backup.sh` — `mysqldump` 기반 증분/전체 백업
-
-```bash
-# 기본 백업 (./backups/ 디렉토리)
-./scripts/backup.sh
-
-# 특정 디렉토리 지정
-./scripts/backup.sh -o /data/backups
-
-# Docker Compose 환경에서 외부 접속
-DB_HOST=127.0.0.1 DB_PASSWORD=변경필수 ./scripts/backup.sh
+```powershell
+$env:DATABASE_URL = "<postgres connection string>"
+$env:OPERATOR_EMAIL = "operator@example.com"
+$env:OPERATOR_PASSWORD = "<한 번만 쓰는 초기 비밀번호>"
+npm run db:seed-operator
 ```
 
-**백업 특징:**
-- `--single-transaction` (InnoDB, 쓰기 차단 없음)
-- 30일 보관 (오래된 파일 자동 삭제)
-- UTC timestamp 파일명 (`idle_game_2026-07-30_120000.sql.gz`)
-- `.tmp` → `rename` 원자적 저장
-- `chmod 600` (비밀값 보호)
-- gzip 압축
+`src/db/seed-operator.ts`는 역할(`admin`, `operator`, `viewer`, `support`, `game_master`, `administrator`)과 권한 코드를 만들고, 지정 이메일을 `role=admin`으로 upsert합니다. **재실행하면 그 계정의 비밀번호 해시를 현재 `OPERATOR_PASSWORD`로 덮어씁니다.** 환경변수를 생략하면 `admin@projectcoreforge.local` / `admin-change-me-immediately`가 쓰이므로 운영 DB에서는 둘 다 지정합니다. 로그인 후 비밀번호를 바꿉니다.
 
-### JSON 모드 백업
+## 3. Worker 라우팅
 
-JSON 모드에서는 모든 data-*.json 파일을 주기적으로 백업합니다:
+[`wrangler.jsonc`](../wrangler.jsonc)의 `assets.directory`는 `./admin/dist`입니다. `not_found_handling`은 `single-page-application`입니다. `run_worker_first`와 `src/worker.ts`가 아래 경로만 Hono로 보냅니다. 그 외는 관리자 정적 자산입니다.
 
-```bash
-# JSON 데이터 파일 백업
-tar czf backup-$(date +%Y%m%d).tar.gz data-*.json
+| 경로 | 동작 |
+|---|---|
+| `GET /health` | `{ status, uptime, environment }`. DB를 열지 않습니다. |
+| `GET /health/live` | `{ status: "ok" }`. DB를 열지 않습니다. |
+| `GET /api/health` | `{ status: "ok" }`. DB를 열지 않습니다. |
+| `GET /ready` | 연결 후 `SELECT 1`. JSON이면 DB 없이 ready. 연결 실패 시 Worker가 `503` `{ code: "DATABASE_UNAVAILABLE" }`. 연결은 됐지만 쿼리가 실패하면 `{ status: "degraded", checks.database: "disconnected" }`와 `503`. `markNotReady()`(Node 종료) 중에는 `{ status: "not ready" }` `503`. |
+| `GET /metrics` | `operatorAuth`. 아래 참고. |
+| `/api/*` | 게임·인증·운영 API. |
 
-# 복구
-tar xzf backup-20260730.tar.gz
+`/ready`와 `/metrics`는 Hyperdrive 또는 `DATABASE_URL`이 있어야 앱 코드에 들어갑니다. `NODE_ENV=production`이면 `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`이 비어 있거나 `dev-secret-change-in-production`이면 그 요청은 기동 검증에서 실패합니다.
+
+### `/metrics`
+
+`src/app.ts`가 `operatorAuth` 뒤에 `getMetrics()` JSON을 반환합니다. 역할이 `operator`, `admin`, `administrator`가 아니면 `403`. 로컬 JWT(`AUTH_PROVIDER`가 `supabase`가 아닐 때)는 `Authorization: Bearer` 액세스 토큰입니다. Supabase Auth 모드도 같은 역할 검사를 합니다.
+
+수집은 프로세스(Worker isolate) 메모리입니다. 재시작·다른 isolate에서는 0부터입니다. Prometheus 텍스트 형식은 아닙니다. 필드: `requests.total`, `errors.total`, `errors.rate`(4xx+5xx), `statusCodes`, `responseTime.histogram`(10/50/100/200/500/1000/3000/10000ms), `topPaths`(UUID 구간은 `/:id`, 상위 10개), `timestamp`.
+
+## 4. 로그
+
+Pino (`src/shared/logger.ts`). 레벨은 `LOG_LEVEL`(기본 `info`). 프로덕션은 JSON stdout이고, 그 외에는 `pino-pretty`입니다. Worker `observability.logs.enabled`는 true입니다.
+
+Redaction 경로: `req.headers.authorization`, `req.headers.cookie`, `password`, `passwordHash`, `token`, `accessToken`, `refreshToken`, `apiKey`, `secret`, `*.password`, `*.token`, `*.secret`.
+
+자식 로거: `auditLog`(category `audit`), `battleLog`, `adminLog`, `authLog`. 보안 이벤트 저장 정책은 JWT·Authorization·password·전체 body를 넣지 않고, 허용 상세는 `code`와 `sessionId`입니다. 기록 실패는 사용자 요청을 실패시키지 않습니다. 재화·보상 이벤트는 트랜잭션 안에서 처리됩니다.
+
+## 5. Hyperdrive, 큐, Cron
+
+- Hyperdrive 바인딩 이름: `HYPERDRIVE`. `src/worker.ts`는 `env.HYPERDRIVE.connectionString`을 쓰고, 없으면 `DATABASE_URL`을 씁니다. 둘 다 없으면 해당 요청은 `503 DATABASE_UNAVAILABLE`입니다.
+- 큐 바인딩 `AI_RUNS_QUEUE`, 큐 이름 `idle-game-ai-runs`. Consumer `max_batch_size` 1, `max_retries` 0. 본문이 UUID `runId`가 아니면 ack만 합니다. 맞으면 `processAiRun` 후 ack합니다.
+- Cron `* * * * *`(매분). 만료된 AI run 정리, 대기 run을 큐에 넣고, `game.request_idempotency`·`game.request_rate_limits`의 만료 행을 삭제합니다.
+
+## 6. 인증 모드
+
+`AUTH_PROVIDER=local`(기본, Worker vars와 동일): 게임 서버 JWT. 액세스·리프레시 비밀은 `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`. 리프레시 기본 만료는 21일(`JWT_REFRESH_EXPIRES_IN`으로 재정의 가능).
+
+`AUTH_PROVIDER=supabase`: `src/shared/supabase-auth.ts`가 Supabase Auth(`/auth/v1`)를 호출합니다. `SUPABASE_URL`과 `SUPABASE_PUBLISHABLE_KEY`(또는 `SUPABASE_ANON_KEY`)가 필요합니다. 없으면 `503 AUTH_NOT_CONFIGURED`.
+
+계정 이관은 `npm run db:import-auth -- users.json`이 기본 미리보기입니다. 실제 적용은 `--apply --target <SUPABASE_URL과 동일한 HTTPS>`와 `SUPABASE_SERVICE_ROLE_KEY`가 필요합니다. 서비스 롤 키는 이관 환경에만 두고 Unity·관리자 정적 파일·저장소에 넣지 않습니다. 이관·검증이 끝난 뒤에만 `AUTH_PROVIDER=supabase`로 바꿉니다. 절차 배경은 [CLOUDFLARE_DEPLOY.md](./CLOUDFLARE_DEPLOY.md)입니다.
+
+## 7. 백업과 복구
+
+운영 데이터는 Supabase PostgreSQL `game` 스키마입니다.
+
+1. **플랫폼 백업.** Supabase 대시보드의 Database Backups를 확인합니다. Point-in-Time Recovery는 프로젝트 플랜에서 켜진 경우에만 있습니다. 보존 기간과 복구 대상(새 프로젝트인지, 기존 프로젝트 되돌리기인지)은 대시보드 안내를 따릅니다. 복구본의 `game.schema_migrations`와 애플리케이션 마이그레이션 파일 체크섬이 맞는지 확인한 다음 Hyperdrive 대상만 바꿉니다.
+2. **논리 덤프.** 진행 중 전투·지급이 있으면 쓰기 트래픽을 멈춘 뒤 덤프합니다.
+
+```powershell
+pg_dump --schema=game --no-owner --format=custom --file=game.dump $env:DATABASE_URL
 ```
 
-### cron 자동화
+복구는 비어 있는 데이터베이스에 합니다. 운영 중인 스키마 위에 `pg_restore`를 덮어쓰지 않습니다.
 
-```bash
-# 매일 02:00 UTC에 백업
-0 2 * * * cd /app && DB_PASSWORD=변경필수 ./scripts/backup.sh
-
-# 로그 확인
-tail -f logs/backup.log
+```powershell
+pg_restore --no-owner --dbname=$env:RESTORE_DATABASE_URL game.dump
 ```
 
----
+복구본에서 `/ready`, 로그인, 잔액·원장 표본, 스테이지 ID를 확인한 뒤 Hyperdrive 연결을 그 데이터베이스로 바꿉니다. 덤프 파일에는 계정 해시와 개인정보가 있으므로 저장소에 커밋하지 않습니다.
 
-## 4. 복구 (Recovery)
+스테이지 ID 마이그레이션 전의 필수 백업 순서는 [STAGE_MIGRATION.md](./STAGE_MIGRATION.md)를 따릅니다.
 
-### 복구 절차
+## 8. 배포와 롤백
 
-```bash
-# 1. dry-run 검증
-./scripts/recover.sh --dry-run latest
-
-# 2. 검증용 DB로 복구
-./scripts/recover.sh latest
-
-# 3. 복구 전 체크리스트
-#    □ 최신 백업 존재 확인
-#    □ --dry-run 검증 완료
-#    □ docker compose stop app (쓰기 차단)
-#    □ 복구 대상 DB 백업
-#    □ integrity-check.sh 실행
-#    □ 복구 실행
-#    □ integrity-check.sh 재실행
-#    □ docker compose start app
-#    □ /health/ready 확인
-#    □ 핵심 API smoke test
+```powershell
+npm ci
+npm ci --prefix admin
+npm run deploy:cloudflare
 ```
 
-### 무결성 검증
+`deploy:cloudflare`는 `npm run build:admin`(`admin/dist`) 후 `wrangler deploy`입니다. 배포 없이 번들만 보려면 CI와 같이 `npx wrangler deploy --dry-run --outdir .tools/worker-build`입니다. dry-run은 원격 DB에 쓰지 않습니다.
 
-```bash
-# 복구 전후 데이터 무결성 확인
-./scripts/integrity-check.sh
+비밀(JWT, Supabase 키, AI 키)은 Wrangler secret으로 두고 `vars`에 넣지 않습니다.
 
-# 복구 검증 (레코드 수 비교)
-./scripts/validate-recovery.sh
-
-# 수동 검증
-mysql -e "SELECT COUNT(*) FROM players; SELECT COUNT(*) FROM currency_ledger;"
-curl http://localhost:3000/health/ready
+```powershell
+npx wrangler deployments list
+npx wrangler rollback
 ```
 
-### 안전한 종료와 재시작
+`wrangler rollback`은 직전 Worker 버전으로 되돌립니다. 특정 버전은 `deployments list`의 버전 ID를 인자로 줍니다. 롤백은 Worker 코드와 정적 자산만 되돌립니다. 이미 적용된 SQL은 되돌리지 않으므로 스키마 변경 배포는 백업 이후에 합니다.
 
-```bash
-# Graceful shutdown (SIGTERM)
-docker compose stop app   # 진행 중 요청 완료 후 종료 (10s timeout)
+로컬 통합 실행은 `npm run dev:cloudflare`(`build:admin` + `wrangler dev`)입니다.
 
-# 재시작
-docker compose start app  # DB 연결 복구
+## 9. CI
 
-# 전체 재시작
-docker compose restart
-```
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml)는 `master` push와 pull request에서 세 잡을 돌립니다.
 
----
+| 잡 | 내용 |
+|---|---|
+| `unit` | Node 20·22. `npm ci`, `tsc --noEmit`, `npm test`, `npm run build`, `npm audit --audit-level=high` |
+| `postgres` | Node 22, 15분. `npm run test:postgres` (embedded PostgreSQL 스키마·RLS·API) |
+| `worker` | Node 22, 15분. `npm ci --prefix admin`, `npm --prefix admin test`, `npm run build:admin`, `npm run type-check:cloudflare`, `wrangler deploy --dry-run` |
 
-## 5. 모니터링
+## 10. 점검 체크리스트
 
-### 헬스 체크
+### 매일
 
-```bash
-# 기본 상태
-GET /health
-→ { "status": "ok", "uptime": 3600, "memory": {...}, "nodeVersion": "v20", "environment": "production" }
+- `GET /health`, `GET /health/live`가 `200`인지, `GET /ready`가 `ready`인지 확인합니다.
+- Worker 로그에서 `DATABASE_UNAVAILABLE`, `Production secrets not configured`, AI provider 오류가 반복되지 않는지 봅니다.
+- 큐 `idle-game-ai-runs` 적체와 Cron 실패를 봅니다.
+- 관리자 감사 로그에서 전날 재화 지급·제재가 티켓과 맞는지 봅니다. 문의 유형별 절차: [보상 누락](./runbooks/missing-reward.md), [중복 지급 의심](./runbooks/duplicate-grant.md), [전투 결과 거절](./runbooks/battle-rejected.md).
 
-# 라이브니스 (Liveness)
-GET /health/live
-→ { "status": "ok", "uptime": 3600 }
+### 매주
 
-# 레디니스 (Readiness)
-GET /ready
-→ { "status": "ready", "uptime": 3600, "inFlightRequests": 0, "checks": { "database": "connected" } }
+- Supabase 백업(및 PITR이 켜져 있으면 최근 복구 지점)이 갱신됐는지 확인합니다.
+- `npx wrangler deployments list`로 의도하지 않은 버전이 최신인지 확인합니다.
+- `game.schema_migrations` 이름이 [supabase/migrations/](../supabase/migrations/)와 일치하는지 확인합니다. 불일치는 [STAGE_MIGRATION.md](./STAGE_MIGRATION.md) 절차로만 해소합니다.
+- CI `unit` / `postgres` / `worker`가 기본 브랜치에서 녹색인지 확인합니다.
 
-# Docker HEALTHCHECK (30초 간격)
-docker inspect --format='{{json .State.Health}}' idle-game-server
-```
-
-### 메트릭
-
-```bash
-GET /metrics
-→ {
-    "requests": { "total": 1000 },
-    "errors": { "total": 5, "rate": "0.50%" },
-    "statusCodes": { "2xx": 990, "4xx": 5, "5xx": 0 },
-    "responseTime": {
-      "histogram": { "duration_le_10": 100, "duration_le_50": 500, ... },
-      "buckets": [10, 50, 100, 200, 500, 1000, 3000, 10000]
-    },
-    "topPaths": { "/api/players": 200, "/parts": 150, ... },
-    "timestamp": "2026-07-30T12:00:00Z"
-  }
-```
-
-### Docker HEALTHCHECK 설정
-
-Dockerfile에 내장된 HEALTHCHECK:
-```dockerfile
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/health || exit 1
-```
-
----
-
-## 6. 로깅
-
-### 구조화 로그 (Pino)
-
-모든 로그는 JSON 형식으로 stdout에 출력됩니다.
-
-```json
-{
-  "level": 30,          // 30=info, 40=warn, 50=error
-  "time": 1700000000000,
-  "msg": "Server running on http://localhost:3000",
-  "requestId": "abc-123",
-  "method": "POST",
-  "path": "/api/players/:id/claim",
-  "status": 200,
-  "durationMs": 15,
-  "environment": "production"
-}
-```
-
-### 로그 레벨
-
-| 환경 | LOG_LEVEL | 출력 |
-|------|-----------|------|
-| production | `info` (기본) | info, warn, error, fatal |
-| development | `info` | + pino-pretty 컬러 포맷 |
-| debug | `debug` | + 디버그 메시지 |
-
-### 로그 보안 (Redact)
-
-민감 정보는 자동 마스킹:
-- `req.headers.authorization`
-- `password`, `passwordHash`
-- `token`, `accessToken`, `refreshToken`
-- `apiKey`, `secret`
-
-### 감사 로그
-
-운영자 행위는 별도 audit 로그로 기록:
-```bash
-# 운영자 로그인 감사
-docker logs idle-game-server 2>&1 | grep '"category":"audit"'
-```
-
----
-
-## 7. 문제 해결
-
-### 서버가 시작되지 않음
-
-```bash
-# 포트 충돌 확인
-lsof -i :3000
-
-# 환경변수 확인
-grep -v '^#' .env | grep -v '^$'
-
-# MySQL 연결 확인
-docker compose exec mysql mysqladmin ping -h localhost
-
-# 로그 확인
-docker compose logs app
-```
-
-### MySQL 연결 오류
-
-```bash
-# MySQL 컨테이너 상태 확인
-docker compose ps mysql
-
-# MySQL 로그 확인
-docker compose logs mysql
-
-# 연결 테스트
-mysql -h 127.0.0.1 -u gameuser -p -e "SELECT 1"
-
-# 타임아웃 확인 (provider 2초)
-# → MySQL 미연결 시 자동 JSON 폴백
-```
-
-### 느린 응답
-
-```bash
-# 메트릭 확인
-curl http://localhost:3000/metrics | jq '.responseTime'
-
-# Top Paths 확인
-curl http://localhost:3000/metrics | jq '.topPaths'
-
-# in-flight 요청 확인
-curl http://localhost:3000/ready | jq '.inFlightRequests'
-```
-
-### 데이터 불일치
-
-```bash
-# 무결성 검증
-./scripts/integrity-check.sh
-
-# players 테이블 vs wallet_balances 불일치 확인
-mysql -e "
-  SELECT p.id, p.electricity AS player_elec, w.electricity AS wallet_elec
-  FROM players p JOIN wallet_balances w ON p.id = w.player_id
-  WHERE p.electricity != w.electricity;
-"
-```
-
----
-
-## 8. Docker Compose 운영
-
-```bash
-# 전체 시작
-docker compose up -d
-
-# 특정 서비스만
-docker compose up -d mysql
-docker compose up -d app
-
-# 로그 확인
-docker compose logs -f app
-docker compose logs -f mysql
-
-# 상태 확인
-docker compose ps
-
-# 중지 (데이터 유지)
-docker compose stop
-
-# 완전 제거 (데이터 삭제)
-docker compose down -v
-```
-
-### Dockerfile 멀티스테이지 빌드
-
-```dockerfile
-# Build stage: ts → js
-FROM node:20-alpine AS build
-ARG PORT=3000
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
-COPY tsconfig.json src/ ./src/
-RUN npm run build
-
-# Runtime stage: 최소 이미지
-FROM node:20-alpine
-ARG PORT=3000
-ENV PORT=$PORT NODE_ENV=production
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
-COPY --from=build /app/dist/ ./dist/
-USER node
-EXPOSE 3000
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT}/health || exit 1
-CMD ["node", "dist/index.js"]
-```
-
----
-
-## 9. 운영 체크리스트
-
-### 최초 배포
-
-- [ ] `.env` 파일 생성 (DB_PASSWORD, JWT_SECRET 변경)
-- [ ] `validateProductionSecrets()` 통과 확인
-- [ ] `docker compose up -d mysql`
-- [ ] `npm run db:migrate`
-- [ ] `npm run db:seed-operator` (최초 운영자 생성)
-- [ ] `docker compose up -d app`
-- [ ] `GET /health` → 200
-- [ ] `GET /ready` → ready
-- [ ] `POST /api/auth/register` → 201
-- [ ] `POST /api/auth/login` → 200
-
-### 일일 점검
-
-- [ ] `GET /health` 메모리 사용량 확인
-- [ ] `GET /metrics` 오류율 확인 (< 1%)
-- [ ] `docker compose ps` 컨테이너 상태 확인
-- [ ] 디스크 사용량 확인 (`df -h`)
-
-### 주간 점검
-
-- [ ] 백업 확인 (`ls -la backups/`)
-- [ ] `dry-run` 복구 검증
-- [ ] 로그 확인 (`docker compose logs --tail=100 app`)
-- [ ] 느린 쿼리 로그 확인
-
----
-
-
----
-
-## 10. 성능 기준 (Benchmark)
-
-자세한 성능 측정 결과는 **[benchmark.md](./benchmark.md)** 를 참고하세요.
-
-| 엔드포인트 | RPS (10 conn) | P50 | 오류율 |
-|-----------|:-----------:|:---:|:-----:|
-| `GET /health` | ~400 | < 1ms | 0% |
-| `GET /parts` | ~400 | 2~6ms | 0% |
-| `GET /stages` | ~470 | 2~5ms | 0% |
-| `POST /api/players` | ~300 | 5~15ms | 0% |
-| `POST /auth/register` | ~240 | 50~120ms | 0% |
-
-> Redis, Worker Thread, Cluster 모드는 현재 도입되지 않았습니다.
-> 필요성이 측정된 경우에만 추후 도입 예정입니다.
+JSON 저장소 기준의 2026-07-30 autocannon 수치는 용량 계획의 현재 PostgreSQL 수치가 아닙니다. [benchmark.md](./benchmark.md)는 그 측정 기록입니다.
