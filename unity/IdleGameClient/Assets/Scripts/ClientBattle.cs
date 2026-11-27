@@ -400,17 +400,43 @@ namespace IdleGame
             OpenUpgradeModal(BattleRun.BuildPracticeOffer(level));
         }
 
+        public enum UpgradeProgressAction { Ignore, OpenOffer, RequestOffer }
+
+        /// <summary>
+        /// Decides what a progress response means for the upgrade flow. A pendingOffer at or below the resolved level is stale;
+        /// a bare upgradesAvailable only counts when it is not older than the resolved level (equal means a new level-up).
+        /// After the battle has ended only an unresolved pendingOffer may still open the modal.
+        /// </summary>
+        public static UpgradeProgressAction DecideUpgradeProgress(JToken response, int resolvedLevel, bool battleEnded, bool upgradesUnsupported)
+        {
+            if (response == null || response.Type != JTokenType.Object) return UpgradeProgressAction.Ignore;
+            var pending = response["pendingOffer"];
+            if (pending != null && pending.Type == JTokenType.Object)
+            {
+                int offerLevel = (int?)pending["level"] ?? 0;
+                if (offerLevel > 0 && offerLevel <= resolvedLevel) return UpgradeProgressAction.Ignore;
+                if (battleEnded && offerLevel <= resolvedLevel) return UpgradeProgressAction.Ignore;
+                return UpgradeProgressAction.OpenOffer;
+            }
+            if (battleEnded || upgradesUnsupported || (bool?)response["upgradesAvailable"] != true) return UpgradeProgressAction.Ignore;
+            int battleLevel = (int?)response["battleLevel"] ?? 0;
+            return battleLevel > 0 && battleLevel < resolvedLevel ? UpgradeProgressAction.Ignore : UpgradeProgressAction.RequestOffer;
+        }
+
         /// <summary>Reads a progress response; a pending offer (or upgradesAvailable) pauses the battle until the player picks.</summary>
         private void ApplyProgressResponse(JToken response)
         {
-            if (response == null || battle == null || battlePreview || battle.Ended || battlePausedForUpgrade) return;
-            var pending = response["pendingOffer"];
-            bool hasOffer = pending != null && pending.Type == JTokenType.Object;
-            int level = (hasOffer ? (int?)pending["level"] : (int?)response["battleLevel"]) ?? 0;
-            // A response queued before the pick can still report the offer that was just resolved.
-            if (level > 0 && level <= resolvedUpgradeLevel) return;
-            if (hasOffer && OpenUpgradeModal(pending)) return;
-            if ((bool?)response["upgradesAvailable"] == true && !battleUpgradesUnsupported) battlePausedForUpgrade = true;
+            if (battle == null || battlePreview || battlePausedForUpgrade) return;
+            switch (DecideUpgradeProgress(response, resolvedUpgradeLevel, battle.Ended, battleUpgradesUnsupported))
+            {
+                case UpgradeProgressAction.OpenOffer:
+                    if (!OpenUpgradeModal(response["pendingOffer"]) && !battle.Ended && !battleUpgradesUnsupported)
+                        battlePausedForUpgrade = true;
+                    break;
+                case UpgradeProgressAction.RequestOffer:
+                    battlePausedForUpgrade = true;
+                    break;
+            }
         }
 
         private async Task LoadUpgradeOffer()
@@ -419,7 +445,7 @@ namespace IdleGame
             if (pendingUpgradeOfferKey == null) pendingUpgradeOfferKey = Guid.NewGuid().ToString();
             JToken result;
             try { result = await api.OfferBattleUpgrades(session.SessionId, pendingUpgradeOfferKey); }
-            catch (ApiException error) when (error.Status == 404)
+            catch (ApiException error) when (error.Status == 404 && (string.IsNullOrEmpty(error.Code) || error.Code == "ROUTE_NOT_FOUND"))
             {
                 // Servers without the upgrade endpoints: keep fighting and skip the selection modal.
                 if (battle == session) { battleUpgradesUnsupported = true; battlePausedForUpgrade = false; pendingUpgradeOfferKey = null; }
@@ -582,6 +608,7 @@ namespace IdleGame
                 battle.ApplyEffectiveStats(result["effectiveStats"], result["selectedUpgrade"]);
                 resolvedUpgradeLevel = Math.Max(resolvedUpgradeLevel, (int?)offer["level"] ?? 0);
                 CloseUpgradeModal();
+                if (battle != null && battle.Ended && !battlePreview) _ = PumpBattle();
             }
             catch (Exception error)
             {
@@ -616,7 +643,7 @@ namespace IdleGame
                     ApplyProgressResponse(response);
                 }
                 if (battlePausedForUpgrade && upgradeOffer == null) await LoadUpgradeOffer();
-                if (battle.Ended) await FinishPlayableBattle();
+                if (battle.Ended && !battlePausedForUpgrade) await FinishPlayableBattle();
             }
             catch (Exception error)
             {
@@ -648,7 +675,21 @@ namespace IdleGame
                 finishReport = new { totalKills = battle.Kills, totalCoreEnergy = battle.Core,
                     bossDefeated = battle.BossesDefeated.ToArray(), elapsedSeconds = (int)battle.Elapsed };
             }
-            var result = await api.FinishBattle(battle.SessionId, finishReport, finishKey);
+            JToken result;
+            try { result = await api.FinishBattle(battle.SessionId, finishReport, finishKey); }
+            catch (ApiException error) when (error.Code == "PENDING_UPGRADES")
+            {
+                // The server still holds an unresolved offer: reopen it instead of failing the finish.
+                battleFinishing = false;
+                battlePausedForUpgrade = true;
+                await LoadUpgradeOffer();
+                if (!battlePausedForUpgrade)
+                {
+                    battleNetworkFailed = true;
+                    notice.text = "선택하지 않은 강화가 남아 있어 종료할 수 없습니다. 연결 재시도로 다시 시도해 주세요.";
+                }
+                return;
+            }
             ShowBattleResult(result["reward"] ?? result, "작전 완료", true);
         }
 

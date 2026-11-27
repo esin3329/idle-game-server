@@ -35,6 +35,7 @@ namespace IdleGame
         public readonly List<Bullet> Bullets = new List<Bullet>();
         public const float PlayerRadius = 9, MoveSpeed = 360;
         private const float DefaultDashCooldown = .75f, BaseDashCooldownMs = 5000, MinDashCooldown = .2f, MinAttackInterval = .05f;
+        private const float ProjectileBaseSpeed = 620f, CritBaseMultiplier = 1.5f;
         public readonly List<string> BossesDefeated = new List<string>();
         public readonly string SessionId, StageName;
         public readonly int Duration, MaxKills, MaxCore;
@@ -47,6 +48,10 @@ namespace IdleGame
         public float HpRegenPerSec { get; private set; }
         public float ShieldHp { get; private set; }
         public float HealOnKill { get; private set; }
+        // Crit chance and extra crit damage are percentages; ProjectileSpeedMultiplier scales friendly shot speed.
+        public float CritRate { get; private set; }
+        public float CritDamage { get; private set; }
+        public float ProjectileSpeedMultiplier { get; private set; } = 1f;
         public readonly List<string> AppliedUpgrades = new List<string>();
         public float Elapsed { get; private set; }
         public float Hp { get; private set; }
@@ -68,6 +73,7 @@ namespace IdleGame
         private readonly int corePerKill;
         private int nextBoss, spawned;
         private float shieldCapacity;
+        private readonly Random critRandom;
         private float shotWait, spawnWait, dodgeWait, invincible, hitFlash, lastPlayerX, lastPlayerY;
 
         public BattleRun(JToken stage, JToken session)
@@ -99,7 +105,24 @@ namespace IdleGame
             int seed = 17;
             foreach (char c in (string)session["sessionSeed"] ?? SessionId) seed = unchecked(seed * 31 + c);
             random = new Random(seed);
+            critRandom = new Random(unchecked(seed ^ 0x2F6B1D));
+            ApplyLoadoutBonuses(session["loadoutSnapshot"]);
             Hp = MaxHp;
+        }
+
+        // Module bonuses from the session's loadoutSnapshot (JSON object or JSON string) apply from the first tick.
+        private void ApplyLoadoutBonuses(JToken loadout)
+        {
+            if (loadout?.Type == JTokenType.String)
+            {
+                try { loadout = JToken.Parse((string)loadout); }
+                catch (Newtonsoft.Json.JsonException) { return; }
+            }
+            var bonuses = (loadout as JObject)?["bonuses"] as JObject;
+            if (bonuses == null) return;
+            float shield = Math.Max(0, (float?)bonuses["shieldHp"] ?? 0);
+            ShieldHp = shieldCapacity = shield;
+            HpRegenPerSec = Math.Max(0, (float?)bonuses["hpRegenPerSec"] ?? 0);
         }
 
         private static float ScaleDashCooldown(float milliseconds) =>
@@ -111,6 +134,7 @@ namespace IdleGame
         /// </summary>
         public void ApplyEffectiveStats(JToken effectiveStats, JToken selectedUpgrade = null)
         {
+            bool projectileFromStats = false;
             if (effectiveStats != null && effectiveStats.Type != JTokenType.Null)
             {
                 float? attack = (float?)effectiveStats["attackPower"];
@@ -139,6 +163,22 @@ namespace IdleGame
                 }
                 float? healOnKill = (float?)effectiveStats["healOnKill"];
                 if (healOnKill != null) HealOnKill = Math.Max(0, healOnKill.Value);
+                float? critRate = (float?)effectiveStats["critRate"];
+                if (critRate != null) CritRate = Math.Max(0, Math.Min(100, critRate.Value));
+                float? critDamage = (float?)effectiveStats["critDamage"];
+                if (critDamage != null) CritDamage = Math.Max(0, critDamage.Value);
+                // effectiveStats carries totals; a card-level projectileSpeed is a delta applied once per pick.
+                float? projectileSpeed = (float?)effectiveStats["projectileSpeed"];
+                if (projectileSpeed != null)
+                {
+                    ProjectileSpeedMultiplier = Math.Max(.1f, 1f + projectileSpeed.Value / 100f);
+                    projectileFromStats = true;
+                }
+            }
+            if (!projectileFromStats)
+            {
+                float? pickedProjectile = (float?)((selectedUpgrade as JObject)?["effects"] as JObject)?["projectileSpeed"];
+                if (pickedProjectile != null) ProjectileSpeedMultiplier = Math.Max(.1f, ProjectileSpeedMultiplier + pickedProjectile.Value / 100f);
             }
             string upgradeId = selectedUpgrade != null && selectedUpgrade.Type != JTokenType.Null ? (string)selectedUpgrade["id"] : null;
             if (!string.IsNullOrEmpty(upgradeId)) AppliedUpgrades.Add(upgradeId);
@@ -265,7 +305,9 @@ namespace IdleGame
                 if (distance > .001f) { AimX = dx / distance; AimY = dy / distance; }
                 if (Bullets.Count < 256)
                 {
-                    Bullets.Add(new Bullet { X = PlayerX, Y = PlayerY, VelocityX = AimX * 620, VelocityY = AimY * 620,
+                    Bullets.Add(new Bullet { X = PlayerX, Y = PlayerY,
+                        VelocityX = AimX * ProjectileBaseSpeed * ProjectileSpeedMultiplier,
+                        VelocityY = AimY * ProjectileBaseSpeed * ProjectileSpeedMultiplier,
                         Friendly = true, Target = target, Damage = AttackPower, Radius = 4 });
                     ShotsFired++;
                 }
@@ -362,7 +404,11 @@ namespace IdleGame
                     {
                         float dx = bullet.Target.X - bullet.X, dy = bullet.Target.Y - bullet.Y;
                         float length = (float)Math.Sqrt(dx * dx + dy * dy);
-                        if (length > .001f) { bullet.VelocityX = dx / length * 620; bullet.VelocityY = dy / length * 620; }
+                        if (length > .001f)
+                        {
+                            bullet.VelocityX = dx / length * ProjectileBaseSpeed * ProjectileSpeedMultiplier;
+                            bullet.VelocityY = dy / length * ProjectileBaseSpeed * ProjectileSpeedMultiplier;
+                        }
                     }
                 }
                 bullet.X += bullet.VelocityX * delta;
@@ -372,7 +418,9 @@ namespace IdleGame
                     SegmentHits(oldX, oldY, bullet.X, bullet.Y, bullet.Target.X, bullet.Target.Y,
                         bullet.Radius + bullet.Target.Radius))
                 {
-                    bullet.Target.Hp -= bullet.Damage;
+                    float damage = bullet.Damage;
+                    if (CritRate > 0 && critRandom.NextDouble() * 100 < CritRate) damage *= CritBaseMultiplier + CritDamage / 100f;
+                    bullet.Target.Hp -= damage;
                     bullet.Target.LastHitAt = Elapsed;
                     if (bullet.Target.Hp <= 0) DefeatEnemy(bullet.Target);
                     Bullets.RemoveAt(i);
