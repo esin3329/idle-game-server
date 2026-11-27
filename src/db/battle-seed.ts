@@ -82,6 +82,10 @@ async function seed() {
         blueprintDropRate: r.blueprintDropRate,
         createdAt: new Date(),
       });
+    } else {
+      await db.update(stageRewards)
+        .set({ scrapMin: r.scrapMin, scrapMax: r.scrapMax, blueprintDropRate: r.blueprintDropRate })
+        .where(eq(stageRewards.id, existing[0].id));
     }
   }
 
