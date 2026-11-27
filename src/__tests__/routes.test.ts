@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -16,6 +16,7 @@ import { clearRateLimits } from '../shared/rate-limit.js';
 import { AppError } from '../shared/errors.js';
 import type { Player } from '../types.js';
 import { resetAllRepos } from '../provider.js';
+import { calcResearchBonus, calcUpgradeCost, DEFAULT_RESEARCH_BONUS } from '../shared/game-math.js';
 
 setDataFilePath(join(tmpDir, 'data.json'));
 const STORE_FILE_ENV = [
@@ -32,6 +33,8 @@ for (const name of STORE_FILE_ENV) {
 }
 const { jsonAuthRepo, resetAuthStores } = await import('../store-auth.js');
 const { resetWalletStores } = await import('../store-wallet.js');
+// 위 env 설정 이후에 로드해야 저장소 파일 경로가 반영되므로 동적 import
+const { jsonResearchRepo } = await import('../store-research.js');
 
 const nowISO = new Date().toISOString();
 const NONEXISTENT_ID = '00000000-0000-0000-0000-000000000000';
@@ -306,6 +309,55 @@ describe('GET /api/players/:id/upgrade', () => {
     expect(body.nextElectricityPerSecond).toBe(6);
     expect(body.cost).toBe(250);
     expect(body.canAfford).toBe(false);
+  });
+});
+
+function mockResearch(levels: Record<string, number>): void {
+  const now = new Date().toISOString();
+  vi.spyOn(jsonResearchRepo, 'getAll').mockResolvedValue(Object.entries(levels).map(([code, level]) => ({
+    id: code, playerId: 'p', code, level, completed: 0, createdAt: now, updatedAt: now,
+  })));
+}
+
+describe('업그레이드 비용 연구 할인', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('calcResearchBonus는 기존 3인자 호출 결과를 유지한다', () => {
+    expect(calcResearchBonus(0, 0, 0)).toEqual(DEFAULT_RESEARCH_BONUS);
+    expect(calcResearchBonus(2, 1, 3)).toEqual({
+      ...DEFAULT_RESEARCH_BONUS, idleProdMultiplier: 1.4, extraMaxIdleSeconds: 7200, idleRewardMultiplier: 1.45,
+    });
+  });
+
+  it('생산/수집 연구는 배율에 반영되고 할인은 최소 0.20 배율로 제한된다', () => {
+    const bonus = calcResearchBonus(0, 0, 0, 2, 1, 3, 2, 1);
+    expect(bonus.idleProdMultiplier).toBeCloseTo(1 + 0.2 + 0.15);
+    expect(bonus.claimBonusMultiplier).toBeCloseTo(1.3);
+    expect(bonus.upgradeCostMultiplier).toBe(0.82);
+    expect(calcResearchBonus(0, 0, 0, 0, 0, 0, 20, 20).upgradeCostMultiplier).toBe(0.2);
+    expect(calcUpgradeCost(5, calcResearchBonus(0, 0, 0, 0, 0, 0, 2, 1))).toBe(205);
+    expect(calcUpgradeCost(1, calcResearchBonus(0, 0, 0, 0, 0, 0, 20, 20))).toBe(10);
+    expect(calcUpgradeCost(0)).toBe(1);
+  });
+
+  it('GET/POST /players/:id/upgrade가 같은 할인 비용을 사용한다', async () => {
+    mockResearch({ econ_upgrade_discount_1: 2, econ_upgrade_discount_2: 1 });
+    const app = createApp();
+    const player = await createOwnedPlayer({ electricity: 300, electricityPerSecond: 5 });
+
+    const info = await app.request(`/api/players/${player.id}/upgrade`, { method: 'GET' });
+    const infoBody = await info.json();
+    expect(infoBody.cost).toBe(205);
+    expect(infoBody.canAfford).toBe(true);
+
+    const res = await app.request(`/api/players/${player.id}/upgrade`, { method: 'POST', headers: authToken() });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.cost).toBe(205);
+    expect(body.player.electricity).toBe(95);
+    expect(body.newElectricityPerSecond).toBe(6);
   });
 });
 

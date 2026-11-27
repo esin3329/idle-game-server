@@ -7,6 +7,7 @@ import {
   startBattleSession,
   reportBattleEvent,
   selectUpgrade,
+  offerBattleUpgrades,
   endBattleSession,
   getBattleSession,
   abandonBattleSession,
@@ -78,6 +79,22 @@ battleRoutes.post(
     }
 
     const result = await reportBattleEvent(sessionId, userId, body);
+    return c.json(result);
+  },
+);
+
+// ─── POST /battles/:sessionId/upgrades/offer ───────────
+// 레벨업 조건을 만족하면 강화 선택지를 생성(이미 있으면 그대로 반환)
+
+battleRoutes.post(
+  '/battles/:sessionId/upgrades/offer',
+  jwtAuth,
+  idempotencyGuard,
+  async (c) => {
+    const sessionId = c.req.param('sessionId')!;
+    const userId = c.get('userId');
+
+    const result = await offerBattleUpgrades(sessionId, userId);
     return c.json(result);
   },
 );

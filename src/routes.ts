@@ -10,7 +10,7 @@ import { getRepo, getResearchRepo, getAuthRepo, getWalletRepo } from './provider
 import { logger } from './shared/logger.js';
 import { rateLimit } from './shared/rate-limit.js';
 import { getBalance, adjustBalance, updateEps, updateLastClaimedAt } from './shared/wallet.js';
-import { GAME, calculateProduction, calcResearchBonus, DEFAULT_RESEARCH_BONUS } from './shared/game-math.js';
+import { calculateProduction, calcResearchBonus, calcUpgradeCost, DEFAULT_RESEARCH_BONUS, GAME } from './shared/game-math.js';
 import { requirePlayerOwnership } from './shared/player-identity.js';
 
 const routes = new Hono<{ Variables: { parsedBody: { nickname: string }; player: Player; idempotencyKey: string } }>();
@@ -51,10 +51,17 @@ async function getResearchBonus(playerId: string) {
   try {
     const researchRepo = await getResearchRepo();
     const allResearch = await researchRepo.getAll(playerId);
-    const prodPassiveLv = allResearch.find((r) => r.code === 'prod_passive')?.level || 0;
-    const prodCapLv = allResearch.find((r) => r.code === 'prod_cap')?.level || 0;
-    const idleRewardLv = allResearch.find((r) => r.code === 'util_idle_reward')?.level || 0;
-    return calcResearchBonus(prodPassiveLv, prodCapLv, idleRewardLv);
+    const level = (code: string) => allResearch.find((r) => r.code === code)?.level || 0;
+    return calcResearchBonus(
+      level('prod_passive'),
+      level('prod_cap'),
+      level('util_idle_reward'),
+      level('prod_eff_1'),
+      level('prod_eff_2'),
+      level('util_claim_bonus'),
+      level('econ_upgrade_discount_1'),
+      level('econ_upgrade_discount_2'),
+    );
   } catch {
     return DEFAULT_RESEARCH_BONUS;
   }
@@ -177,7 +184,7 @@ routes.get('/players/:id/claim', validatePlayerId, async (c) => {
 
 routes.get('/players/:id/upgrade', validatePlayerId, async (c) => {
   const player = await requirePlayer(c.req.param('id')!);
-  const cost = player.electricityPerSecond * GAME.UPGRADE_COST_MULTIPLIER;
+  const cost = calcUpgradeCost(player.electricityPerSecond, await getResearchBonus(c.req.param('id')!));
 
   return c.json({
     currentElectricityPerSecond: player.electricityPerSecond,
@@ -190,7 +197,7 @@ routes.get('/players/:id/upgrade', validatePlayerId, async (c) => {
 routes.post('/players/:id/upgrade', validatePlayerId, jwtAuth, idempotencyGuard, rateLimit(2, 1000), async (c) => {
   const id = await requirePlayerOwnership(c.get('userId'), c.req.param('id')!);
   const player = await requirePlayer(id);
-  const cost = player.electricityPerSecond * GAME.UPGRADE_COST_MULTIPLIER;
+  const cost = calcUpgradeCost(player.electricityPerSecond, await getResearchBonus(id));
 
   if (player.electricity < cost) {
     throw new InsufficientResourceError('전기', cost, player.electricity);
