@@ -5,9 +5,7 @@ import { idempotencyGuard } from './shared/idempotency.js';
 import { logger, auditLog } from './shared/logger.js';
 import { getAdminRepo } from './provider.js';
 import { AppError } from './shared/errors.js';
-import { getDb } from './db/postgres-connection.js';
-import { users, accountSanctions, securityEvents, operatorAuditLogs, operatorAccounts } from './db/postgres-schema.js';
-import { eq, and, or, gte, lte } from 'drizzle-orm';
+import { BATTLE_POLICY } from './shared/battle-policy.js';
 import { analysisInputSchema, sanitizeQuestion } from './ai/game-ops.js';
 import { listProviders } from './ai/provider.js';
 import { enqueueAiRun, getAiRun, hashAiRequest } from './ai/runs.js';
@@ -25,23 +23,36 @@ adminRoutes.use('/admin/*', cors({
 // 모든 운영 API에 operatorAuth 적용
 adminRoutes.use('/admin/*', operatorAuth);
 
-// ─── 권한 검증 헬퍼 ────────────────────────────────
-
-async function checkPerm(c: any, permission: string) {
-  const role = c.get('role');
-  if (role === 'admin' || role === 'administrator') return;
+async function hasAnyPermission(role: string, permissions: string[]): Promise<boolean> {
+  if (role === 'admin' || role === 'administrator') return true;
   const repo = await getAdminRepo();
-  const ok = await repo.checkPermission(role, permission);
-  if (!ok) throw new AppError('권한이 없습니다.', 403, 'FORBIDDEN');
+  for (const permission of permissions) {
+    if (await repo.checkPermission(role, permission)) return true;
+  }
+  return false;
+}
+
+function parseOptionalDate(raw: string | undefined, paramName: string): Date | undefined {
+  if (!raw) return undefined;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    throw new AppError(`유효하지 않은 날짜 형식입니다: ${paramName}`, 400, 'BAD_REQUEST');
+  }
+  return date;
+}
+
+function parseBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(raw || '', 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(parsed, max));
 }
 
 // ─── GET /admin/users ───────────────────────────────
 
-adminRoutes.get('/admin/users', async (c) => {
-  await checkPerm(c, 'admin.users.read');
+adminRoutes.get('/admin/users', requirePermission('admin.users.read'), async (c) => {
   const repo = await getAdminRepo();
-  const limit = Math.min(parseInt(c.req.query('limit') || '20'), 100);
-  const offset = Math.max(parseInt(c.req.query('offset') || '0'), 0);
+  const limit = parseBoundedInt(c.req.query('limit'), 20, 1, 100);
+  const offset = parseBoundedInt(c.req.query('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
   const search = c.req.query('search');
   const statusFilter = c.req.query('status');
 
@@ -52,8 +63,7 @@ adminRoutes.get('/admin/users', async (c) => {
 
 // ─── GET /admin/users/:id ────────────────────────────
 
-adminRoutes.get('/admin/users/:id', async (c) => {
-  await checkPerm(c, 'admin.users.read');
+adminRoutes.get('/admin/users/:id', requirePermission('admin.users.read'), async (c) => {
   const userId = c.req.param('id')!;
   const repo = await getAdminRepo();
   const user = await repo.getUserDetail(userId);
@@ -63,8 +73,7 @@ adminRoutes.get('/admin/users/:id', async (c) => {
 
 // ─── GET /admin/users/:id/wallet-ledger ──────────────
 
-adminRoutes.get('/admin/users/:id/wallet-ledger', async (c) => {
-  await checkPerm(c, 'admin.wallets.read');
+adminRoutes.get('/admin/users/:id/wallet-ledger', requirePermission('admin.wallets.read'), async (c) => {
   const userId = c.req.param('id')!;
   const repo = await getAdminRepo();
   const ledger = await repo.getUserLedger(userId);
@@ -73,8 +82,7 @@ adminRoutes.get('/admin/users/:id/wallet-ledger', async (c) => {
 
 // ─── GET /admin/users/:id/item-ledger ────────────────
 
-adminRoutes.get('/admin/users/:id/item-ledger', async (c) => {
-  await checkPerm(c, 'admin.inventories.read');
+adminRoutes.get('/admin/users/:id/item-ledger', requirePermission('admin.inventories.read'), async (c) => {
   const userId = c.req.param('id')!;
   const repo = await getAdminRepo();
   const items = await repo.getUserItems(userId);
@@ -83,8 +91,7 @@ adminRoutes.get('/admin/users/:id/item-ledger', async (c) => {
 
 // ─── GET /admin/users/:id/battles ────────────────────
 
-adminRoutes.get('/admin/users/:id/battles', async (c) => {
-  await checkPerm(c, 'admin.battles.read');
+adminRoutes.get('/admin/users/:id/battles', requirePermission('admin.battles.read'), async (c) => {
   const userId = c.req.param('id')!;
   const repo = await getAdminRepo();
   const battles = await repo.getUserBattles(userId);
@@ -93,8 +100,7 @@ adminRoutes.get('/admin/users/:id/battles', async (c) => {
 
 // ─── PUT /admin/users/:id/suspend ─────────────────────
 
-adminRoutes.put('/admin/users/:id/suspend', idempotencyGuard, async (c) => {
-  await checkPerm(c, 'admin.sanctions.write');
+adminRoutes.put('/admin/users/:id/suspend', idempotencyGuard, requirePermission('admin.sanctions.write'), async (c) => {
   const targetId = c.req.param('id')!;
   const operatorId = c.get('userId');
   const { reason } = await c.req.json();
@@ -109,8 +115,7 @@ adminRoutes.put('/admin/users/:id/suspend', idempotencyGuard, async (c) => {
 
 // ─── PUT /admin/users/:id/unsuspend ───────────────────
 
-adminRoutes.put('/admin/users/:id/unsuspend', idempotencyGuard, async (c) => {
-  await checkPerm(c, 'admin.sanctions.write');
+adminRoutes.put('/admin/users/:id/unsuspend', idempotencyGuard, requirePermission('admin.sanctions.write'), async (c) => {
   const targetId = c.req.param('id')!;
   const operatorId = c.get('userId');
   const { reason } = await c.req.json();
@@ -125,8 +130,7 @@ adminRoutes.put('/admin/users/:id/unsuspend', idempotencyGuard, async (c) => {
 
 // ─── GET /admin/users/:id/sanctions ───────────────────
 
-adminRoutes.get('/admin/users/:id/sanctions', async (c) => {
-  await checkPerm(c, 'admin.sanctions.read');
+adminRoutes.get('/admin/users/:id/sanctions', requirePermission('admin.sanctions.read'), async (c) => {
   const userId = c.req.param('id')!;
   const repo = await getAdminRepo();
   const sanctions = await repo.getUserSanctions(userId);
@@ -135,8 +139,10 @@ adminRoutes.get('/admin/users/:id/sanctions', async (c) => {
 
 // ─── POST /admin/users/:id/sanctions ──────────────────
 
-adminRoutes.post('/admin/users/:id/sanctions', idempotencyGuard, requirePermission('admin.users.write'), async (c) => {
-  const db = getDb();
+adminRoutes.post('/admin/users/:id/sanctions', idempotencyGuard, async (c) => {
+  if (!(await hasAnyPermission(c.get('role'), ['admin.sanctions.write', 'admin.users.write']))) {
+    throw new AppError('권한이 없습니다.', 403, 'FORBIDDEN');
+  }
   const userId = c.req.param('id')!;
   const operatorId = c.get('userId');
   const now = new Date();
@@ -153,13 +159,14 @@ adminRoutes.post('/admin/users/:id/sanctions', idempotencyGuard, requirePermissi
     return c.json({ error: '충분한 사유가 필요합니다 (5자 이상).', code: 'BAD_REQUEST' }, 400);
   }
 
-  // 대상 사용자 존재 확인
-  const userRows = await db.select({ id: users.id }).from(users).where(eq(users.id, userId)).limit(1);
-  if (userRows.length === 0) {
+  const repo = await getAdminRepo();
+  const user = await repo.getUserDetail(userId);
+  if (!user) {
     return c.json({ error: '사용자를 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
   }
 
   // 만료일 검증
+  let expiresAt: Date | null = null;
   if (expStr) {
     const expDate = new Date(expStr);
     if (isNaN(expDate.getTime())) {
@@ -172,10 +179,11 @@ adminRoutes.post('/admin/users/:id/sanctions', idempotencyGuard, requirePermissi
     if (expDate > maxExpiry) {
       return c.json({ error: '최대 제재 기간은 365일입니다.', code: 'BAD_REQUEST' }, 400);
     }
+    expiresAt = expDate;
   }
 
   const sanctionId = crypto.randomUUID();
-  await db.insert(accountSanctions).values({
+  await repo.createSanction({
     id: sanctionId,
     userId,
     operatorId,
@@ -183,7 +191,7 @@ adminRoutes.post('/admin/users/:id/sanctions', idempotencyGuard, requirePermissi
     reasonCode: reasonCode || type,
     reasonText,
     startsAt: now,
-    expiresAt: expStr ? new Date(expStr) : null,
+    expiresAt,
     status: 'active',
     createdAt: now,
   });
@@ -194,8 +202,7 @@ adminRoutes.post('/admin/users/:id/sanctions', idempotencyGuard, requirePermissi
 
 // ─── PUT /admin/users/:id/sanctions/:sanctionId/revoke ─
 
-adminRoutes.put('/admin/users/:id/sanctions/:sanctionId/revoke', idempotencyGuard, async (c) => {
-  await checkPerm(c, 'admin.sanctions.write');
+adminRoutes.put('/admin/users/:id/sanctions/:sanctionId/revoke', idempotencyGuard, requirePermission('admin.sanctions.write'), async (c) => {
   const sanctionId = c.req.param('sanctionId')!;
   const operatorId = c.get('userId');
   const { reason } = await c.req.json();
@@ -208,17 +215,32 @@ adminRoutes.put('/admin/users/:id/sanctions/:sanctionId/revoke', idempotencyGuar
 
 // ─── POST /admin/users/:id/grants ────────────────────
 
-adminRoutes.post('/admin/users/:id/grants', idempotencyGuard, async (c) => {
-  await checkPerm(c, 'admin.grants.low');
+adminRoutes.post('/admin/users/:id/grants', idempotencyGuard, requirePermission('admin.grants.low'), async (c) => {
   const operatorId = c.get('userId');
+  const role = c.get('role');
   const targetUserId = c.req.param('id')!;
 
   const { resourceType, resourceCode, amount, reasonText, externalReference } = await c.req.json();
   if (!resourceType || !resourceCode) return c.json({ error: 'resourceType, resourceCode는 필수입니다.', code: 'BAD_REQUEST' }, 400);
+  if (resourceType !== 'currency' && resourceType !== 'item') {
+    return c.json({ error: 'resourceType은 currency 또는 item이어야 합니다.', code: 'BAD_REQUEST' }, 400);
+  }
+  if (resourceType === 'currency' && !['electricity', 'scrap'].includes(resourceCode)) {
+    return c.json({ error: '지원하지 않는 재화입니다.', code: 'BAD_REQUEST' }, 400);
+  }
   if (!reasonText || reasonText.length < 5) return c.json({ error: '충분한 사유가 필요합니다 (5자 이상).', code: 'BAD_REQUEST' }, 400);
-  if (!Number.isSafeInteger(amount) || amount === 0) return c.json({ error: '유효한 amount가 필요합니다.', code: 'BAD_REQUEST' }, 400);
+  if (!Number.isSafeInteger(amount) || amount === 0 || amount > BATTLE_POLICY.MAX_GRANT_AMOUNT || amount < BATTLE_POLICY.MIN_GRANT_AMOUNT) {
+    return c.json({ error: '유효한 amount가 필요합니다 (-100000 ~ 100000, 0 제외).', code: 'BAD_REQUEST' }, 400);
+  }
 
   const repo = await getAdminRepo();
+  if (Math.abs(amount) >= BATTLE_POLICY.HIGH_VALUE_GRANT_THRESHOLD) {
+    const canHighGrant = role === 'admin' || role === 'administrator' || await repo.checkPermission(role, 'admin.grants.high');
+    if (!canHighGrant) {
+      return c.json({ error: '고액 지급은 관리자 권한이 필요합니다.', code: 'FORBIDDEN' }, 403);
+    }
+  }
+
   const user = await repo.getUserDetail(targetUserId);
   if (!user) return c.json({ error: '대상 사용자를 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
 
@@ -234,11 +256,10 @@ adminRoutes.post('/admin/users/:id/grants', idempotencyGuard, async (c) => {
 
 // ─── GET /admin/grants ───────────────────────────────
 
-adminRoutes.get('/admin/grants', async (c) => {
-  await checkPerm(c, 'admin.grants.read');
+adminRoutes.get('/admin/grants', requirePermission('admin.grants.read'), async (c) => {
   const repo = await getAdminRepo();
-  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
-  const offset = Math.max(parseInt(c.req.query('offset') || '0'), 0);
+  const limit = parseBoundedInt(c.req.query('limit'), 50, 1, 200);
+  const offset = parseBoundedInt(c.req.query('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
   const targetUserId = c.req.query('userId');
   const grants = await repo.listGrants(limit, offset, targetUserId);
   return c.json({ grants, limit, offset });
@@ -246,8 +267,7 @@ adminRoutes.get('/admin/grants', async (c) => {
 
 // ─── GET /admin/users/:id/idle-rewards ─────────────
 
-adminRoutes.get('/admin/users/:id/idle-rewards', async (c) => {
-  await checkPerm(c, 'admin.wallets.read');
+adminRoutes.get('/admin/users/:id/idle-rewards', requirePermission('admin.wallets.read'), async (c) => {
   const userId = c.req.param('id')!;
   const repo = await getAdminRepo();
   const logs = await repo.getIdleRewardLogs(userId);
@@ -261,18 +281,13 @@ adminRoutes.get('/admin/health', (c) => {
   return c.json({ status: 'ok', role });
 });
 
-export default adminRoutes;
-
-
 // ─── POST /admin/operators ──────────────────────────
 
 adminRoutes.post('/admin/operators', idempotencyGuard, requirePermission('admin.operators.manage'), async (c) => {
-  const db = getDb();
   const operatorId = c.get('userId');
   const operatorRole = c.get('role');
-  const now = new Date();
 
-  if (operatorRole !== 'admin') {
+  if (!['admin', 'administrator'].includes(operatorRole)) {
     return c.json({ error: '운영자 생성은 admin만 가능합니다.', code: 'FORBIDDEN' }, 403);
   }
 
@@ -291,67 +306,29 @@ adminRoutes.post('/admin/operators', idempotencyGuard, requirePermission('admin.
   const { hash } = await import('bcryptjs');
   const passwordHash = await hash(password, 10);
 
-  const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, email)).limit(1);
-  if (existing.length > 0) {
-    return c.json({ error: '이미 사용 중인 이메일입니다.', code: 'DUPLICATE_ACCOUNT' }, 409);
-  }
+  const repo = await getAdminRepo();
+  const created = await repo.createOperator({ email, passwordHash, nickname, role, grantedBy: operatorId });
 
-  const newUserId = crypto.randomUUID();
-  await db.insert(users).values({
-    id: newUserId, email, nickname, passwordHash, role, status: 'active', createdAt: now, updatedAt: now,
-  });
-
-  await db.insert(operatorAccounts).values({
-    id: crypto.randomUUID(),
-    userId: newUserId,
-    roleId: role,
-    grantedBy: operatorId,
-    grantedAt: now,
-    status: 'active',
-    createdAt: now,
-    updatedAt: now,
-  });
-
-  await db.insert(operatorAuditLogs).values({
-    id: crypto.randomUUID(),
-    operatorId,
-    action: 'operator_created',
-    targetType: 'user',
-    targetId: newUserId,
-    reasonCode: 'role_grant',
-    reasonText: `Created ${role}: ${email}`,
-    beforeSummary: '{}',
-    afterSummary: JSON.stringify({ role, email }),
-    result: 'success',
-    createdAt: now,
-  });
-
-  auditLog.warn({ operatorId, newUserId, email, role, event: 'operator_created' }, `New ${role} created: ${email}`);
-  return c.json({ id: newUserId, email, role, status: 'active' }, 201);
+  auditLog.warn({ operatorId, newUserId: created.id, email, role, event: 'operator_created' }, `New ${role} created: ${email}`);
+  return c.json(created, 201);
 });
 
 // ─── GET /admin/operators ───────────────────────────
 
 adminRoutes.get('/admin/operators', requirePermission('admin.operators.read'), async (c) => {
-  const db = getDb();
-  const rows = await db.select({
-    id: users.id, email: users.email, nickname: users.nickname,
-    role: users.role, status: users.status, createdAt: users.createdAt,
-  }).from(users).where(or(eq(users.role, 'operator'), eq(users.role, 'admin')));
-
-  return c.json({ operators: rows });
+  const repo = await getAdminRepo();
+  const operators = await repo.listOperators();
+  return c.json({ operators });
 });
 
 // ─── PUT /admin/operators/:id/role ──────────────────
 
 adminRoutes.put('/admin/operators/:id/role', idempotencyGuard, requirePermission('admin.operators.manage'), async (c) => {
-  const db = getDb();
   const operatorId = c.get('userId');
   const operatorRole = c.get('role');
   const targetId = c.req.param('id')!;
-  const now = new Date();
 
-  if (operatorRole !== 'admin') {
+  if (!['admin', 'administrator'].includes(operatorRole)) {
     return c.json({ error: '역할 변경은 admin만 가능합니다.', code: 'FORBIDDEN' }, 403);
   }
 
@@ -363,85 +340,52 @@ adminRoutes.put('/admin/operators/:id/role', idempotencyGuard, requirePermission
     return c.json({ error: '사유가 필요합니다.', code: 'BAD_REQUEST' }, 400);
   }
 
-  const userRows = await db.select().from(users).where(eq(users.id, targetId)).limit(1);
-  if (userRows.length === 0) {
-    return c.json({ error: '사용자를 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
-  }
+  const repo = await getAdminRepo();
+  const updated = await repo.updateOperatorRole(targetId, role, operatorId, reason);
 
-  const oldRole = userRows[0].role;
-  await db.update(users).set({ role, updatedAt: now }).where(eq(users.id, targetId));
-
-  await db.insert(operatorAuditLogs).values({
-    id: crypto.randomUUID(), operatorId,
-    action: 'role_changed', targetType: 'user', targetId,
-    reasonCode: 'role_grant', reasonText: reason,
-    beforeSummary: JSON.stringify({ role: oldRole }),
-    afterSummary: JSON.stringify({ role }),
-    result: 'success', createdAt: now,
-  });
-
-  auditLog.warn({ operatorId, targetId, oldRole, newRole: role, reason, event: 'operator_role_changed' }, `Role changed: ${oldRole} -> ${role}`);
-  return c.json({ id: targetId, role });
+  auditLog.warn({ operatorId, targetId, oldRole: updated.oldRole, newRole: role, reason, event: 'operator_role_changed' }, `Role changed: ${updated.oldRole} -> ${role}`);
+  return c.json({ id: updated.id, role: updated.role });
 });
+
 // ─── GET /admin/security-events ──────────────────────
 
 adminRoutes.get('/admin/security-events', requirePermission('admin.security.read'), async (c) => {
-  const db = getDb();
-  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
-  const offset = Math.max(parseInt(c.req.query('offset') || '0'), 0);
-  const eventType = c.req.query('eventType');
-  const userId = c.req.query('userId');
-  const severity = c.req.query('severity');
-  const source = c.req.query('source');
-  const startDate = c.req.query('start');
-  const endDate = c.req.query('end');
+  const limit = parseBoundedInt(c.req.query('limit'), 50, 1, 200);
+  const offset = parseBoundedInt(c.req.query('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
+  const startDate = parseOptionalDate(c.req.query('start'), 'start');
+  const endDate = parseOptionalDate(c.req.query('end'), 'end');
 
-  const conditions = [];
-  if (eventType) conditions.push(eq(securityEvents.eventType, eventType));
-  if (userId) conditions.push(eq(securityEvents.userId, userId));
-  if (severity) conditions.push(eq(securityEvents.severity, severity));
-  if (source) conditions.push(eq(securityEvents.source, source));
-  if (startDate) conditions.push(gte(securityEvents.occurredAt, new Date(startDate)));
-  if (endDate) conditions.push(lte(securityEvents.occurredAt, new Date(endDate)));
-
-  const query = db.select().from(securityEvents);
-  const rows = conditions.length > 0
-    ? await query.where(and(...conditions)).limit(limit).offset(offset)
-    : await query.limit(limit).offset(offset);
-
-  return c.json({
-    events: rows.map((e) => ({
-      id: e.id, eventType: e.eventType, userId: e.userId,
-      playerId: e.playerId, sessionId: e.sessionId,
-      code: e.code, severity: e.severity, source: e.source,
-      safeDetails: JSON.parse(e.safeDetails || '{}'),
-      referenceType: e.referenceType, referenceId: e.referenceId,
-      occurredAt: e.occurredAt, reviewedAt: e.reviewedAt,
-      resolution: e.resolution,
-    })),
-    limit, offset,
+  const repo = await getAdminRepo();
+  const events = await repo.listSecurityEvents({
+    limit,
+    offset,
+    eventType: c.req.query('eventType'),
+    userId: c.req.query('userId'),
+    severity: c.req.query('severity'),
+    source: c.req.query('source'),
+    startDate,
+    endDate,
   });
+
+  return c.json({ events, limit, offset });
 });
 
 // ─── PUT /admin/security-events/:id/review ────────────
 
 adminRoutes.put('/admin/security-events/:id/review', requirePermission('admin.security.write'), async (c) => {
-  const db = getDb();
   const eventId = c.req.param('id')!;
   const operatorId = c.get('userId');
-  const now = new Date();
 
   const { resolution, resolutionNote } = await c.req.json<{ resolution: string; resolutionNote?: string }>();
   if (!resolution) {
     return c.json({ error: 'resolution이 필요합니다.', code: 'BAD_REQUEST' }, 400);
   }
 
-  await db.update(securityEvents).set({
-    reviewedAt: now,
-    reviewedByOperatorId: operatorId,
-    resolution,
-    resolutionNote: resolutionNote || '',
-  }).where(eq(securityEvents.id, eventId));
+  const repo = await getAdminRepo();
+  const updated = await repo.reviewSecurityEvent(eventId, operatorId, resolution, resolutionNote);
+  if (!updated) {
+    return c.json({ error: '보안 이벤트를 찾을 수 없습니다.', code: 'NOT_FOUND' }, 404);
+  }
 
   auditLog.info({ operatorId, eventId, resolution, event: 'security_event_reviewed' }, 'Security event reviewed');
   return c.json({ status: 'reviewed' });
@@ -450,53 +394,39 @@ adminRoutes.put('/admin/security-events/:id/review', requirePermission('admin.se
 // ─── GET /admin/audit-logs ───────────────────────────
 
 adminRoutes.get('/admin/audit-logs', requirePermission('admin.audit_logs.read'), async (c) => {
-  const db = getDb();
-  const limit = Math.min(parseInt(c.req.query('limit') || '50'), 200);
-  const offset = Math.max(parseInt(c.req.query('offset') || '0'), 0);
-  const action = c.req.query('action');
-  const operatorId = c.req.query('operator_id');
-  const targetId = c.req.query('target_id');
-  const startDate = c.req.query('start');
-  const endDate = c.req.query('end');
+  const limit = parseBoundedInt(c.req.query('limit'), 50, 1, 200);
+  const offset = parseBoundedInt(c.req.query('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
+  const startDate = parseOptionalDate(c.req.query('start'), 'start');
+  const endDate = parseOptionalDate(c.req.query('end'), 'end');
 
-  const conditions = [];
-  if (action) conditions.push(eq(operatorAuditLogs.action, action));
-  if (operatorId) conditions.push(eq(operatorAuditLogs.operatorId, operatorId));
-  if (targetId) conditions.push(eq(operatorAuditLogs.targetId, targetId));
-  if (startDate) conditions.push(gte(operatorAuditLogs.createdAt, new Date(startDate)));
-  if (endDate) conditions.push(lte(operatorAuditLogs.createdAt, new Date(endDate)));
-
-  const rows = conditions.length > 0
-    ? await db.select().from(operatorAuditLogs).where(and(...conditions)).limit(limit).offset(offset)
-    : await db.select().from(operatorAuditLogs).limit(limit).offset(offset);
-
-  return c.json({
-    logs: rows.map((l) => ({
-      id: l.id, operatorId: l.operatorId, action: l.action,
-      targetType: l.targetType, targetId: l.targetId,
-      reasonCode: l.reasonCode, reasonText: l.reasonText,
-      result: l.result, createdAt: l.createdAt,
-    })),
-    limit, offset,
+  const repo = await getAdminRepo();
+  const logs = await repo.listAuditLogs({
+    limit,
+    offset,
+    action: c.req.query('action'),
+    operatorId: c.req.query('operator_id'),
+    targetId: c.req.query('target_id'),
+    startDate,
+    endDate,
   });
+
+  return c.json({ logs, limit, offset });
 });
 
 // ─── GameOps AI: 읽기 전용 운영 분석 ──────────────
 
-adminRoutes.get('/admin/ai/providers', async (c) => {
-  await checkPerm(c, 'admin.users.read');
+adminRoutes.get('/admin/ai/providers', requirePermission('admin.users.read'), async (c) => {
   return c.json({ providers: listProviders() });
 });
 
-adminRoutes.post('/admin/ai/analyze', async (c) => {
-  await checkPerm(c, 'admin.users.read');
+adminRoutes.post('/admin/ai/analyze', requirePermission('admin.users.read'), async (c) => {
   const body = await c.req.json().catch(() => null);
   const parsed = analysisInputSchema.safeParse(body);
   if (!parsed.success) {
     return c.json({ error: '분석 요청 형식이 올바르지 않습니다.', code: 'BAD_REQUEST' }, 400);
   }
   if (process.env.DB_DRIVER === 'json') {
-    return c.json({ error: 'AI 분석 큐에는 DB 저장소가 필요합니다.', code: 'AI_QUEUE_REQUIRES_MYSQL' }, 503);
+    return c.json({ error: 'AI 분석 큐에는 PostgreSQL 저장소가 필요합니다.', code: 'AI_QUEUE_REQUIRES_POSTGRES' }, 503);
   }
 
   const idempotencyKey = c.req.header('Idempotency-Key') || '';
@@ -531,15 +461,14 @@ adminRoutes.post('/admin/ai/analyze', async (c) => {
   return c.json(run, run.replayed ? 200 : 202);
 });
 
-adminRoutes.get('/admin/ai/runs/:id', async (c) => {
-  await checkPerm(c, 'admin.users.read');
+adminRoutes.get('/admin/ai/runs/:id', requirePermission('admin.users.read'), async (c) => {
   if (process.env.DB_DRIVER === 'json') {
-    return c.json({ error: 'AI 분석 큐에는 DB 저장소가 필요합니다.', code: 'AI_QUEUE_REQUIRES_MYSQL' }, 503);
+    return c.json({ error: 'AI 분석 큐에는 PostgreSQL 저장소가 필요합니다.', code: 'AI_QUEUE_REQUIRES_POSTGRES' }, 503);
   }
   const targetUserId = c.req.query('targetUserId') || '';
   if (!targetUserId) return c.json({ error: 'targetUserId가 필요합니다.', code: 'BAD_REQUEST' }, 400);
   try {
-    const run = await getAiRun(c.req.param('id'), c.get('userId'), targetUserId);
+    const run = await getAiRun(c.req.param('id')!, c.get('userId'), targetUserId);
     return c.json(run);
   } catch (error) {
     if (error instanceof AppError) throw error;
@@ -547,3 +476,5 @@ adminRoutes.get('/admin/ai/runs/:id', async (c) => {
     return c.json({ error: 'AI 분석 상태를 읽지 못했습니다.', code: 'AI_QUEUE_UNAVAILABLE' }, 503);
   }
 });
+
+export default adminRoutes;

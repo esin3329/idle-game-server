@@ -1,54 +1,83 @@
 import { Hono } from 'hono';
 import { jwtAuth } from './shared/jwt-auth.js';
+import { playerIdForUser } from './shared/player-identity.js';
 import { getBattleRepo } from './provider.js';
-import { STAGES, getStageBosses } from './data/stages.js';
+import { STAGES, getStageBosses, parseStageJsonArray, requiredStageIdFor } from './data/stages.js';
 
 const stagesRoutes = new Hono<{ Variables: { userId: string } }>();
+
+async function getProgressWithLegacyFallback(repo: any, playerId: string, userId: string, stageId: string) {
+  const byPlayer = await repo.getPlayerStageProgress(playerId, stageId).catch(() => null);
+  if (byPlayer || playerId === userId) return byPlayer;
+  return repo.getPlayerStageProgress(userId, stageId).catch(() => null);
+}
+
+async function getRecordWithLegacyFallback(repo: any, playerId: string, userId: string, stageId: string) {
+  const byPlayer = await repo.getPlayerRecord(playerId, stageId).catch(() => null);
+  if (byPlayer || playerId === userId) return byPlayer;
+  return repo.getPlayerRecord(userId, stageId).catch(() => null);
+}
 
 // ─── GET /stages — 스테이지 목록 + 플레이어 진행도 (JWT 있으면) ──
 
 stagesRoutes.get('/stages', async (c) => {
   const authHeader = c.req.header('Authorization');
-  let playerId: string | null = null;
+  let userId: string | null = null;
 
   if (authHeader?.startsWith('Bearer ')) {
     try {
-      await jwtAuth(c, async () => { playerId = c.get('userId'); });
+      await jwtAuth(c, async () => { userId = c.get('userId'); });
     } catch { /* ignore */ }
   }
 
+  const playerId = userId ? await playerIdForUser(userId) : null;
   const repo = await getBattleRepo();
   const dbStages = await repo.getStages();
 
   // data/stages.ts의 스테이지와 DB 스테이지 병합 (JSON 모드에서는 data/stages.ts만 사용)
-  const stages = dbStages.length > 0 ? dbStages : STAGES;
+  const rawStages = dbStages.length > 0 ? dbStages : STAGES;
+  const stages = [...rawStages].sort((a: any, b: any) => (a.sequence ?? 0) - (b.sequence ?? 0));
 
   const result = await Promise.all(stages.map(async (s: any) => {
+    const staticStage = STAGES.find((item) => item.id === s.id);
     const bosses = getStageBosses(s.id);
+    const requiredStageId = requiredStageIdFor(s.entryRequirement);
+    const enabled = s.enabled === undefined ? true : Boolean(s.enabled);
+
     let progress = null;
-    let unlocked = s.sequence === 1; // 첫 스테이지는 항상 해금
-    if (playerId) {
-      progress = await repo.getPlayerStageProgress(playerId, s.id).catch(() => null);
-      // entryRequirement 기반 해금 확인
-      if (s.entryRequirement && s.entryRequirement !== 'none') {
-        const prevProgress = await repo.getPlayerStageProgress(playerId, s.entryRequirement).catch(() => null);
-        const prevRecord = await repo.getPlayerRecord(playerId, s.entryRequirement).catch(() => null);
-        unlocked = !!(prevProgress?.firstClearedAt || (prevRecord?.totalClears || 0) > 0);
+    let unlocked = !requiredStageId || s.sequence === 1;
+    if (playerId && userId) {
+      progress = await getProgressWithLegacyFallback(repo, playerId, userId, s.id);
+      if (!unlocked && requiredStageId) {
+        const [prevProgress, prevRecord] = await Promise.all([
+          getProgressWithLegacyFallback(repo, playerId, userId, requiredStageId),
+          getRecordWithLegacyFallback(repo, playerId, userId, requiredStageId),
+        ]);
+        unlocked = Boolean(progress?.unlockedAt)
+          || Boolean(prevProgress?.firstClearedAt)
+          || (prevRecord?.totalClears || 0) > 0;
       }
     }
+
     return {
       id: s.id, name: s.name, description: s.description,
       sequence: s.sequence, durationSeconds: s.durationSeconds,
-      recommendedPower: s.recommendedPower, enemySet: s.enemySet,
-      bossTimings: s.bossTimings, maxKills: s.maxKills,
-      scrapPerKill: s.scrapPerKill,
+      recommendedPower: s.recommendedPower,
+      enemySet: parseStageJsonArray<string>(s.enemySet, staticStage?.enemySet ?? []),
+      bossTimings: parseStageJsonArray<number>(s.bossTimings, staticStage?.bossTimings ?? []),
+      maxKills: s.maxKills ?? staticStage?.maxKills ?? 300,
+      maxCoreEnergy: s.maxCoreEnergy ?? staticStage?.maxCoreEnergy ?? 300,
+      corePerKill: s.corePerKill ?? staticStage?.corePerKill ?? 5,
+      scrapPerKill: s.scrapPerKill ?? staticStage?.scrapPerKill ?? 1,
       entryRequirement: s.entryRequirement,
+      enabled,
       bosses: bosses.map((b) => ({
         code: b.code, name: b.name, description: b.description,
         hp: b.hp, attackPower: b.attackPower, patterns: b.patterns,
         scrapBonus: b.scrapBonus,
       })),
       unlocked,
+      canEnter: enabled && unlocked,
       progress: progress ? {
         firstClearedAt: progress.firstClearedAt,
         clearCount: progress.clearCount || 0,
@@ -70,9 +99,12 @@ stagesRoutes.get('/stages/:id', async (c) => {
   const stage = stages.find((s: any) => s.id === stageId) || STAGES.find((s) => s.id === stageId);
   if (!stage) return c.json({ error: 'Not found', code: 'NOT_FOUND' }, 404);
 
+  const staticStage = STAGES.find((item) => item.id === stageId);
   const bosses = getStageBosses(stageId);
   return c.json({
     ...stage,
+    enemySet: parseStageJsonArray<string>(stage.enemySet, staticStage?.enemySet ?? []),
+    bossTimings: parseStageJsonArray<number>(stage.bossTimings, staticStage?.bossTimings ?? []),
     bosses: bosses.map((b) => ({
       code: b.code, name: b.name, description: b.description,
       hp: b.hp, attackPower: b.attackPower, patterns: b.patterns,
@@ -89,8 +121,6 @@ stagesRoutes.get('/stages/:id/bosses', (c) => {
   return c.json(bosses);
 });
 
-export default stagesRoutes;
-
 // ─── GET /stages/:id/requirements — 출격 조건 ──
 
 stagesRoutes.get('/stages/:id/requirements', async (c) => {
@@ -103,13 +133,14 @@ stagesRoutes.get('/stages/:id/requirements', async (c) => {
   const requirements: Record<string, unknown>[] = [];
 
   // 1. 이전 스테이지 클리어 조건
-  if (stage.entryRequirement && stage.entryRequirement !== 'none') {
-    const prevStage = stages.find((s: any) => s.id === stage.entryRequirement) || STAGES.find((s) => s.id === stage.entryRequirement);
+  const requiredStageId = requiredStageIdFor(stage.entryRequirement);
+  if (requiredStageId) {
+    const prevStage = stages.find((s: any) => s.id === requiredStageId) || STAGES.find((s) => s.id === requiredStageId);
     requirements.push({
       type: 'prev_stage_clear',
       label: `이전 스테이지 클리어`,
-      required: stage.entryRequirement,
-      requiredName: prevStage?.name || stage.entryRequirement,
+      required: requiredStageId,
+      requiredName: prevStage?.name || requiredStageId,
     });
   }
 
@@ -131,3 +162,5 @@ stagesRoutes.get('/stages/:id/requirements', async (c) => {
 
   return c.json({ stageId: stage.id, name: stage.name, requirements });
 });
+
+export default stagesRoutes;

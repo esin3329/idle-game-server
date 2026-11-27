@@ -197,10 +197,13 @@ export function getBlueprintByPartCode(partCode: string): BlueprintData | undefi
 }
 
 /** 드롭 가중치 기반 랜덤 설계도 선택 */
-export function randomBlueprintByDropWeight(rarity?: 'common' | 'uncommon' | 'rare'): BlueprintData {
+export function randomBlueprintByDropWeight(
+  rarity?: 'common' | 'uncommon' | 'rare',
+  rng: () => number = Math.random,
+): BlueprintData {
   const pool = rarity ? BLUEPRINTS.filter((b) => b.rarity === rarity) : BLUEPRINTS;
   const totalWeight = pool.reduce((s, b) => s + b.dropWeight, 0);
-  let roll = Math.random() * totalWeight;
+  let roll = rng() * totalWeight;
   for (const bp of pool) {
     roll -= bp.dropWeight;
     if (roll <= 0) return bp;

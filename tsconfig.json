@@ -15,5 +15,5 @@
     "rootDir": "./src",
     "outDir": "./dist"
   },
-  "exclude": ["node_modules", "dist", "admin", "vitest.config.ts", "drizzle.config.ts", "drizzle.postgres.config.ts", "src/worker.ts", "src/gameops-workflow.ts", "src/cloudflare-environment.ts", "worker-configuration.d.ts"]
+  "exclude": ["node_modules", "dist", "admin", "src/__tests__", "vitest.config.ts", "drizzle.config.ts", "drizzle.postgres.config.ts", "src/worker.ts", "src/gameops-workflow.ts", "src/cloudflare-environment.ts", "worker-configuration.d.ts"]
 }

@@ -4,13 +4,14 @@
  * DB_DRIVER=postgres 또는 PostgreSQL 연결 가능 시 provider.ts에서 로드됨.
  * users + playerProfiles + walletBalances 생성을 트랜잭션으로 처리.
  */
-import { eq, and } from 'drizzle-orm';
+import { eq, and, gt, isNull, lte, or } from 'drizzle-orm';
 import { getDb, isPostgresUniqueViolation } from './postgres-connection.js';
 import { users, players, playerProfiles, walletBalances, refreshSessions, accountSanctions } from './postgres-schema.js';
 import type { User, RefreshSession, Sanction, PlayerProfile } from '../types.js';
 import type { AuthRepository, PlayerProfile as ProfileType, WalletBalance as WalletType } from '../repository.js';
 import { AppError } from '../shared/errors.js';
 import { logger } from '../shared/logger.js';
+import { postgresTimestampToIso, toPostgresDate } from './postgres-timestamps.js';
 
 // ─── row → type 변환 헬퍼 ──────────────────────────
 
@@ -18,9 +19,10 @@ function toUser(row: typeof users.$inferSelect): User {
   return {
     id: row.id, email: row.email, nickname: row.nickname,
     passwordHash: row.passwordHash, status: row.status, role: row.role,
-    suspendedAt: row.suspendedAt?.toISOString(), suspendedReason: row.suspendedReason ?? undefined,
+    suspendedAt: row.suspendedAt ? postgresTimestampToIso(row.suspendedAt) : undefined,
+    suspendedReason: row.suspendedReason ?? undefined,
     refreshToken: row.refreshToken ?? undefined,
-    createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString(),
+    createdAt: postgresTimestampToIso(row.createdAt), updatedAt: postgresTimestampToIso(row.updatedAt),
   };
 }
 
@@ -32,7 +34,7 @@ export const postgresAuthRepo: AuthRepository = {
     await db.insert(users).values({
       id: user.id, email: user.email, nickname: user.nickname,
       passwordHash: user.passwordHash, status: user.status, role: user.role,
-      createdAt: new Date(user.createdAt), updatedAt: new Date(user.updatedAt),
+      createdAt: toPostgresDate(user.createdAt), updatedAt: toPostgresDate(user.updatedAt),
     });
     return user;
   },
@@ -42,7 +44,7 @@ export const postgresAuthRepo: AuthRepository = {
     await db.insert(playerProfiles).values({
       id: profile.id, playerId: profile.playerId, userId: profile.userId,
       nickname: profile.nickname, highestStage: profile.highestStage,
-      createdAt: new Date(profile.createdAt), updatedAt: new Date(profile.updatedAt),
+      createdAt: toPostgresDate(profile.createdAt), updatedAt: toPostgresDate(profile.updatedAt),
     });
     return profile;
   },
@@ -52,8 +54,8 @@ export const postgresAuthRepo: AuthRepository = {
     await db.insert(walletBalances).values({
       id: wallet.id, playerId: wallet.playerId, userId: wallet.userId,
       electricity: wallet.electricity, electricityPerSecond: wallet.electricityPerSecond,
-      balance: wallet.balance, lastClaimedAt: new Date(wallet.lastClaimedAt),
-      createdAt: new Date(wallet.createdAt), updatedAt: new Date(wallet.updatedAt),
+      balance: wallet.balance, lastClaimedAt: toPostgresDate(wallet.lastClaimedAt),
+      createdAt: toPostgresDate(wallet.createdAt), updatedAt: toPostgresDate(wallet.updatedAt),
     });
     return wallet;
   },
@@ -84,7 +86,7 @@ export const postgresAuthRepo: AuthRepository = {
     return {
       id: r.id, playerId: r.playerId, userId: r.userId,
       nickname: r.nickname, highestStage: r.highestStage,
-      createdAt: r.createdAt.toISOString(), updatedAt: r.updatedAt.toISOString(),
+      createdAt: postgresTimestampToIso(r.createdAt), updatedAt: postgresTimestampToIso(r.updatedAt),
     };
   },
 
@@ -93,16 +95,16 @@ export const postgresAuthRepo: AuthRepository = {
     const rows = await db.select().from(accountSanctions)
       .where(and(
         eq(accountSanctions.userId, userId),
-        eq(accountSanctions.type, 'suspension'),
         eq(accountSanctions.status, 'active'),
-      ))
-      .limit(1);
+        lte(accountSanctions.startsAt, new Date()),
+        or(isNull(accountSanctions.expiresAt), gt(accountSanctions.expiresAt, new Date())),
+      ));
     return rows.map((r) => ({
       id: r.id, userId: r.userId, type: r.type, status: r.status,
       reasonText: r.reasonText,
-      startsAt: r.startsAt.toISOString(),
-      expiresAt: r.expiresAt?.toISOString(),
-      createdAt: r.createdAt.toISOString(),
+      startsAt: postgresTimestampToIso(r.startsAt),
+      expiresAt: r.expiresAt ? postgresTimestampToIso(r.expiresAt) : undefined,
+      createdAt: postgresTimestampToIso(r.createdAt),
     }));
   },
 
@@ -111,8 +113,8 @@ export const postgresAuthRepo: AuthRepository = {
     await db.insert(refreshSessions).values({
       id: session.id, userId: session.userId,
       tokenHash: session.tokenHash,
-      expiresAt: new Date(session.expiresAt),
-      createdAt: new Date(session.createdAt),
+      expiresAt: toPostgresDate(session.expiresAt),
+      createdAt: toPostgresDate(session.createdAt),
     });
     return session;
   },
@@ -124,9 +126,9 @@ export const postgresAuthRepo: AuthRepository = {
     const r = rows[0];
     return {
       id: r.id, userId: r.userId, tokenHash: r.tokenHash,
-      expiresAt: r.expiresAt.toISOString(),
-      revokedAt: r.revokedAt?.toISOString(),
-      createdAt: r.createdAt.toISOString(),
+      expiresAt: postgresTimestampToIso(r.expiresAt),
+      revokedAt: r.revokedAt ? postgresTimestampToIso(r.revokedAt) : undefined,
+      createdAt: postgresTimestampToIso(r.createdAt),
     };
   },
 

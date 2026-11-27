@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
-import type { ResultSetHeader, RowDataPacket } from 'mysql2/promise';
-import { getPool } from '../db/connection.js';
-import { AppError } from '../shared/errors.js';
+import { and, asc, count, eq, gt, gte, inArray, lte, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import { getDb } from '../db/postgres-connection.js';
+import { aiRuns, aiToolCalls, users } from '../db/postgres-schema.js';
 import { getAdminRepo } from '../provider.js';
+import { AppError } from '../shared/errors.js';
 import type { ProviderId } from './provider.js';
 
 export type AiRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'timed_out';
@@ -45,22 +47,36 @@ export interface ClaimedAiRun {
   inputJson: string;
 }
 
-function parseJson<T>(value: string | null | undefined): T | undefined {
-  if (!value) return undefined;
-  try { return JSON.parse(value) as T; } catch { return undefined; }
+export interface AiTokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
 }
 
-function toIso(value: unknown): string | undefined {
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === 'string') {
-    const normalized = value.includes('T') ? value : value.replace(' ', 'T');
-    return new Date(normalized.endsWith('Z') ? normalized : `${normalized}Z`).toISOString();
-  }
-  return undefined;
-}
+const statusSchema = z.enum(['queued', 'running', 'succeeded', 'failed', 'timed_out']);
+const caseSchema = z.enum(['missing_reward', 'duplicate_suspected', 'battle_rejected']);
+const providerSchema = z.enum(['gemini', 'huggingface']);
+const now = sql`CURRENT_TIMESTAMP`;
+const active = inArray(aiRuns.status, ['queued', 'running']);
 
 function safeErrorCode(code: string): string {
   return /^[A-Z0-9_]{1,64}$/.test(code) ? code : 'AI_RUN_FAILED';
+}
+
+function parseSaved(value: string | null): unknown {
+  if (!value) return undefined;
+  try { return JSON.parse(value); } catch { return undefined; }
+}
+
+async function requireOperator(operator: typeof users.$inferSelect | undefined): Promise<boolean> {
+  if (!operator || operator.status !== 'active' || !['operator', 'admin', 'administrator'].includes(operator.role)) {
+    throw new AppError('운영자 계정이 비활성 상태이거나 권한이 없습니다.', 403, 'FORBIDDEN');
+  }
+  const isAdmin = ['admin', 'administrator'].includes(operator.role);
+  if (!isAdmin && !await (await getAdminRepo()).checkPermission(operator.role, 'admin.users.read')) {
+    throw new AppError('AI 분석 권한이 없습니다.', 403, 'FORBIDDEN');
+  }
+  return isAdmin;
 }
 
 export function hashAiRequest(input: Pick<EnqueueAiRunInput, 'targetUserId' | 'caseType' | 'provider' | 'question'>): string {
@@ -73,271 +89,103 @@ export function hashAiRequest(input: Pick<EnqueueAiRunInput, 'targetUserId' | 'c
 }
 
 export async function enqueueAiRun(input: EnqueueAiRunInput): Promise<EnqueuedAiRun> {
-  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).enqueueAiRun(input);
-  const pool = getPool();
-  const connection = await pool.getConnection();
-
-  try {
-    await connection.beginTransaction();
-
-    const [operatorRows] = await connection.execute<RowDataPacket[]>(
-      'SELECT `id`, `role`, `status` FROM `users` WHERE `id` = ? FOR UPDATE',
-      [input.operatorId],
-    );
-    const operator = operatorRows[0];
-    if (!operator || operator.status !== 'active' || !['operator', 'admin', 'administrator'].includes(operator.role)) {
-      throw new AppError('운영자 계정이 비활성 상태이거나 권한이 없습니다.', 403, 'FORBIDDEN');
-    }
-    if (!['admin', 'administrator'].includes(operator.role)) {
-      const repo = await getAdminRepo();
-      if (!await repo.checkPermission(operator.role, 'admin.users.read')) {
-        throw new AppError('AI 분석 권한이 없습니다.', 403, 'FORBIDDEN');
-      }
-    }
-
-    const [existingRows] = await connection.execute<RowDataPacket[]>(
-      'SELECT `id`, `status`, `request_hash` FROM `ai_runs` WHERE `operator_id` = ? AND `idempotency_key` = ? LIMIT 1 FOR UPDATE',
-      [input.operatorId, input.idempotencyKey],
-    );
-    const existing = existingRows[0];
+  return getDb().transaction(async (tx) => {
+    const [operator] = await tx.select().from(users).where(eq(users.id, input.operatorId)).for('update');
+    await requireOperator(operator);
+    const [existing] = await tx.select().from(aiRuns).where(and(eq(aiRuns.operatorId, input.operatorId), eq(aiRuns.idempotencyKey, input.idempotencyKey))).limit(1);
     if (existing) {
-      if (existing.request_hash !== input.requestHash) {
-        throw new AppError('같은 Idempotency-Key가 다른 분석 요청에 사용되었습니다.', 409, 'IDEMPOTENCY_CONFLICT');
-      }
-      await connection.commit();
-      return { id: existing.id, status: existing.status as AiRunStatus, replayed: true };
+      if (existing.requestHash !== input.requestHash) throw new AppError('같은 Idempotency-Key가 다른 분석 요청에 사용되었습니다.', 409, 'IDEMPOTENCY_CONFLICT');
+      return { id: existing.id, status: statusSchema.parse(existing.status), replayed: true };
     }
-
-    const [targetRows] = await connection.execute<RowDataPacket[]>(
-      'SELECT `id` FROM `users` WHERE `id` = ? LIMIT 1',
-      [input.targetUserId],
-    );
-    if (targetRows.length === 0) throw new AppError('대상 사용자를 찾을 수 없습니다.', 404, 'NOT_FOUND');
-
-    const [activeRows] = await connection.execute<RowDataPacket[]>(
-      "SELECT COUNT(*) AS `count` FROM `ai_runs` WHERE `operator_id` = ? AND `status` IN ('queued', 'running')",
-      [input.operatorId],
-    );
-    if (Number(activeRows[0]?.count || 0) > 0) {
-      throw new AppError('분석이 이미 대기 중이거나 진행 중입니다.', 429, 'AI_RUN_IN_PROGRESS');
-    }
-
-    const [recentRows] = await connection.execute<RowDataPacket[]>(
-      'SELECT COUNT(*) AS `count` FROM `ai_runs` WHERE `operator_id` = ? AND `created_at` >= DATE_SUB(UTC_TIMESTAMP(3), INTERVAL 1 HOUR)',
-      [input.operatorId],
-    );
-    if (Number(recentRows[0]?.count || 0) >= 10) {
-      throw new AppError('한 시간 분석 한도에 도달했습니다.', 429, 'AI_RATE_LIMITED');
-    }
-
+    const [target] = await tx.select({ id: users.id }).from(users).where(eq(users.id, input.targetUserId)).limit(1);
+    if (!target) throw new AppError('대상 사용자를 찾을 수 없습니다.', 404, 'NOT_FOUND');
+    const [pending] = await tx.select({ count: count() }).from(aiRuns).where(and(eq(aiRuns.operatorId, input.operatorId), active));
+    if (pending && pending.count > 0) throw new AppError('분석이 이미 대기 중이거나 진행 중입니다.', 429, 'AI_RUN_IN_PROGRESS');
+    const [recent] = await tx.select({ count: count() }).from(aiRuns).where(and(eq(aiRuns.operatorId, input.operatorId), gte(aiRuns.createdAt, sql`CURRENT_TIMESTAMP - INTERVAL '1 hour'`)));
+    if (recent && recent.count >= 10) throw new AppError('한 시간 분석 한도에 도달했습니다.', 429, 'AI_RATE_LIMITED');
     const id = crypto.randomUUID();
-    await connection.execute(
-      `INSERT INTO \`ai_runs\`
-        (\`id\`, \`operator_id\`, \`target_user_id\`, \`case_type\`, \`input_json\`, \`provider\`, \`model\`, \`status\`, \`active_operator_id\`, \`idempotency_key\`, \`request_hash\`, \`prompt_version\`, \`created_at\`, \`deadline_at\`)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, 'gameops-v1', UTC_TIMESTAMP(3), DATE_ADD(UTC_TIMESTAMP(3), INTERVAL 10 MINUTE))`,
-      [
-        id,
-        input.operatorId,
-        input.targetUserId,
-        input.caseType,
-        JSON.stringify({ question: input.question }),
-        input.provider,
-        input.model,
-        input.operatorId,
-        input.idempotencyKey,
-        input.requestHash,
-      ],
-    );
-
-    await connection.commit();
+    await tx.insert(aiRuns).values({
+      id, operatorId: input.operatorId, targetUserId: input.targetUserId, caseType: input.caseType,
+      provider: input.provider, model: input.model, inputJson: JSON.stringify({ question: input.question }),
+      status: 'queued', activeOperatorId: input.operatorId, idempotencyKey: input.idempotencyKey,
+      requestHash: input.requestHash, promptVersion: 'gameops-v1', createdAt: now,
+      deadlineAt: sql`CURRENT_TIMESTAMP + INTERVAL '10 minutes'`,
+    });
     return { id, status: 'queued', replayed: false };
-  } catch (error) {
-    await connection.rollback().catch(() => undefined);
-    throw error;
-  } finally {
-    connection.release();
-  }
+  });
 }
 
-export async function expireStaleAiRuns(): Promise<void> {
-  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).expireStaleAiRuns();
-  await getPool().execute(
-    `UPDATE \`ai_runs\`
-     SET \`status\` = 'timed_out', \`error_code\` = 'AI_RUN_TIMEOUT', \`finished_at\` = UTC_TIMESTAMP(3),
-         \`elapsed_ms\` = CASE WHEN \`started_at\` IS NULL THEN NULL ELSE TIMESTAMPDIFF(MICROSECOND, \`started_at\`, UTC_TIMESTAMP(3)) DIV 1000 END,
-         \`active_operator_id\` = NULL
-     WHERE \`status\` IN ('queued', 'running') AND \`deadline_at\` <= UTC_TIMESTAMP(3)`,
-  );
+export async function expireStaleAiRuns(runId?: string): Promise<void> {
+  await getDb().update(aiRuns).set({
+    status: 'timed_out', errorCode: 'AI_RUN_TIMEOUT', finishedAt: now, activeOperatorId: null,
+    elapsedMs: sql`CASE WHEN ${aiRuns.startedAt} IS NULL THEN NULL ELSE LEAST(2147483647, GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - ${aiRuns.startedAt})) * 1000)))::integer END`,
+  }).where(and(active, lte(aiRuns.deadlineAt, now), runId ? eq(aiRuns.id, runId) : undefined));
 }
 
 export async function claimNextAiRun(runId?: string): Promise<ClaimedAiRun | null> {
-  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).claimNextAiRun(runId);
-  const connection = await getPool().getConnection();
-  try {
-    await connection.beginTransaction();
-    const [rows] = await connection.execute<RowDataPacket[]>(
-      "SELECT `id`, `operator_id`, `target_user_id`, `case_type`, `provider`, `model`, `input_json` FROM `ai_runs` WHERE `status` = 'queued' AND `deadline_at` > UTC_TIMESTAMP(3)" + (runId ? ' AND `id` = ?' : '') + ' ORDER BY `created_at`, `id` LIMIT 1 FOR UPDATE SKIP LOCKED',
-      runId ? [runId] : [],
-    );
-    const row = rows[0];
-    if (!row) {
-      await connection.commit();
-      return null;
-    }
-
-    await connection.execute(
-      "UPDATE `ai_runs` SET `status` = 'running', `started_at` = UTC_TIMESTAMP(3), `deadline_at` = DATE_ADD(UTC_TIMESTAMP(3), INTERVAL 65 SECOND) WHERE `id` = ? AND `status` = 'queued'",
-      [row.id],
-    );
-    await connection.commit();
-    return {
-      id: row.id,
-      operatorId: row.operator_id,
-      targetUserId: row.target_user_id,
-      caseType: row.case_type as AiCaseType,
-      provider: row.provider as ProviderId,
-      model: row.model,
-      inputJson: row.input_json,
+  return getDb().transaction(async (tx) => {
+    const [row] = await tx.select().from(aiRuns)
+      .where(and(eq(aiRuns.status, 'queued'), gt(aiRuns.deadlineAt, now), runId ? eq(aiRuns.id, runId) : undefined))
+      .orderBy(asc(aiRuns.createdAt), asc(aiRuns.id)).limit(1).for('update', { skipLocked: true });
+    if (!row) return null;
+    const run = {
+      id: row.id, operatorId: row.operatorId, targetUserId: row.targetUserId,
+      caseType: caseSchema.parse(row.caseType), provider: providerSchema.parse(row.provider), model: row.model, inputJson: row.inputJson,
     };
-  } catch (error) {
-    await connection.rollback().catch(() => undefined);
-    throw error;
-  } finally {
-    connection.release();
-  }
+    await tx.update(aiRuns).set({ status: 'running', startedAt: now, deadlineAt: sql`CURRENT_TIMESTAMP + INTERVAL '65 seconds'` }).where(eq(aiRuns.id, row.id));
+    return run;
+  });
 }
 
 export async function appendAiToolCall(runId: string, input: AiToolAuditInput): Promise<void> {
-  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).appendAiToolCall(runId, input);
-  await getPool().execute(
-    `INSERT INTO \`ai_tool_calls\`
-      (\`id\`, \`run_id\`, \`sequence\`, \`tool_name\`, \`sanitized_args\`, \`evidence_json\`, \`elapsed_ms\`, \`status\`, \`error_code\`, \`created_at\`)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(3))`,
-    [
-      crypto.randomUUID(),
-      runId,
-      input.sequence,
-      input.toolName.slice(0, 64),
-      input.sanitizedArgs.slice(0, 2000),
-      JSON.stringify(input.evidence),
-      Math.max(0, Math.min(2_147_483_647, Math.floor(input.elapsedMs))),
-      input.status,
-      input.errorCode ? safeErrorCode(input.errorCode) : null,
-    ],
-  );
-}
-
-export interface AiTokenUsage {
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
+  await getDb().insert(aiToolCalls).values({
+    id: crypto.randomUUID(), runId, sequence: input.sequence, toolName: input.toolName.slice(0, 64),
+    sanitizedArgs: input.sanitizedArgs.slice(0, 2000), evidenceJson: JSON.stringify(input.evidence),
+    elapsedMs: Math.max(0, Math.min(2_147_483_647, Math.floor(input.elapsedMs))), status: input.status,
+    errorCode: input.errorCode ? safeErrorCode(input.errorCode) : null, createdAt: now,
+  });
 }
 
 export async function updateAiRunTokenUsage(runId: string, tokenUsage: AiTokenUsage): Promise<void> {
-  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).updateAiRunTokenUsage(runId, tokenUsage);
-  await getPool().execute(
-    "UPDATE `ai_runs` SET `token_usage_json` = ? WHERE `id` = ? AND `status` = 'running'",
-    [JSON.stringify(tokenUsage), runId],
-  );
+  await getDb().update(aiRuns).set({ tokenUsageJson: JSON.stringify(tokenUsage) }).where(and(eq(aiRuns.id, runId), eq(aiRuns.status, 'running')));
 }
 
-export async function completeAiRun(
-  runId: string,
-  result: unknown,
-  toolsUsed: string[],
-  model: string,
-  elapsedMs: number,
-  tokenUsage: AiTokenUsage | null,
-): Promise<void> {
-  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).completeAiRun(runId, result, toolsUsed, model, elapsedMs, tokenUsage);
-  await getPool().execute<ResultSetHeader>(
-    `UPDATE \`ai_runs\`
-     SET \`status\` = 'succeeded', \`result_json\` = ?, \`model\` = ?, \`elapsed_ms\` = ?,
-         \`token_usage_json\` = ?, \`finished_at\` = UTC_TIMESTAMP(3), \`active_operator_id\` = NULL
-     WHERE \`id\` = ? AND \`status\` = 'running'`,
-    [
-      JSON.stringify({ result, toolsUsed }),
-      model.slice(0, 255),
-      Math.max(0, Math.floor(elapsedMs)),
-      tokenUsage ? JSON.stringify(tokenUsage) : null,
-      runId,
-    ],
-  );
+export async function completeAiRun(runId: string, result: unknown, toolsUsed: string[], model: string, elapsedMs: number, tokenUsage: AiTokenUsage | null): Promise<void> {
+  await getDb().update(aiRuns).set({
+    status: 'succeeded', resultJson: JSON.stringify({ result, toolsUsed }), model: model.slice(0, 255),
+    elapsedMs: Math.max(0, Math.floor(elapsedMs)), tokenUsageJson: tokenUsage ? JSON.stringify(tokenUsage) : null,
+    finishedAt: now, activeOperatorId: null,
+  }).where(and(eq(aiRuns.id, runId), eq(aiRuns.status, 'running')));
 }
 
 export async function failAiRun(runId: string, errorCode: string, elapsedMs?: number): Promise<void> {
-  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).failAiRun(runId, errorCode, elapsedMs);
-  const safeCode = safeErrorCode(errorCode);
-  const status = safeCode === 'AI_RUN_TIMEOUT' ? 'timed_out' : 'failed';
-  await getPool().execute(
-    `UPDATE \`ai_runs\`
-     SET \`status\` = ?, \`error_code\` = ?, \`elapsed_ms\` = ?, \`finished_at\` = UTC_TIMESTAMP(3), \`active_operator_id\` = NULL
-     WHERE \`id\` = ? AND \`status\` = 'running'`,
-    [status, safeCode, elapsedMs === undefined ? null : Math.max(0, Math.floor(elapsedMs)), runId],
-  );
+  const code = safeErrorCode(errorCode);
+  await getDb().update(aiRuns).set({
+    status: code === 'AI_RUN_TIMEOUT' ? 'timed_out' : 'failed', errorCode: code,
+    elapsedMs: elapsedMs === undefined ? null : Math.max(0, Math.floor(elapsedMs)), finishedAt: now, activeOperatorId: null,
+  }).where(and(eq(aiRuns.id, runId), eq(aiRuns.status, 'running')));
 }
 
 export async function getAiRun(runId: string, operatorId: string, expectedTargetUserId: string) {
-  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).getAiRun(runId, operatorId, expectedTargetUserId);
-  const pool = getPool();
-  await pool.execute(
-    `UPDATE \`ai_runs\`
-     SET \`status\` = 'timed_out', \`error_code\` = 'AI_RUN_TIMEOUT', \`finished_at\` = UTC_TIMESTAMP(3),
-         \`elapsed_ms\` = CASE WHEN \`started_at\` IS NULL THEN NULL ELSE TIMESTAMPDIFF(MICROSECOND, \`started_at\`, UTC_TIMESTAMP(3)) DIV 1000 END,
-         \`active_operator_id\` = NULL
-     WHERE \`id\` = ? AND \`status\` IN ('queued', 'running') AND \`deadline_at\` <= UTC_TIMESTAMP(3)`,
-    [runId],
-  );
-  const [rows] = await pool.execute<RowDataPacket[]>(
-    `SELECT \`id\`, \`operator_id\`, \`target_user_id\`, \`case_type\`, \`provider\`, \`model\`, \`status\`,
-       DATE_FORMAT(\`created_at\`, '%Y-%m-%dT%H:%i:%s.%fZ') AS \`created_at\`,
-       DATE_FORMAT(\`started_at\`, '%Y-%m-%dT%H:%i:%s.%fZ') AS \`started_at\`,
-       DATE_FORMAT(\`finished_at\`, '%Y-%m-%dT%H:%i:%s.%fZ') AS \`finished_at\`,
-       \`elapsed_ms\`, \`result_json\`, \`error_code\`, \`token_usage_json\`
-     FROM \`ai_runs\` WHERE \`id\` = ? LIMIT 1`,
-    [runId],
-  );
-  const row = rows[0];
-  if (!row || row.target_user_id !== expectedTargetUserId) throw new AppError('분석 작업을 찾을 수 없습니다.', 404, 'NOT_FOUND');
-
-  const [operatorRows] = await pool.execute<RowDataPacket[]>(
-    'SELECT `role`, `status` FROM `users` WHERE `id` = ? LIMIT 1',
-    [operatorId],
-  );
-  const operator = operatorRows[0];
-  if (!operator || operator.status !== 'active' || !['operator', 'admin', 'administrator'].includes(operator.role)) {
-    throw new AppError('운영자 계정이 비활성 상태이거나 권한이 없습니다.', 403, 'FORBIDDEN');
-  }
-  const isAdmin = ['admin', 'administrator'].includes(operator.role);
-  const repo = await getAdminRepo();
-  if (!isAdmin && !await repo.checkPermission(operator.role, 'admin.users.read')) {
-    throw new AppError('분석 작업 조회 권한이 없습니다.', 403, 'FORBIDDEN');
-  }
-  if (!isAdmin && row.operator_id !== operatorId) throw new AppError('이 분석 작업을 조회할 권한이 없습니다.', 403, 'FORBIDDEN');
-
-  const saved = parseJson<{ result?: unknown; toolsUsed?: string[] }>(row.result_json);
+  await expireStaleAiRuns(runId);
+  const [row] = await getDb().select().from(aiRuns).where(eq(aiRuns.id, runId)).limit(1);
+  if (!row || row.targetUserId !== expectedTargetUserId) throw new AppError('분석 작업을 찾을 수 없습니다.', 404, 'NOT_FOUND');
+  const [operator] = await getDb().select().from(users).where(eq(users.id, operatorId)).limit(1);
+  const isAdmin = await requireOperator(operator);
+  if (!isAdmin && row.operatorId !== operatorId) throw new AppError('이 분석 작업을 조회할 권한이 없습니다.', 403, 'FORBIDDEN');
+  const saved = z.object({ result: z.unknown().optional(), toolsUsed: z.array(z.string()).optional() }).safeParse(parseSaved(row.resultJson));
+  const usage = z.object({ promptTokens: z.number(), completionTokens: z.number(), totalTokens: z.number() }).safeParse(parseSaved(row.tokenUsageJson));
   return {
-    id: row.id as string,
-    targetUserId: row.target_user_id as string,
-    caseType: row.case_type as AiCaseType,
-    provider: row.provider as ProviderId,
-    model: row.model as string,
-    status: row.status as AiRunStatus,
-    createdAt: toIso(row.created_at),
-    startedAt: toIso(row.started_at),
-    finishedAt: toIso(row.finished_at),
-    elapsedMs: row.elapsed_ms === null ? undefined : Number(row.elapsed_ms),
-    errorCode: row.error_code ? String(row.error_code) : undefined,
-    tokenUsage: parseJson<AiTokenUsage>(row.token_usage_json),
-    toolsUsed: saved?.toolsUsed || [],
-    result: saved?.result,
+    id: row.id, targetUserId: row.targetUserId, caseType: caseSchema.parse(row.caseType), provider: providerSchema.parse(row.provider), model: row.model,
+    status: statusSchema.parse(row.status), createdAt: row.createdAt.toISOString(), startedAt: row.startedAt?.toISOString(), finishedAt: row.finishedAt?.toISOString(),
+    elapsedMs: row.elapsedMs ?? undefined, errorCode: row.errorCode ?? undefined,
+    tokenUsage: usage.success ? usage.data : undefined, toolsUsed: saved.success ? saved.data.toolsUsed ?? [] : [], result: saved.success ? saved.data.result : undefined,
   };
 }
 
 export async function listQueuedAiRunIds(): Promise<string[]> {
-  if (process.env.DB_DRIVER === 'postgres') return (await import('./runs-postgres.js')).listQueuedAiRunIds();
-  const [rows] = await getPool().execute<RowDataPacket[]>(
-    "SELECT `id` FROM `ai_runs` WHERE `status` = 'queued' AND `deadline_at` > UTC_TIMESTAMP(3) ORDER BY `created_at`, `id` LIMIT 100",
-  );
-  return rows.map((row) => String(row.id));
+  const rows = await getDb().select({ id: aiRuns.id }).from(aiRuns)
+    .where(and(eq(aiRuns.status, 'queued'), gt(aiRuns.deadlineAt, now)))
+    .orderBy(asc(aiRuns.createdAt), asc(aiRuns.id)).limit(100);
+  return rows.map((row) => row.id);
 }

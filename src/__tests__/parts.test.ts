@@ -9,6 +9,8 @@ import { resetCraftingStores } from '../store-crafting.js';
 import { resetResearchStores } from '../store-research.js';
 import { resetItemLedger } from '../store-item-ledger.js';
 import { resetAllRepos } from '../provider.js';
+import { jsonPartsRepo } from '../store-parts.js';
+import { jsonAuthRepo, resetAuthStores } from '../store-auth.js';
 import jwt from 'jsonwebtoken';
 
 function createApp() {
@@ -28,8 +30,10 @@ function createApp() {
 const TEST_TOKEN = jwt.sign({ sub: 'test-user', type: 'access' }, 'dev-secret-change-in-production', { expiresIn: '1h' });
 const auth = () => ({ Authorization: `Bearer ${TEST_TOKEN}` });
 
-beforeEach(() => {
-  // JSON 데이터 파일 삭제 (파일이 있으면 로드됨)
+beforeEach(async () => {
+  for (const file of ['data-users.json', 'data-sessions.json', 'data-sanctions.json', 'data-profiles.json', 'data-wallets.json']) {
+    try { require('fs').unlinkSync(require('path').join(process.cwd(), file)); } catch {}
+  }
   try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-parts.json')); } catch {}
   try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-equip.json')); } catch {}
   try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-configs.json')); } catch {}
@@ -38,10 +42,13 @@ beforeEach(() => {
   try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-blueprints.json')); } catch {}
   try { require('fs').unlinkSync(require('path').join(process.cwd(), 'data-crafts.json')); } catch {}
   resetAllRepos();
+  resetAuthStores();
   resetPartsStores();
   resetCraftingStores();
   resetResearchStores();
   resetItemLedger();
+  const now = new Date().toISOString();
+  await jsonAuthRepo.createUser({ id: 'test-user', email: 'test-user@example.test', nickname: 'test-user', passwordHash: '', status: 'active', role: 'user', createdAt: now, updatedAt: now });
 });
 
 describe('파츠 카탈로그', () => {
@@ -82,40 +89,22 @@ describe('파츠 인벤토리', () => {
     expect(body.equipped).toBeNull();
   });
 
-  it('POST /parts/grant → 파츠 지급', async () => {
+  it('POST /parts/grant → 404 ROUTE_NOT_FOUND', async () => {
     const app = createApp();
     const res = await app.request('/parts/grant', {
       method: 'POST',
       headers: { ...auth(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ partCode: 'light_frame' }),
     });
-    expect(res.status).toBe(201);
-    const body = await res.json();
-    expect(body.partCode).toBe('light_frame');
-    expect(body.level).toBe(1);
-  });
-
-  it('POST /parts/grant (중복) → 409', async () => {
-    const app = createApp();
-    await app.request('/parts/grant', {
-      method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ partCode: 'light_frame' }),
-    });
-    const res = await app.request('/parts/grant', {
-      method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ partCode: 'light_frame' }),
-    });
-    expect(res.status).toBe(409);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: 'ROUTE_NOT_FOUND' });
   });
 
   it('POST /parts/equip → 장착 후 equipped 반영', async () => {
     const app = createApp();
-    await app.request('/parts/grant', {
-      method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ partCode: 'shotgun' }),
-    });
+    await jsonPartsRepo.grantPart('test-user', 'shotgun', 'weapon');
     const res = await app.request('/parts/equip', {
-      method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' },
+      method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() },
       body: JSON.stringify({ partCode: 'shotgun' }),
     });
     expect(res.status).toBe(200);

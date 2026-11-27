@@ -1,4 +1,4 @@
-import { pgSchema, varchar, integer as int, timestamp, index, unique, text as longtext, check } from 'drizzle-orm/pg-core';
+import { pgSchema, varchar, integer as int, timestamp, index, unique, uniqueIndex, text as longtext, check } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const gameSchema = pgSchema('game');
@@ -107,6 +107,7 @@ export const stageBosses = gameSchema.table('stage_bosses', {
   createdAt: datetime('created_at').notNull(),
 }, (table) => [
   index('idx_sb_stage_id').on(table.stageId),
+  uniqueIndex('uq_sb_stage_sequence_boss').on(table.stageId, table.sequence, table.bossCode),
 ]);
 
 /** stages — 스테이지 정의 */
@@ -144,6 +145,7 @@ export const stageRewards = gameSchema.table('stage_rewards', {
   createdAt: datetime('created_at').notNull(),
 }, (table) => [
   index('idx_sr_stage_id').on(table.stageId),
+  uniqueIndex('uq_sr_stage_clear_type').on(table.stageId, table.clearType),
 ]);
 
 /** mecha_stats — 플레이어별 메카 스탯 */
@@ -273,7 +275,8 @@ export const battleUpgradeOffers = gameSchema.table('battle_upgrade_offers', {
   createdAt: datetime('created_at').notNull(),
 }, (table) => [
   index('idx_buo_session_id').on(table.battleSessionId),
-  unique('uq_buo_session_level').on(table.battleSessionId, table.level),
+  unique('uq_buo_session_option_slot').on(table.battleSessionId, table.level, table.optionSlot),
+  unique('uq_buo_session_upgrade').on(table.battleSessionId, table.level, table.upgradeId),
 ]);
 
 /** battle_results — 전투 결과 및 보상 확정 기록 */
@@ -569,9 +572,11 @@ export const craftingQueue = gameSchema.table('crafting_queue', {
   startedAt: datetime('started_at').notNull(),
   completesAt: datetime('completes_at').notNull(),
   completed: int('completed').notNull().default(0),
+  idempotencyKey: varchar('idempotency_key', { length: 64 }),
   createdAt: datetime('created_at').notNull(),
 }, (table) => [
   index('idx_cq_player_id').on(table.playerId),
+  unique('uq_cq_idempotency').on(table.idempotencyKey),
 ]);
 
 /** ai_runs — GameOps AI 분석 요청 및 결과 */

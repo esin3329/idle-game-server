@@ -15,9 +15,8 @@ async function shutdown(): Promise<void> {
   markNotReady();
   stopAiRunWorker();
   server.close();
-  const { closePool } = await import('./db/connection.js');
   const { closePostgresPool } = await import('./db/postgres-connection.js');
-  await Promise.all([closePool(), closePostgresPool()]);
+  await closePostgresPool();
 }
 process.on('SIGTERM', () => { void shutdown(); });
 process.on('SIGINT', () => { void shutdown(); });

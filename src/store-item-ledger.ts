@@ -3,7 +3,8 @@
  *
  * 파츠/설계도 등의 획득/소비를 기록. MySQL 모드에서는 DB item_ledger 테이블 사용.
  */
-import { readFileSync, writeFileSync, renameSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { promoteJsonTempFile } from './shared/json-file.js';
 import { join } from 'node:path';
 import type { CurrencyLedger } from './types.js';
 import { logger } from './shared/logger.js';
@@ -30,7 +31,7 @@ function save(): void {
     writeFileSync(tmp, JSON.stringify(entries, null, 2), 'utf-8');
     JSON.parse(readFileSync(tmp, 'utf-8'));
     if (existsSync(ledgerFile)) copyFileSync(ledgerFile, ledgerFile + '.bak');
-    renameSync(tmp, ledgerFile);
+    promoteJsonTempFile(tmp, ledgerFile);
   } catch (err) {
     logger.error({ operation: 'save', file: ledgerFile, err: (err as Error).message }, 'Failed to save item ledger');
     try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* skip */ }

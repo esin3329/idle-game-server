@@ -83,10 +83,10 @@ try {
   const claimed = JSON.parse(claimBodies[0]) as { claimed: number };
   assert.ok(claimed.claimed >= 10 && claimed.claimed <= 15);
   const craftId = randomUUID();
-  await client.query("INSERT INTO game.crafting_queue (id,player_id,result_code,materials,started_at,completes_at,completed,created_at) VALUES ($1,$2,'medium_frame','{}',NOW()-INTERVAL '1 minute',NOW()-INTERVAL '1 second',0,NOW())", [craftId, registered.userId]);
+  await client.query("INSERT INTO game.crafting_queue (id,player_id,result_code,materials,started_at,completes_at,completed,created_at) VALUES ($1,$2,'medium_frame','{}',NOW()-INTERVAL '1 minute',NOW()-INTERVAL '1 second',0,NOW())", [craftId, registered.playerId]);
   const completion = await request('/api/crafting/' + craftId + '/complete', 'POST', {}, token);
   assert.equal(completion.status, 200, await completion.clone().text());
-  const craftedParts = await client.query<{ count: string }>('SELECT count(*) FROM game.parts_inventory WHERE player_id=$1', [registered.userId]);
+  const craftedParts = await client.query<{ count: string }>('SELECT count(*) FROM game.parts_inventory WHERE player_id=$1', [registered.playerId]);
   assert.equal(Number(craftedParts.rows[0].count), 1);
   const craftedLedger = await client.query<{ count: string }>('SELECT count(*) FROM game.item_ledger WHERE reference_id=$1', [craftId]);
   assert.equal(Number(craftedLedger.rows[0].count), 1);

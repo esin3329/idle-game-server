@@ -1,0 +1,1604 @@
+fileFormatVersion: 2
+guid: 27bef15dcbad05d4a8b79f7b0a2dbfd1
+TextureImporter:
+  internalIDToNameTable: []
+  externalObjects: {}
+  serializedVersion: 13
+  mipmaps:
+    mipMapMode: 0
+    enableMipMap: 0
+    sRGBTexture: 1
+    linearTexture: 0
+    fadeOut: 0
+    borderMipMap: 0
+    mipMapsPreserveCoverage: 0
+    alphaTestReferenceValue: 0.5
+    mipMapFadeDistanceStart: 1
+    mipMapFadeDistanceEnd: 3
+  bumpmap:
+    convertToNormalMap: 0
+    externalNormalMap: 0
+    heightScale: 0.25
+    normalMapFilter: 0
+    flipGreenChannel: 0
+  isReadable: 0
+  streamingMipmaps: 0
+  streamingMipmapsPriority: 0
+  vTOnly: 0
+  ignoreMipmapLimit: 0
+  grayScaleToAlpha: 0
+  generateCubemap: 6
+  cubemapConvolution: 0
+  seamlessCubemap: 0
+  textureFormat: 1
+  maxTextureSize: 2048
+  textureSettings:
+    serializedVersion: 2
+    filterMode: 0
+    aniso: 1
+    mipBias: 0
+    wrapU: 1
+    wrapV: 1
+    wrapW: 1
+  nPOTScale: 0
+  lightmap: 0
+  compressionQuality: 50
+  spriteMode: 2
+  spriteExtrude: 1
+  spriteMeshType: 1
+  alignment: 0
+  spritePivot: {x: 0.5, y: 0.5}
+  spritePixelsToUnits: 100
+  spriteBorder: {x: 0, y: 0, z: 0, w: 0}
+  spriteGenerateFallbackPhysicsShape: 1
+  alphaUsage: 1
+  alphaIsTransparency: 1
+  spriteTessellationMethod: 0
+  spriteTessellationDetail: -1
+  spriteGeometrySubdivision: -1
+  textureType: 8
+  textureShape: 1
+  singleChannelComponent: 0
+  flipbookRows: 1
+  flipbookColumns: 1
+  maxTextureSizeSet: 0
+  compressionQualitySet: 0
+  textureFormatSet: 0
+  ignorePngGamma: 0
+  applyGammaDecoding: 0
+  swizzle: 50462976
+  cookieLightType: 0
+  platformSettings:
+  - serializedVersion: 4
+    buildTarget: DefaultTexturePlatform
+    maxTextureSize: 2048
+    resizeAlgorithm: 0
+    textureFormat: -1
+    textureCompression: 0
+    compressionQuality: 50
+    crunchedCompression: 0
+    allowsAlphaSplitting: 0
+    overridden: 0
+    ignorePlatformSupport: 0
+    androidETC2FallbackOverride: 0
+    forceMaximumCompressionQuality_BC6H_BC7: 0
+  - serializedVersion: 4
+    buildTarget: Standalone
+    maxTextureSize: 2048
+    resizeAlgorithm: 0
+    textureFormat: -1
+    textureCompression: 1
+    compressionQuality: 50
+    crunchedCompression: 0
+    allowsAlphaSplitting: 0
+    overridden: 0
+    ignorePlatformSupport: 0
+    androidETC2FallbackOverride: 0
+    forceMaximumCompressionQuality_BC6H_BC7: 0
+  - serializedVersion: 4
+    buildTarget: Android
+    maxTextureSize: 2048
+    resizeAlgorithm: 0
+    textureFormat: -1
+    textureCompression: 1
+    compressionQuality: 50
+    crunchedCompression: 0
+    allowsAlphaSplitting: 0
+    overridden: 0
+    ignorePlatformSupport: 0
+    androidETC2FallbackOverride: 0
+    forceMaximumCompressionQuality_BC6H_BC7: 0
+  spriteSheet:
+    serializedVersion: 2
+    sprites:
+    - serializedVersion: 2
+      name: enemy-Guard-idle-0
+      rect:
+        serializedVersion: 2
+        x: 96
+        y: 543
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: d1a232f21bd7de2d0800000000000000
+      internalID: -3247801556310742499
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-idle-1
+      rect:
+        serializedVersion: 2
+        x: 170
+        y: 543
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 22778d36d0a28b0b0800000000000000
+      internalID: -5712769890321402078
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-idle-2
+      rect:
+        serializedVersion: 2
+        x: 244
+        y: 543
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: f882224e871c70a90800000000000000
+      internalID: -7347691542063994737
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-idle-3
+      rect:
+        serializedVersion: 2
+        x: 318
+        y: 543
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 9c713359accb77cc0800000000000000
+      internalID: -3713291789471115319
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-walk-0
+      rect:
+        serializedVersion: 2
+        x: 96
+        y: 454
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 4945cbd25e5139c30800000000000000
+      internalID: 4364856537911153812
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-walk-1
+      rect:
+        serializedVersion: 2
+        x: 170
+        y: 454
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 4ace6f366c34b1ef0800000000000000
+      internalID: -136440844344955740
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-walk-2
+      rect:
+        serializedVersion: 2
+        x: 244
+        y: 454
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: fc9b9ff89633483c0800000000000000
+      internalID: -4358302010907706929
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-walk-3
+      rect:
+        serializedVersion: 2
+        x: 318
+        y: 454
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: fab0f7699feff7fb0800000000000000
+      internalID: -4647715942497842257
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-attack-0
+      rect:
+        serializedVersion: 2
+        x: 96
+        y: 356
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: f8154d6a65c311380800000000000000
+      internalID: -9002347837273124465
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-attack-1
+      rect:
+        serializedVersion: 2
+        x: 170
+        y: 356
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 2730714fcd23386a0800000000000000
+      internalID: -6448254316895075470
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-attack-2
+      rect:
+        serializedVersion: 2
+        x: 244
+        y: 356
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 016d4ed59ceeeffc0800000000000000
+      internalID: -3459064915142846960
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-attack-3
+      rect:
+        serializedVersion: 2
+        x: 318
+        y: 356
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 40c10012efa2773b0800000000000000
+      internalID: -5514891947728167932
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-death-0
+      rect:
+        serializedVersion: 2
+        x: 96
+        y: 256
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: d3845364f4d914560800000000000000
+      internalID: 7296285835122788413
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-death-1
+      rect:
+        serializedVersion: 2
+        x: 170
+        y: 256
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: f6161948ddf3cda60800000000000000
+      internalID: 7700099683541148015
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-death-2
+      rect:
+        serializedVersion: 2
+        x: 244
+        y: 256
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: a89d67d846fd88d50800000000000000
+      internalID: 6739882465323047306
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Guard-death-3
+      rect:
+        serializedVersion: 2
+        x: 318
+        y: 256
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: feb8e801607b48d30800000000000000
+      internalID: 4432869169914874863
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-idle-0
+      rect:
+        serializedVersion: 2
+        x: 480
+        y: 543
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: e48a5f6e76fcc11d0800000000000000
+      internalID: -3378597575271274418
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-idle-1
+      rect:
+        serializedVersion: 2
+        x: 554
+        y: 543
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: b2800bb95972fc880800000000000000
+      internalID: -8588602440856631253
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-idle-2
+      rect:
+        serializedVersion: 2
+        x: 628
+        y: 543
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 2b31f05ec06175910800000000000000
+      internalID: 1825952418560414642
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-idle-3
+      rect:
+        serializedVersion: 2
+        x: 702
+        y: 543
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 380c5e18e6b88c830800000000000000
+      internalID: 4091673568208076931
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-walk-0
+      rect:
+        serializedVersion: 2
+        x: 480
+        y: 454
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 978327f35c71c02e0800000000000000
+      internalID: -2158323985476863879
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-walk-1
+      rect:
+        serializedVersion: 2
+        x: 554
+        y: 454
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: f3ca844db938fc510800000000000000
+      internalID: 1571619500280294463
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-walk-2
+      rect:
+        serializedVersion: 2
+        x: 628
+        y: 454
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 84e147c50e05515f0800000000000000
+      internalID: -786633635352273336
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-walk-3
+      rect:
+        serializedVersion: 2
+        x: 702
+        y: 454
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 823b188aab2894e10800000000000000
+      internalID: 2182419232640316200
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-attack-0
+      rect:
+        serializedVersion: 2
+        x: 480
+        y: 356
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: c27c0ef72b57c2a80800000000000000
+      internalID: -8490281787990161620
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-attack-1
+      rect:
+        serializedVersion: 2
+        x: 554
+        y: 356
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 599a9d85a96ceef00800000000000000
+      internalID: 1148073321243978133
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-attack-2
+      rect:
+        serializedVersion: 2
+        x: 628
+        y: 356
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 94090a758fa020ef0800000000000000
+      internalID: -143540176384126903
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-attack-3
+      rect:
+        serializedVersion: 2
+        x: 702
+        y: 356
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 914902dc339593040800000000000000
+      internalID: 4627828171119563801
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-death-0
+      rect:
+        serializedVersion: 2
+        x: 480
+        y: 256
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 22b4215d78ce71040800000000000000
+      internalID: 4618420011031218978
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-death-1
+      rect:
+        serializedVersion: 2
+        x: 554
+        y: 256
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 0da815bb044968680800000000000000
+      internalID: -8753145820006479152
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-death-2
+      rect:
+        serializedVersion: 2
+        x: 628
+        y: 256
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 17ce4515a63e30bd0800000000000000
+      internalID: -2665036508702643087
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Rifle-death-3
+      rect:
+        serializedVersion: 2
+        x: 702
+        y: 256
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: fa665ab1cc4404ae0800000000000000
+      internalID: -1567177026897090897
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-idle-0
+      rect:
+        serializedVersion: 2
+        x: 864
+        y: 543
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 324af7ef5679bfa90800000000000000
+      internalID: -7279057908397005789
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-idle-1
+      rect:
+        serializedVersion: 2
+        x: 938
+        y: 543
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 2b4afd838e7652660800000000000000
+      internalID: 7360403413091198130
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-idle-2
+      rect:
+        serializedVersion: 2
+        x: 1012
+        y: 543
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 9778219238f89c3d0800000000000000
+      internalID: -3185857467895347335
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-idle-3
+      rect:
+        serializedVersion: 2
+        x: 1086
+        y: 543
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: cc067768298c3f2b0800000000000000
+      internalID: -5551873383970938676
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-walk-0
+      rect:
+        serializedVersion: 2
+        x: 864
+        y: 454
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 00afdfd8117a0ae50800000000000000
+      internalID: 6818633529677445632
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-walk-1
+      rect:
+        serializedVersion: 2
+        x: 938
+        y: 454
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 9bbbedf7908619460800000000000000
+      internalID: 7246687665425136569
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-walk-2
+      rect:
+        serializedVersion: 2
+        x: 1012
+        y: 454
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 072911842c49cf900800000000000000
+      internalID: 719613602626114160
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-walk-3
+      rect:
+        serializedVersion: 2
+        x: 1086
+        y: 454
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 4604d18d4f0ba1d60800000000000000
+      internalID: 7861790665172926564
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-attack-0
+      rect:
+        serializedVersion: 2
+        x: 864
+        y: 356
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 439d374aea5a23440800000000000000
+      internalID: 4914172312916580660
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-attack-1
+      rect:
+        serializedVersion: 2
+        x: 938
+        y: 356
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 577ab9e44e1b0d390800000000000000
+      internalID: -7795535360848844939
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-attack-2
+      rect:
+        serializedVersion: 2
+        x: 1012
+        y: 356
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 2f5e5e6603a7d7d60800000000000000
+      internalID: 7889596470526338546
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-attack-3
+      rect:
+        serializedVersion: 2
+        x: 1086
+        y: 356
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: b2cb950eec92f3100800000000000000
+      internalID: 89836486074678315
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-death-0
+      rect:
+        serializedVersion: 2
+        x: 864
+        y: 256
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 47c315232599bf0c0800000000000000
+      internalID: -4540867220962460556
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-death-1
+      rect:
+        serializedVersion: 2
+        x: 938
+        y: 256
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: b73a056ab6016a3f0800000000000000
+      internalID: -890005821821246597
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-death-2
+      rect:
+        serializedVersion: 2
+        x: 1012
+        y: 256
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: c2d6b07b9f30eae70800000000000000
+      internalID: 9128237865779293484
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-Armored-death-3
+      rect:
+        serializedVersion: 2
+        x: 1086
+        y: 256
+        width: 74
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 6494fb823a9463070800000000000000
+      internalID: 8085731146102425926
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-idle-0
+      rect:
+        serializedVersion: 2
+        x: 1245
+        y: 543
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 92e253a7273429cb0800000000000000
+      internalID: -4858746889023705559
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-idle-1
+      rect:
+        serializedVersion: 2
+        x: 1341
+        y: 543
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: a7c439b705c0f8c80800000000000000
+      internalID: -8318416446919848838
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-idle-2
+      rect:
+        serializedVersion: 2
+        x: 1440
+        y: 543
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 9428802421b1e55d0800000000000000
+      internalID: -3071988130588884407
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-idle-3
+      rect:
+        serializedVersion: 2
+        x: 1341
+        y: 543
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: daa7c3d7bc1814a40800000000000000
+      internalID: 5350700543272319661
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-walk-0
+      rect:
+        serializedVersion: 2
+        x: 1245
+        y: 454
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 439fd21d29e3e22b0800000000000000
+      internalID: -5607475685734090444
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-walk-1
+      rect:
+        serializedVersion: 2
+        x: 1341
+        y: 454
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: a14487e0abd712560800000000000000
+      internalID: 7287243910122325018
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-walk-2
+      rect:
+        serializedVersion: 2
+        x: 1440
+        y: 454
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 7fb808374b98f0ed0800000000000000
+      internalID: -2445584664513967113
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-walk-3
+      rect:
+        serializedVersion: 2
+        x: 1341
+        y: 454
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 9dbeb47faf0e8b4d0800000000000000
+      internalID: -3118495373458674727
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-attack-0
+      rect:
+        serializedVersion: 2
+        x: 1245
+        y: 356
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 138a3e5115a711a90800000000000000
+      internalID: -7344955028586387407
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-attack-1
+      rect:
+        serializedVersion: 2
+        x: 1341
+        y: 356
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 2d94cd6807636b700800000000000000
+      internalID: 555691460953655762
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-attack-2
+      rect:
+        serializedVersion: 2
+        x: 1440
+        y: 356
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: fdde87e6602c66980800000000000000
+      internalID: -8545929910009926177
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-attack-3
+      rect:
+        serializedVersion: 2
+        x: 1440
+        y: 356
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: a5cec75c2ed6f86f0800000000000000
+      internalID: -680204197966320550
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-death-0
+      rect:
+        serializedVersion: 2
+        x: 1245
+        y: 256
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 45743612a8e2a1f70800000000000000
+      internalID: 9158683963011843924
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-death-1
+      rect:
+        serializedVersion: 2
+        x: 1341
+        y: 256
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: a1919f0288453b250800000000000000
+      internalID: 5959199675586779418
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-death-2
+      rect:
+        serializedVersion: 2
+        x: 1440
+        y: 256
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 77214b24a43c9c7b0800000000000000
+      internalID: -5203413170735803785
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: enemy-MachineGun-death-3
+      rect:
+        serializedVersion: 2
+        x: 1440
+        y: 256
+        width: 96
+        height: 84
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 68024b3bd8e45d1b0800000000000000
+      internalID: -5632509388444655482
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    outline: []
+    customData: 
+    physicsShape: []
+    bones: []
+    spriteID: 
+    internalID: 0
+    vertices: []
+    indices: 
+    edges: []
+    weights: []
+    secondaryTextures: []
+    spriteCustomMetadata:
+      entries: []
+    nameFileIdTable:
+      enemy-Armored-attack-0: 4914172312916580660
+      enemy-Armored-attack-1: -7795535360848844939
+      enemy-Armored-attack-2: 7889596470526338546
+      enemy-Armored-attack-3: 89836486074678315
+      enemy-Armored-death-0: -4540867220962460556
+      enemy-Armored-death-1: -890005821821246597
+      enemy-Armored-death-2: 9128237865779293484
+      enemy-Armored-death-3: 8085731146102425926
+      enemy-Armored-idle-0: -7279057908397005789
+      enemy-Armored-idle-1: 7360403413091198130
+      enemy-Armored-idle-2: -3185857467895347335
+      enemy-Armored-idle-3: -5551873383970938676
+      enemy-Armored-walk-0: 6818633529677445632
+      enemy-Armored-walk-1: 7246687665425136569
+      enemy-Armored-walk-2: 719613602626114160
+      enemy-Armored-walk-3: 7861790665172926564
+      enemy-Guard-attack-0: -9002347837273124465
+      enemy-Guard-attack-1: -6448254316895075470
+      enemy-Guard-attack-2: -3459064915142846960
+      enemy-Guard-attack-3: -5514891947728167932
+      enemy-Guard-death-0: 7296285835122788413
+      enemy-Guard-death-1: 7700099683541148015
+      enemy-Guard-death-2: 6739882465323047306
+      enemy-Guard-death-3: 4432869169914874863
+      enemy-Guard-idle-0: -3247801556310742499
+      enemy-Guard-idle-1: -5712769890321402078
+      enemy-Guard-idle-2: -7347691542063994737
+      enemy-Guard-idle-3: -3713291789471115319
+      enemy-Guard-walk-0: 4364856537911153812
+      enemy-Guard-walk-1: -136440844344955740
+      enemy-Guard-walk-2: -4358302010907706929
+      enemy-Guard-walk-3: -4647715942497842257
+      enemy-MachineGun-attack-0: -7344955028586387407
+      enemy-MachineGun-attack-1: 555691460953655762
+      enemy-MachineGun-attack-2: -8545929910009926177
+      enemy-MachineGun-attack-3: -680204197966320550
+      enemy-MachineGun-death-0: 9158683963011843924
+      enemy-MachineGun-death-1: 5959199675586779418
+      enemy-MachineGun-death-2: -5203413170735803785
+      enemy-MachineGun-death-3: -5632509388444655482
+      enemy-MachineGun-idle-0: -4858746889023705559
+      enemy-MachineGun-idle-1: -8318416446919848838
+      enemy-MachineGun-idle-2: -3071988130588884407
+      enemy-MachineGun-idle-3: 5350700543272319661
+      enemy-MachineGun-walk-0: -5607475685734090444
+      enemy-MachineGun-walk-1: 7287243910122325018
+      enemy-MachineGun-walk-2: -2445584664513967113
+      enemy-MachineGun-walk-3: -3118495373458674727
+      enemy-Rifle-attack-0: -8490281787990161620
+      enemy-Rifle-attack-1: 1148073321243978133
+      enemy-Rifle-attack-2: -143540176384126903
+      enemy-Rifle-attack-3: 4627828171119563801
+      enemy-Rifle-death-0: 4618420011031218978
+      enemy-Rifle-death-1: -8753145820006479152
+      enemy-Rifle-death-2: -2665036508702643087
+      enemy-Rifle-death-3: -1567177026897090897
+      enemy-Rifle-idle-0: -3378597575271274418
+      enemy-Rifle-idle-1: -8588602440856631253
+      enemy-Rifle-idle-2: 1825952418560414642
+      enemy-Rifle-idle-3: 4091673568208076931
+      enemy-Rifle-walk-0: -2158323985476863879
+      enemy-Rifle-walk-1: 1571619500280294463
+      enemy-Rifle-walk-2: -786633635352273336
+      enemy-Rifle-walk-3: 2182419232640316200
+  mipmapLimitGroupName: 
+  pSDRemoveMatte: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

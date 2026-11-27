@@ -4,6 +4,7 @@ import { jwtAuth } from './shared/jwt-auth.js';
 import { validateJson } from './shared/validator.js';
 import { getMechaConfigRepo, getPartsRepo } from './provider.js';
 import { getFrame, getWeapon, getCore, getModule } from './data/parts.js';
+import { playerIdForUser } from './shared/player-identity.js';
 import { NotFoundError, AppError } from './shared/errors.js';
 
 const mechaRoutes = new Hono<{ Variables: { userId: string; parsedBody: Record<string, unknown> } }>();
@@ -27,20 +28,19 @@ const updateSchema = z.object({
 // ─── GET /mecha/configs ─────────────────────────────
 
 mechaRoutes.get('/mecha/configs', jwtAuth, async (c) => {
-  const userId = c.get('userId');
+  const playerId = await playerIdForUser(c.get('userId'));
   const repo = await getMechaConfigRepo();
-  const configs = await repo.getConfigs(userId);
-  const active = await repo.getActiveConfig(userId);
+  const configs = await repo.getConfigs(playerId);
+  const active = await repo.getActiveConfig(playerId);
   return c.json({ configs, active });
 });
 
 // ─── POST /mecha/configs ────────────────────────────
 
 mechaRoutes.post('/mecha/configs', jwtAuth, validateJson(createSchema), async (c) => {
-  const userId = c.get('userId');
+  const playerId = await playerIdForUser(c.get('userId'));
   const { name, frame, weapon, core, module } = c.get('parsedBody') as z.infer<typeof createSchema>;
 
-  // 존재하는 파츠인지 검증
   if (!getFrame(frame) && !getWeapon(frame) && !getCore(frame) && !getModule(frame)) {
     throw new AppError(`존재하지 않는 파츠: ${frame}`, 400, 'PART_NOT_FOUND');
   }
@@ -49,18 +49,19 @@ mechaRoutes.post('/mecha/configs', jwtAuth, validateJson(createSchema), async (c
   if (!getModule(module)) throw new AppError(`존재하지 않는 모듈: ${module}`, 400, 'PART_NOT_FOUND');
 
   const repo = await getMechaConfigRepo();
-  const config = await repo.createConfig(userId, name, frame, weapon, core, module);
+  const config = await repo.createConfig(playerId, name, frame, weapon, core, module);
   return c.json(config, 201);
 });
 
 // ─── PUT /mecha/configs/:id ─────────────────────────
 
 mechaRoutes.put('/mecha/configs/:id', jwtAuth, validateJson(updateSchema), async (c) => {
+  const playerId = await playerIdForUser(c.get('userId'));
   const id = c.req.param('id')!;
   const updates = c.get('parsedBody') as z.infer<typeof updateSchema>;
 
   const repo = await getMechaConfigRepo();
-  const config = await repo.updateConfig(id, updates);
+  const config = await repo.updateConfig(id, playerId, updates);
   if (!config) throw new NotFoundError('구성');
   return c.json(config);
 });
@@ -68,11 +69,11 @@ mechaRoutes.put('/mecha/configs/:id', jwtAuth, validateJson(updateSchema), async
 // ─── POST /mecha/configs/:id/activate ───────────────
 
 mechaRoutes.post('/mecha/configs/:id/activate', jwtAuth, async (c) => {
-  const userId = c.get('userId');
+  const playerId = await playerIdForUser(c.get('userId'));
   const id = c.req.param('id')!;
 
   const repo = await getMechaConfigRepo();
-  const config = await repo.activateConfig(id, userId);
+  const config = await repo.activateConfig(id, playerId);
   if (!config) throw new NotFoundError('구성');
   return c.json(config);
 });
@@ -80,11 +81,11 @@ mechaRoutes.post('/mecha/configs/:id/activate', jwtAuth, async (c) => {
 // ─── DELETE /mecha/configs/:id ──────────────────────
 
 mechaRoutes.delete('/mecha/configs/:id', jwtAuth, async (c) => {
-  const userId = c.get('userId');
+  const playerId = await playerIdForUser(c.get('userId'));
   const id = c.req.param('id')!;
 
   const repo = await getMechaConfigRepo();
-  const deleted = await repo.deleteConfig(id, userId);
+  const deleted = await repo.deleteConfig(id, playerId);
   if (!deleted) throw new NotFoundError('구성');
   return c.json({ status: 'ok' });
 });
@@ -92,11 +93,11 @@ mechaRoutes.delete('/mecha/configs/:id', jwtAuth, async (c) => {
 // ─── GET /mecha/parts — 보유 파츠 상세 조회 ─────
 
 mechaRoutes.get('/mecha/parts', jwtAuth, async (c) => {
-  const userId = c.get('userId');
-  const typeFilter = c.req.query('type'); // frame | weapon | core | module
+  const playerId = await playerIdForUser(c.get('userId'));
+  const typeFilter = c.req.query('type');
 
   const repo = await getPartsRepo();
-  let inventory = await repo.getInventory(userId);
+  let inventory = await repo.getInventory(playerId);
 
   if (typeFilter) {
     inventory = inventory.filter((p) => p.partType === typeFilter);

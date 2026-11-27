@@ -1,13 +1,32 @@
 /**
  * JSON 파일 기반 연구 저장소
  */
-import { readFileSync, writeFileSync, renameSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { promoteJsonTempFile } from './shared/json-file.js';
 import { join } from 'node:path';
 import type { PlayerResearch } from './types.js';
 import type { ResearchRepository } from './repository.js';
 import { getResearchNode } from './data/research.js';
 import { logger } from './shared/logger.js';
+import { AppError } from './shared/errors.js';
+import { jsonWalletRepo } from './store-wallet.js';
+import { researchLedgerKey, researchRefundKey } from './shared/research-ledger.js';
 
+const levelUpLocks = new Map<string, Promise<void>>();
+
+async function withLevelUpLock<T>(key: string, action: () => Promise<T>): Promise<T> {
+  const previous = levelUpLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  levelUpLocks.set(key, current);
+  await previous;
+  try {
+    return await action();
+  } finally {
+    release();
+    if (levelUpLocks.get(key) === current) levelUpLocks.delete(key);
+  }
+}
 const researchFile = process.env.DATA_FILE_RESEARCH || join(process.cwd(), 'data-research.json');
 
 let research = new Map<string, PlayerResearch>();
@@ -30,7 +49,7 @@ function saveMap<T extends { id: string }>(map: Map<string, T>, fp: string, name
     writeFileSync(tmp, JSON.stringify(Array.from(map.values()), null, 2), 'utf-8');
     JSON.parse(readFileSync(tmp, 'utf-8'));
     if (existsSync(fp)) copyFileSync(fp, fp + '.bak');
-    renameSync(tmp, fp);
+    promoteJsonTempFile(tmp, fp);
   } catch (err) {
     logger.error({ operation: 'save', file: fp, name, err: (err as Error).message }, `Failed to save ${name}`);
     try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* skip */ }
@@ -55,33 +74,71 @@ export const jsonResearchRepo: ResearchRepository = {
     return Array.from(research.values()).find((r) => r.playerId === playerId && r.code === code) || null;
   },
 
-  async levelUp(playerId: string, code: string): Promise<PlayerResearch> {
-    ensure();
-    const node = getResearchNode(code);
-    if (!node) throw new Error(`Unknown research: ${code}`);
+  async levelUp(playerId: string, code: string, requestKey: string) {
+    return withLevelUpLock(`${playerId}\0${code}`, async () => {
+      ensure();
+      const node = getResearchNode(code);
+      if (!node) throw new AppError('존재하지 않는 연구입니다.', 404, 'RESEARCH_NOT_FOUND');
 
-    let record = Array.from(research.values()).find((r) => r.playerId === playerId && r.code === code);
-    if (!record) {
-      // 첫 연구: level=0 생성
-      record = {
-        id: crypto.randomUUID(), playerId, code,
-        level: 0, completed: 0,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      research.set(record.id, record);
-    }
+      const allResearch = Array.from(research.values()).filter((record) => record.playerId === playerId);
+      for (const prerequisite of node.prerequisites) {
+        const parent = allResearch.find((record) => record.code === prerequisite.code);
+        if (!parent || parent.level < prerequisite.level) {
+          throw new AppError(`선행 연구가 필요합니다: ${prerequisite.code} Lv.${prerequisite.level}`, 400, 'PREREQUISITE_NOT_MET');
+        }
+      }
 
-    if (record.level >= node.maxLevel) {
-      throw new Error('MAX_LEVEL');
-    }
+      const record = allResearch.find((item) => item.code === code);
+      const nextLevel = (record?.level || 0) + 1;
+      if (nextLevel > node.maxLevel) throw new AppError('이미 최대 레벨입니다.', 400, 'MAX_LEVEL');
+      const cost = node.costPerLevel(nextLevel);
+      const charged: { currency: 'electricity' | 'scrap'; amount: number; key: string }[] = [];
 
-    record.level += 1;
-    record.completed = record.level >= node.maxLevel ? 1 : 0;
-    record.updatedAt = new Date().toISOString();
-    research.set(record.id, record);
-    saveMap(research, researchFile, 'research');
-    return record;
+      try {
+        for (const currency of ['electricity', 'scrap'] as const) {
+          const amount = cost[currency] || 0;
+          if (amount <= 0) continue;
+          const key = researchLedgerKey(playerId, requestKey, code, currency);
+          const adjusted = await jsonWalletRepo.adjustBalance({
+            playerId, amount: -amount, source: 'research', idempotencyKey: key, currency,
+            reason: `${node.name} Lv.${nextLevel}`, referenceType: 'research', referenceId: code,
+          });
+          if (!adjusted.success) throw new AppError('연구 비용 요청이 이미 처리되었습니다.', 409, 'IDEMPOTENCY_CONFLICT');
+          charged.push({ currency, amount, key });
+        }
+      } catch (error) {
+        for (const debit of charged.reverse()) {
+          await jsonWalletRepo.adjustBalance({
+            playerId,
+            amount: debit.amount,
+            source: 'research_refund',
+            idempotencyKey: researchRefundKey(debit.key),
+            currency: debit.currency,
+            reason: `${node.name} Lv.${nextLevel} rollback`,
+            referenceType: 'research',
+            referenceId: code,
+          });
+        }
+        throw error;
+      }
+
+      const now = new Date().toISOString();
+      const updated: PlayerResearch = record
+        ? {
+            ...record,
+            level: nextLevel,
+            completed: nextLevel >= node.maxLevel ? 1 : 0,
+            updatedAt: now,
+          }
+        : {
+            id: crypto.randomUUID(), playerId, code,
+            level: nextLevel, completed: nextLevel >= node.maxLevel ? 1 : 0,
+            createdAt: now, updatedAt: now,
+          };
+      research.set(updated.id, updated);
+      saveMap(research, researchFile, 'research');
+      return { research: updated, cost };
+    });
   },
 
   async reset(playerId: string): Promise<void> {

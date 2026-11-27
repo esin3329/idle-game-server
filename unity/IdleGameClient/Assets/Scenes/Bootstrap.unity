@@ -148,7 +148,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 242b0617282db2641beb0147d48bced8, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::IdleGame.ClientApp
-  serverUrl: http://100.73.115.1:3007
+  serverUrl: https://idle-game-server.qlqlf2226.workers.dev
 --- !u!4 &1421144657
 Transform:
   m_ObjectHideFlags: 0

@@ -13,7 +13,7 @@
 | 라우팅 | react-router-dom v6 |
 | 상태/데이터 | @tanstack/react-query |
 | API 통신 | fetch + JWT + 토큰 자동 갱신 |
-| 인증 | /auth/login → JWT access/refresh token |
+| 인증 | `/api/auth/login` → JWT access/refresh token |
 
 ---
 

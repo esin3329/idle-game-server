@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterAll } from 'vitest';
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { Hono } from 'hono';
@@ -11,12 +11,27 @@ const tmpDir = mkdtempSync(join(homedir() || '/tmp', `idle-game-test-routes-`));
 
 import { setDataFilePath } from '../store.js';
 import routes from '../routes.js';
-import { createPlayer, deletePlayer, getAllPlayers } from '../store.js';
+import { createPlayer, updatePlayer } from '../store.js';
 import { clearRateLimits } from '../shared/rate-limit.js';
 import { AppError } from '../shared/errors.js';
 import type { Player } from '../types.js';
+import { resetAllRepos } from '../provider.js';
 
 setDataFilePath(join(tmpDir, 'data.json'));
+const STORE_FILE_ENV = [
+  'DATA_FILE_USERS',
+  'DATA_FILE_SESSIONS',
+  'DATA_FILE_SANCTIONS',
+  'DATA_FILE_PROFILES',
+  'DATA_FILE_WALLETS',
+  'DATA_FILE_LEDGER',
+] as const;
+const originalStoreFileEnv = new Map(STORE_FILE_ENV.map((name) => [name, process.env[name]]));
+for (const name of STORE_FILE_ENV) {
+  process.env[name] = join(tmpDir, `${name.toLowerCase()}.json`);
+}
+const { jsonAuthRepo, resetAuthStores } = await import('../store-auth.js');
+const { resetWalletStores } = await import('../store-wallet.js');
 
 const nowISO = new Date().toISOString();
 const NONEXISTENT_ID = '00000000-0000-0000-0000-000000000000';
@@ -36,12 +51,32 @@ function makePlayer(overrides: Partial<Player> = {}): Player {
 }
 
 // store 초기화
-beforeEach(() => {
+beforeEach(async () => {
   clearRateLimits();
-  const players = getAllPlayers();
-  for (const p of players) {
-    deletePlayer(p.id);
+  resetAllRepos();
+  resetAuthStores();
+  resetWalletStores();
+  for (const name of STORE_FILE_ENV) {
+    const file = process.env[name];
+    if (file) {
+      try { unlinkSync(file); } catch {}
+    }
   }
+  const isolatedDataFile = join(tmpDir, `data-${crypto.randomUUID()}.json`);
+  writeFileSync(isolatedDataFile, '[]', 'utf-8');
+  setDataFilePath(isolatedDataFile);
+
+  const now = new Date().toISOString();
+  await jsonAuthRepo.createUser({
+    id: 'test-user-id',
+    email: 'test-user@example.test',
+    nickname: 'test-user',
+    passwordHash: '',
+    status: 'active',
+    role: 'user',
+    createdAt: now,
+    updatedAt: now,
+  });
 });
 
 function createApp() {
@@ -58,7 +93,7 @@ function createApp() {
   });
 
   app.notFound((c) => c.json({ error: 'Not found', code: 'ROUTE_NOT_FOUND' }, 404));
-  app.route('/', routes);
+  app.route('/api', routes);
   return app;
 }
 
@@ -67,6 +102,35 @@ const JWT_SECRET = process.env.JWT_ACCESS_SECRET || 'dev-secret-change-in-produc
 function authToken(userId = 'test-user-id'): { Authorization: string; 'Idempotency-Key': string } {
   const token = jwt.sign({ sub: userId, type: 'access' }, JWT_SECRET, { expiresIn: 3600 });
   return { Authorization: `Bearer ${token}`, 'Idempotency-Key': crypto.randomUUID() };
+}
+
+async function createOwnedPlayer(overrides: Partial<Player> = {}): Promise<Player> {
+  const player = makePlayer(overrides);
+  createPlayer(player);
+  const now = new Date().toISOString();
+  await jsonAuthRepo.createProfile({
+    id: `profile-${player.id}`,
+    playerId: player.id,
+    userId: 'test-user-id',
+    nickname: player.nickname,
+    highestStage: 1,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await jsonAuthRepo.createWallet({
+    id: `wallet-${player.id}`,
+    playerId: player.id,
+    userId: 'test-user-id',
+    currency: 'electricity',
+    electricity: player.electricity,
+    electricityPerSecond: player.electricityPerSecond,
+    scrap: 0,
+    balance: player.electricity,
+    lastClaimedAt: player.lastClaimedAt,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return player;
 }
 
 describe('POST /api/players', () => {
@@ -117,6 +181,19 @@ describe('GET /api/players', () => {
     const body = await res.json();
     expect(body).toEqual([]);
   });
+
+  it('limit/offset 쿼리로 페이지네이션할 수 있어야 한다', async () => {
+    const app = createApp();
+    createPlayer(makePlayer({ nickname: '첫번째' }));
+    createPlayer(makePlayer({ nickname: '두번째' }));
+    createPlayer(makePlayer({ nickname: '세번째' }));
+
+    const res = await app.request('/api/players?limit=1&offset=1', { method: 'GET' });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any[];
+    expect(body).toHaveLength(1);
+    expect(body[0].nickname).toBe('두번째');
+  });
 });
 
 describe('GET /api/players/:id', () => {
@@ -144,8 +221,7 @@ describe('POST /api/players/:id/claim', () => {
   it('전기를 수집하면 electricity가 증가해야 한다', async () => {
     const app = createApp();
     const pastTime = new Date(Date.now() - 10000).toISOString();
-    const player = makePlayer({ lastClaimedAt: pastTime });
-    createPlayer(player);
+    const player = await createOwnedPlayer({ lastClaimedAt: pastTime });
 
     const res = await app.request(`/api/players/${player.id}/claim`, {
       method: 'POST',
@@ -189,8 +265,7 @@ describe('POST /api/players/:id/upgrade', () => {
 
   it('전기가 부족하면 업그레이드에 실패해야 한다', async () => {
     const app = createApp();
-    const player = makePlayer({ electricity: 0, electricityPerSecond: 1 });
-    createPlayer(player);
+    const player = await createOwnedPlayer({ electricity: 0, electricityPerSecond: 1 });
 
     const res = await app.request(`/api/players/${player.id}/upgrade`, {
       method: 'POST',
@@ -203,8 +278,7 @@ describe('POST /api/players/:id/upgrade', () => {
 
   it('전기가 충분하면 업그레이드해야 한다', async () => {
     const app = createApp();
-    const player = makePlayer({ electricity: 100, electricityPerSecond: 1 });
-    createPlayer(player);
+    const player = await createOwnedPlayer({ electricity: 100, electricityPerSecond: 1 });
 
     const res = await app.request(`/api/players/${player.id}/upgrade`, {
       method: 'POST',
@@ -235,99 +309,6 @@ describe('GET /api/players/:id/upgrade', () => {
   });
 });
 
-describe('POST /api/players/:id/battle', () => {
-  it('인증 없이 요청하면 401을 반환해야 한다', async () => {
-    const app = createApp();
-    const player = makePlayer();
-    createPlayer(player);
-
-    const res = await app.request(`/api/players/${player.id}/battle`, {
-      method: 'POST',
-      headers: { 'Idempotency-Key': crypto.randomUUID() },
-    });
-    expect(res.status).toBe(401);
-  });
-
-  it('승리 시 전기가 증가하고 보상을 받아야 한다', async () => {
-    const app = createApp();
-    const player = makePlayer({ electricity: 100, electricityPerSecond: 10 });
-    createPlayer(player);
-
-    // Math.random 시퀀스: [적 변동 최소(0), 적 이름(0), 보상 비율 최소(0)]
-    // → enemyVariance = 0.8 (가장 약함), rewardRatio = 0.5 (최소)
-    const rand = vi.spyOn(Math, 'random');
-    rand.mockReturnValueOnce(0)  // enemy variance → 0.8
-          .mockReturnValueOnce(0)  // enemy name index → '좀비'
-          .mockReturnValueOnce(0); // reward ratio → 0.5
-
-    const res = await app.request(`/api/players/${player.id}/battle`, {
-      method: 'POST',
-      headers: authToken(),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-
-    expect(body.won).toBe(true);
-    expect(body.playerPower).toBe(100);
-    expect(body.enemyPower).toBeLessThanOrEqual(80); // floor(100 * 0.8) = 80
-    expect(body.enemyName).toBe('좀비');
-    expect(body.reward).toBe(150); // floor(300 * 0.5) = 150
-    expect(body.player.electricity).toBe(250); // 100 + 150
-
-    rand.mockRestore();
-  });
-
-  it('적 전투력이 높으면 패배하고 보상이 0이어야 한다', async () => {
-    const app = createApp();
-    const player = makePlayer({ electricity: 100, electricityPerSecond: 10 });
-    createPlayer(player);
-
-    // Math.random 시퀀스: [적 변동 최대(0.999), 적 이름(0.5), 보상 비율(무관)]
-    // → enemyVariance ≈ 1.2 (가장 강함), playerPower=100 < enemyPower=120
-    const rand = vi.spyOn(Math, 'random');
-    rand.mockReturnValueOnce(0.999)  // enemy variance → ~1.1998
-          .mockReturnValueOnce(0.5)    // enemy name
-          .mockReturnValueOnce(0);     // reward (ignored for loss)
-
-    const res = await app.request(`/api/players/${player.id}/battle`, {
-      method: 'POST',
-      headers: authToken(),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-
-    expect(body.won).toBe(false);
-    expect(body.playerPower).toBe(100);
-    expect(body.enemyPower).toBeGreaterThan(100);
-    expect(body.reward).toBe(0);
-    expect(body.player.electricity).toBe(100); // unchanged
-
-    rand.mockRestore();
-  });
-
-  it('응답에 필수 필드가 모두 포함되어야 한다', async () => {
-    const app = createApp();
-    const player = makePlayer({ electricity: 50, electricityPerSecond: 5 });
-    createPlayer(player);
-
-    const res = await app.request(`/api/players/${player.id}/battle`, {
-      method: 'POST',
-      headers: authToken(),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-
-    expect(body).toHaveProperty('won');
-    expect(body).toHaveProperty('reward');
-    expect(body).toHaveProperty('enemyName');
-    expect(body).toHaveProperty('enemyPower');
-    expect(body).toHaveProperty('playerPower');
-    expect(body).toHaveProperty('player');
-    expect(body.enemyPower).toBeGreaterThanOrEqual(1);
-    expect(typeof body.enemyName).toBe('string');
-    expect(body.enemyName.length).toBeGreaterThan(0);
-  });
-});
 
 describe('GET /api/rankings', () => {
   it('플레이어가 없으면 빈 배열을 반환해야 한다', async () => {
@@ -353,6 +334,19 @@ describe('GET /api/rankings', () => {
     expect(body[0].id).toBe('p1'); // p1이 더 부자
     expect(body[1].id).toBe('p2');
     expect(body[0].totalWealth).toBeGreaterThan(body[1].totalWealth);
+  });
+
+  it('limit/offset 쿼리로 랭킹을 페이지네이션할 수 있어야 한다', async () => {
+    const app = createApp();
+    const pastTime = new Date(Date.now() - 10000).toISOString();
+    createPlayer(makePlayer({ id: 'p1', nickname: '부자', electricity: 1000, electricityPerSecond: 10, lastClaimedAt: pastTime }));
+    createPlayer(makePlayer({ id: 'p2', nickname: '거지', electricity: 10, electricityPerSecond: 1, lastClaimedAt: pastTime }));
+
+    const res = await app.request('/api/rankings?limit=1&offset=1', { method: 'GET' });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any[];
+    expect(body).toHaveLength(1);
+    expect(body[0].id).toBe('p2');
   });
 });
 
@@ -404,6 +398,20 @@ describe('비밀값 노출 방지', () => {
     expect(res.status).toBe(200);
     expectNoSecrets(await res.json());
   });
+  it('플레이어 API는 오래된 Player 잔액 캐시 대신 지갑 잔액을 반환한다', async () => {
+    const app = createApp();
+    const player = await createOwnedPlayer({ electricity: 10, electricityPerSecond: 2 });
+    const { adjustBalance } = await import('../shared/wallet.js');
+    await adjustBalance(player.id, 30, 'test', crypto.randomUUID());
+    updatePlayer(player.id, { electricity: 999, electricityPerSecond: 99 });
+
+    const response = await app.request(`/api/players/${player.id}`, { method: 'GET' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      electricity: 40,
+      electricityPerSecond: 2,
+    });
+  });
 
   it('GET /api/players 목록 응답에 비밀값이 없어야 한다', async () => {
     const app = createApp();
@@ -422,8 +430,7 @@ describe('비밀값 노출 방지', () => {
   it('POST .../claim 응답의 player에 비밀값이 없어야 한다', async () => {
     const app = createApp();
     const pastTime = new Date(Date.now() - 10000).toISOString();
-    const player = makePlayer({ lastClaimedAt: pastTime });
-    createPlayer(player);
+    const player = await createOwnedPlayer({ lastClaimedAt: pastTime });
 
     const res = await app.request(`/api/players/${player.id}/claim`, {
       method: 'POST',
@@ -436,24 +443,9 @@ describe('비밀값 노출 방지', () => {
 
   it('POST .../upgrade 응답의 player에 비밀값이 없어야 한다', async () => {
     const app = createApp();
-    const player = makePlayer({ electricity: 100, electricityPerSecond: 1 });
-    createPlayer(player);
+    const player = await createOwnedPlayer({ electricity: 100, electricityPerSecond: 1 });
 
     const res = await app.request(`/api/players/${player.id}/upgrade`, {
-      method: 'POST',
-      headers: authToken(),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expectNoSecrets(body.player);
-  });
-
-  it('POST .../battle 응답의 player에 비밀값이 없어야 한다', async () => {
-    const app = createApp();
-    const player = makePlayer({ electricity: 100, electricityPerSecond: 5 });
-    createPlayer(player);
-
-    const res = await app.request(`/api/players/${player.id}/battle`, {
       method: 'POST',
       headers: authToken(),
     });
@@ -508,5 +500,13 @@ describe('데이터 격리', () => {
 });
 
 afterAll(() => {
+  resetAllRepos();
+  resetAuthStores();
+  resetWalletStores();
+  for (const name of STORE_FILE_ENV) {
+    const value = originalStoreFileEnv.get(name);
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
   try { rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
 });

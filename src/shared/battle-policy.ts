@@ -17,6 +17,10 @@ export const BATTLE_POLICY = {
   // ── 시간 검증 ──
   /** finish 시 클라이언트 제출 경과시간 허용 오차 (초) */
   FINISH_TIME_TOLERANCE_SECONDS: 10,
+  /** finish 시 요구되는 최소 실제 전투시간 (초) */
+  MIN_FINISH_DURATION_SECONDS: 10,
+  /** 클라이언트 시간 제출의 서버 시각 오차 (초) */
+  SERVER_TIME_SKEW_SECONDS: 2,
 
   // ── 처치 수 ──
   /** 이벤트별 처치 수 상한 배율 */
@@ -33,6 +37,8 @@ export const BATTLE_POLICY = {
   // ── 보스 ──
   /** 보스 등장 N초 전부터 처치 허용 */
   BOSS_EARLY_TOLERANCE_SECONDS: 5,
+  /** 보스 보고 시간 허용 범위 (초) */
+  BOSS_TIMING_TOLERANCE_SECONDS: 15,
 
   // ── 콘텐츠 기본값 (DB 미지정 시) ──
   DEFAULT_CORE_PER_LEVEL: 50,

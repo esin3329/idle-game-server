@@ -1,30 +1,23 @@
 /**
- * 초기 운영자 시드
+ * 초기 운영자 시드 (PostgreSQL)
  *
  * 최초 운영자 계정 + 역할·권한 생성. 재실행 안전 (upsert).
- * 공개 회원가입 API로는 role='operator' 생성 불가.
- *
- * 실행: npx tsx src/db/seed-operator.ts
- * 환경변수: OPERATOR_EMAIL, OPERATOR_PASSWORD (미설정 시 기본값)
+ * 실행: npm run db:seed-operator
+ * 환경변수: DATABASE_URL, OPERATOR_EMAIL, OPERATOR_PASSWORD
  */
 import { hash } from 'bcryptjs';
-import { getDb } from './connection.js';
-import { users, operatorRoles, operatorPermissions, operatorRolePermissions } from './schema.js';
 import { eq, and } from 'drizzle-orm';
-import type { InferSelectModel } from 'drizzle-orm';
-type OperatorRole = InferSelectModel<typeof operatorRoles>;
-type OperatorPermission = InferSelectModel<typeof operatorPermissions>;
-
-const db = getDb();
+import { getDb, closePostgresPool } from './postgres-connection.js';
+import { users, operatorRoles, operatorPermissions, operatorRolePermissions } from './postgres-schema.js';
 
 const EMAIL = process.env.OPERATOR_EMAIL || 'admin@projectcoreforge.local';
 const PASSWORD = process.env.OPERATOR_PASSWORD || 'admin-change-me-immediately';
 const NICKNAME = '시스템운영자';
 
 async function seedOperator() {
+  const db = getDb();
   const now = new Date();
 
-  // ─── MVP 역할 seed ───
   const roles = [
     { code: 'admin', name: '최고 관리자', description: '모든 운영 권한 보유' },
     { code: 'operator', name: '운영자', description: '사용자 관리 및 제재, 일반 지급' },
@@ -42,7 +35,6 @@ async function seedOperator() {
     }
   }
 
-  // ─── MVP 권한 seed ───
   const perms = [
     { code: 'admin.users.read', name: '사용자 조회', description: '사용자 목록·상세·원장·전투 조회' },
     { code: 'admin.wallets.read', name: '지갑 조회', description: '지갑 잔액·원장 조회' },
@@ -70,23 +62,22 @@ async function seedOperator() {
     }
   }
 
-  // ─── 역할-권한 매핑 seed ───
   const allRoles = await db.select().from(operatorRoles);
   const allPerms = await db.select().from(operatorPermissions);
   const rolePermMap: Record<string, string[]> = {
-    admin: ['admin.users.read', 'admin.users.write', 'admin.grants.low', 'admin.grants.high', 'admin.security.read', 'admin.security.review', 'admin.operators.manage'],
-    operator: ['admin.users.read', 'admin.wallets.read', 'admin.battles.read', 'admin.users.write', 'admin.grants.low', 'admin.security.read', 'admin.security.review'],
+    admin: ['admin.users.read', 'admin.users.write', 'admin.sanctions.read', 'admin.sanctions.write', 'admin.grants.read', 'admin.grants.low', 'admin.grants.high', 'admin.security.read', 'admin.security.write', 'admin.audit_logs.read', 'admin.operators.read', 'admin.operators.manage'],
+    operator: ['admin.users.read', 'admin.wallets.read', 'admin.inventories.read', 'admin.battles.read', 'admin.users.write', 'admin.sanctions.read', 'admin.sanctions.write', 'admin.grants.read', 'admin.grants.low', 'admin.security.read', 'admin.security.write', 'admin.audit_logs.read'],
     viewer: ['admin.users.read', 'admin.security.read'],
     support: ['admin.users.read', 'admin.security.read'],
-    game_master: ['admin.users.read', 'admin.wallets.read', 'admin.battles.read', 'admin.users.write', 'admin.grants.low', 'admin.security.read', 'admin.security.review'],
-    administrator: ['admin.users.read', 'admin.users.write', 'admin.grants.low', 'admin.grants.high', 'admin.security.read', 'admin.security.review', 'admin.operators.manage'],
+    game_master: ['admin.users.read', 'admin.wallets.read', 'admin.battles.read', 'admin.users.write', 'admin.sanctions.read', 'admin.sanctions.write', 'admin.grants.read', 'admin.grants.low', 'admin.security.read', 'admin.security.write'],
+    administrator: ['admin.users.read', 'admin.users.write', 'admin.sanctions.read', 'admin.sanctions.write', 'admin.grants.read', 'admin.grants.low', 'admin.grants.high', 'admin.security.read', 'admin.security.write', 'admin.audit_logs.read', 'admin.operators.read', 'admin.operators.manage'],
   };
 
   for (const [roleCode, permCodes] of Object.entries(rolePermMap)) {
-    const role: OperatorRole | undefined = allRoles.find((r: OperatorRole) => r.code === roleCode);
+    const role = allRoles.find((r) => r.code === roleCode);
     if (!role) continue;
     for (const pc of permCodes) {
-      const perm: OperatorPermission | undefined = allPerms.find((p: OperatorPermission) => p.code === pc);
+      const perm = allPerms.find((p) => p.code === pc);
       if (!perm) continue;
       const existing = await db.select().from(operatorRolePermissions)
         .where(and(eq(operatorRolePermissions.roleId, role.id), eq(operatorRolePermissions.permissionId, perm.id))).limit(1);
@@ -97,9 +88,7 @@ async function seedOperator() {
   }
   console.log('  [OK] Role-permission mappings seeded');
 
-  // ─── 최초 운영자 계정 ───
   const existing = await db.select().from(users).where(eq(users.email, EMAIL)).limit(1);
-
   const passwordHash = await hash(PASSWORD, 10);
 
   if (existing.length > 0) {
@@ -112,13 +101,17 @@ async function seedOperator() {
     });
     console.log(`[CREATED] Operator: ${EMAIL} (role: admin)`);
   }
-
-  console.log('\n⚠️  IMPORTANT: Change the default password immediately.');
-  console.log('   Set OPERATOR_EMAIL and OPERATOR_PASSWORD environment variables.\n');
-  console.log('✅ Roles (3), Permissions (7), and operator account seeded.\n');
 }
 
-seedOperator().catch((err) => {
-  console.error('Operator seed failed:', err);
-  process.exit(1);
-});
+async function main() {
+  try {
+    await seedOperator();
+  } catch (err) {
+    console.error('Operator seed failed:', err);
+    process.exitCode = 1;
+  } finally {
+    await closePostgresPool();
+  }
+}
+
+void main();

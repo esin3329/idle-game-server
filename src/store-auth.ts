@@ -1,14 +1,15 @@
 /**
- * JSON 파일 기반 Auth 저장소 (개발/테스트용)
+ * JSON 파일 기반 Auth 저장소 (개발/테스트 전용)
  *
- * MySQL 미연결 시 provider.ts에서 자동 로드됨.
- * 모든 데이터를 JSON 파일에 저장하며, 트랜잭션 대신 순차 저장.
+ * 모든 데이터를 JSON 파일에 저장하며, 트랜잭션 대신 순차 저장한다.
  */
-import { readFileSync, writeFileSync, renameSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, unlinkSync } from 'node:fs';
+import { promoteJsonTempFile } from './shared/json-file.js';
 import { join } from 'node:path';
 import type { User, RefreshSession, Sanction, PlayerProfile, WalletBalance } from './types.js';
 import type { AuthRepository, PlayerProfile as ProfileType, WalletBalance as WalletType } from './repository.js';
 import { logger } from './shared/logger.js';
+import { syncAuthWallet } from './store-wallet.js';
 
 // ─── 데이터 파일 경로 ────────────────────────────────
 
@@ -55,7 +56,7 @@ function saveMap<T extends { id: string }>(map: Map<string, T>, filePath: string
 
     const bakFile = filePath + '.bak';
     if (existsSync(filePath)) copyFileSync(filePath, bakFile);
-    renameSync(tmpFile, filePath);
+    promoteJsonTempFile(tmpFile, filePath);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ operation: 'save', file: filePath, name, err: msg }, `Failed to save ${name}`);
@@ -101,6 +102,7 @@ export const jsonAuthRepo: AuthRepository = {
     } as WalletBalance;
     wallets.set(w.id, w);
     saveMap(wallets, walletsFile, 'wallets');
+    syncAuthWallet(w);
     return w;
   },
 
@@ -128,7 +130,10 @@ export const jsonAuthRepo: AuthRepository = {
     ensureLoaded();
     const now = new Date().toISOString();
     return Array.from(sanctions.values()).filter(
-      (s) => s.userId === userId && s.status === 'active' && (!s.expiresAt || s.expiresAt > now),
+      (sanction) => sanction.userId === userId &&
+        sanction.status === 'active' &&
+        sanction.startsAt <= now &&
+        (!sanction.expiresAt || sanction.expiresAt > now),
     );
   },
 

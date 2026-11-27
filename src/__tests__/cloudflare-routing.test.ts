@@ -35,16 +35,16 @@ describe('Cloudflare admin API routing', () => {
     expect(await upstream.json()).toEqual({ status: 'active' });
   });
 
-  it('maps Worker health aliases to the public server API paths', () => {
+  it('preserves Worker health aliases as server root health paths', () => {
     const health = createApiUpstreamRequest(new Request('https://admin.example/health'), 'https://api.example.net');
     const live = createApiUpstreamRequest(new Request('https://admin.example/health/live'), 'https://api.example.net');
     const ready = createApiUpstreamRequest(new Request('https://admin.example/ready'), 'https://api.example.net');
     const metrics = createApiUpstreamRequest(new Request('https://admin.example/metrics'), 'https://api.example.net');
 
-    expect(new URL(health.url).pathname).toBe('/api/health');
-    expect(new URL(live.url).pathname).toBe('/api/health/live');
-    expect(new URL(ready.url).pathname).toBe('/api/ready');
-    expect(new URL(metrics.url).pathname).toBe('/api/metrics');
+    expect(new URL(health.url).pathname).toBe('/health');
+    expect(new URL(live.url).pathname).toBe('/health/live');
+    expect(new URL(ready.url).pathname).toBe('/ready');
+    expect(new URL(metrics.url).pathname).toBe('/metrics');
   });
 
   it('rejects non-HTTPS public API origins', () => {
