@@ -130,15 +130,13 @@ app.get('/health/live', (c) => c.json({ status: 'ok' }));
 app.get('/ready', async (c) => {
   if (!isReady) return c.json({ status: 'not ready' }, 503);
   try {
-    if (process.env.DB_DRIVER === 'postgres') {
-      const { getDb } = await import('./db/postgres-connection.js');
-      await getDb().execute(sql`SELECT 1`);
-      dbConnected = true;
-    } else if (process.env.DB_DRIVER === 'json') {
+    const usesJson = process.env.DB_DRIVER === 'json'
+      || (process.env.DB_DRIVER === undefined && process.env.NODE_ENV !== 'production' && !process.env.DATABASE_URL);
+    if (usesJson) {
       dbConnected = true;
     } else {
-      const { getPool } = await import('./db/connection.js');
-      await getPool().query('SELECT 1');
+      const { getDb } = await import('./db/postgres-connection.js');
+      await getDb().execute(sql`SELECT 1`);
       dbConnected = true;
     }
   } catch (error) {

@@ -1,12 +1,8 @@
 /**
- * MySQL + JWT 통합 테스트
+ * PostgreSQL + JWT 통합 테스트 목록
  *
- * 실행 전제:
- *   1. docker-compose up -d mysql
- *   2. DB_DRIVER=mysql DB_NAME=idle_game_test npm run db:migrate
- *   3. DB_DRIVER=mysql DB_NAME=idle_game_test npm test
- *
- * DB_NAME에 'test'가 없으면 전체 스킵.
+ * 실제 PostgreSQL 스키마/RLS/동시성 검증은 `npm run test:postgres` (`src/db/postgres-integration-check.ts`)에서 수행.
+ * 아래 TODO 시나리오는 DB_NAME에 'test' 포함 시 활성화 대상.
  */
 import { describe, it } from 'vitest';
 
@@ -14,7 +10,7 @@ const isTestDb = (process.env.DB_NAME || '').includes('test');
 
 // ─── 멱등성 & 동시성 ────────────────────────────────
 
-describe.skipIf(!isTestDb)('멱등성 (MySQL)', () => {
+describe.skipIf(!isTestDb)('멱등성 (PostgreSQL)', () => {
   it.todo('동일 보상 요청 순차 재전송 → 같은 결과 반환');
   it.todo('동일 보상 요청 동시 전송 → 하나만 처리');
   it.todo('잔액보다 큰 동시 차감 요청 → 하나만 성공, 나머지 400');
@@ -24,7 +20,7 @@ describe.skipIf(!isTestDb)('멱등성 (MySQL)', () => {
 
 // ─── 인증 & 권한 ─────────────────────────────────────
 
-describe.skipIf(!isTestDb)('인증 (MySQL + JWT)', () => {
+describe.skipIf(!isTestDb)('인증 (PostgreSQL + JWT)', () => {
   it.todo('중복 회원가입 → 409 DUPLICATE_ACCOUNT');
   it.todo('Refresh Token 재사용 → 401 TOKEN_EXPIRED');
   it.todo('Refresh Token rotation → 이전 토큰 폐기 후 신규 발급');
@@ -33,9 +29,9 @@ describe.skipIf(!isTestDb)('인증 (MySQL + JWT)', () => {
   it.todo('비활성 계정 로그인 → 403 ACCOUNT_DISABLED');
 });
 
-// ─── 전투 세션 (MySQL) ──────────────────────────────
+// ─── 전투 세션 (PostgreSQL) ─────────────────────────
 
-describe.skipIf(!isTestDb)('전투 세션 (MySQL)', () => {
+describe.skipIf(!isTestDb)('전투 세션 (PostgreSQL)', () => {
   it.todo('POST /battles/start → 201 + 세션 ID 반환');
   it.todo('스테이지 해금 조건 미충족 → 400 STAGE_LOCKED');
   it.todo('비활성 스테이지 → 400 STAGE_DISABLED');
@@ -46,9 +42,9 @@ describe.skipIf(!isTestDb)('전투 세션 (MySQL)', () => {
   it.todo('세션 시작 시 loadoutSnapshot/researchSnapshot 저장');
 });
 
-// ─── 전투 진행 이벤트 (MySQL) ───────────────────────
+// ─── 전투 진행 이벤트 (PostgreSQL) ──────────────────
 
-describe.skipIf(!isTestDb)('전투 진행 이벤트 (MySQL)', () => {
+describe.skipIf(!isTestDb)('전투 진행 이벤트 (PostgreSQL)', () => {
   it.todo('POST /battles/:id/progress → 정상 이벤트 반영');
   it.todo('sequene 중복 → 409 DUPLICATE_SEQUENCE');
   it.todo('sequence <= 0 → 400 INVALID_SEQUENCE');
@@ -60,9 +56,9 @@ describe.skipIf(!isTestDb)('전투 진행 이벤트 (MySQL)', () => {
   it.todo('이벤트 로그 battle_events에 append-only 기록');
 });
 
-// ─── 강화 선택 (MySQL) ──────────────────────────────
+// ─── 강화 선택 (PostgreSQL) ─────────────────────────
 
-describe.skipIf(!isTestDb)('강화 선택 (MySQL)', () => {
+describe.skipIf(!isTestDb)('강화 선택 (PostgreSQL)', () => {
   it.todo('POST /battles/:id/upgrades/select → 강화 적용');
   it.todo('제공되지 않은 강화 선택 → 400 INVALID_UPGRADE_CHOICE');
   it.todo('이미 선택한 강화 재선택 → 409 UPGRADE_ALREADY_SELECTED');
@@ -71,9 +67,9 @@ describe.skipIf(!isTestDb)('강화 선택 (MySQL)', () => {
   it.todo('전투 스탯 재계산 가능 (upgradesApplied 기반)');
 });
 
-// ─── 전투 종료 & 보상 (MySQL) ───────────────────────
+// ─── 전투 종료 & 보상 (PostgreSQL) ──────────────────
 
-describe.skipIf(!isTestDb)('전투 종료 & 보상 (MySQL)', () => {
+describe.skipIf(!isTestDb)('전투 종료 & 보상 (PostgreSQL)', () => {
   it.todo('POST /battles/:id/finish → 보상 확정 + 지갑 반영');
   it.todo('단일 트랜잭션으로 session+wallet+ledger+records');
   it.todo('최초 클리어 → stage_rewards clearType=first 사용');
@@ -89,9 +85,9 @@ describe.skipIf(!isTestDb)('전투 종료 & 보상 (MySQL)', () => {
   it.todo('파츠 획득 → itemLedger에 기록');
 });
 
-// ─── 보안 & 변조 탐지 (MySQL) ──────────────────────
+// ─── 보안 & 변조 탐지 (PostgreSQL) ─────────────────
 
-describe.skipIf(!isTestDb)('보안 & 변조 탐지 (MySQL)', () => {
+describe.skipIf(!isTestDb)('보안 & 변조 탐지 (PostgreSQL)', () => {
   // 입력 위조
   it.todo('finish에 임의 scrapReward 전송 → 무시, 서버 계산값 사용');
   it.todo('finish에 임의 blueprintId 전송 → 무시');
@@ -140,9 +136,9 @@ describe.skipIf(!isTestDb)('보안 & 변조 탐지 (MySQL)', () => {
   it.todo('위조된 accessToken으로 요청 → 401');
 });
 
-// ─── 제재·운영 API (MySQL) ──────────────────────────
+// ─── 제재·운영 API (PostgreSQL) ─────────────────────
 
-describe.skipIf(!isTestDb)('제재·운영 API (MySQL)', () => {
+describe.skipIf(!isTestDb)('제재·운영 API (PostgreSQL)', () => {
   it.todo('POST /admin/users/:id/sanctions → 제재 생성 + audit 로그');
   it.todo('GET /admin/users/:id/sanctions → 제재 목록 조회');
   it.todo('PUT /admin/sanctions/:id/revoke → 제재 철회');
@@ -175,9 +171,9 @@ describe.skipIf(!isTestDb)('제재·운영 API (MySQL)', () => {
   it.todo('감사 로그 수정·삭제 시도 → 404 (API 없음)');
 });
 
-// ─── 백업·복구 (MySQL) ──────────────────────────────
+// ─── 백업·복구 (PostgreSQL) ─────────────────────────
 
-describe.skipIf(!isTestDb)('백업·복구 (MySQL)', () => {
+describe.skipIf(!isTestDb)('백업·복구 (PostgreSQL)', () => {
   it.todo('backup.sh → .sql.gz 생성, gzip 무결성');
   it.todo('recover.sh --dry-run → DB 변경 없음');
   it.todo('recover.sh → 임시 DB 복원 + 테이블 수 확인');
@@ -194,9 +190,9 @@ describe.skipIf(!isTestDb)('백업·복구 (MySQL)', () => {
   it.todo('Dockerfile build → HEALTHCHECK /health 응답');
 });
 
-// ─── 상태 전이 (MySQL) ──────────────────────────────
+// ─── 상태 전이 (PostgreSQL) ─────────────────────────
 
-describe.skipIf(!isTestDb)('상태 전이 (MySQL)', () => {
+describe.skipIf(!isTestDb)('상태 전이 (PostgreSQL)', () => {
   it.todo('active → completing → completed (CAS)');
   it.todo('active → abandoned (포기)');
   it.todo('active → expired → auto-abandoned');
