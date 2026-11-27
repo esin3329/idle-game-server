@@ -578,20 +578,22 @@ export async function endBattleSession(sessionId: string, userId: string, report
         });
       }
 
-      if (blueprintCode) {
-        await craftRepo.grantBlueprint(session.playerId, blueprintCode);
-        logger.info({ playerId: session.playerId, blueprintCode, sessionId, event: 'battle_blueprint_drop' }, 'Blueprint dropped');
-      }
-
-      // 완료 표시는 결과·지급이 모두 끝난 뒤
       await repo.updateSession(sessionId, {
         status: 'completed', endTime: new Date(),
         completedAt: new Date(), resultCode: 'clear',
         rewardScrap: scrapReward,
       });
+
+      // JSON 모드는 설계도 지급을 스냅샷으로 되돌릴 수 없으므로 마지막 쓰기로 둔다
+      if (blueprintCode) {
+        await craftRepo.grantBlueprint(session.playerId, blueprintCode);
+      }
     };
 
     await repo.runInTransaction(commitRewards);
+    if (blueprintCode) {
+      logger.info({ playerId: session.playerId, blueprintCode, sessionId, event: 'battle_blueprint_drop' }, 'Blueprint dropped');
+    }
 
     logger.info({ sessionId, playerId: session.playerId, scrapReward, blueprintCode, isFirstClear, event: 'battle_end' }, 'Battle ended');
     return { ...rewards, reward: rewards };

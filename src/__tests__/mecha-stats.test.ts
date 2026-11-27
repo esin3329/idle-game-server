@@ -4,7 +4,7 @@ import { app } from '../app.js';
 import { endBattleSession, reportBattleEvent, selectUpgrade, startBattleSession } from '../shared/battle-session.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import jwt from 'jsonwebtoken';
-import { getBattleRepo, resetAllRepos } from '../provider.js';
+import { getBattleRepo, getCraftingRepo, resetAllRepos } from '../provider.js';
 import { resetAuthStores, jsonAuthRepo } from '../store-auth.js';
 import { resetBattleStores } from '../store-battle.js';
 import { resetWalletStores } from '../store-wallet.js';
@@ -419,5 +419,29 @@ describe('강화 offer/select 흐름', () => {
     expect((await repo.getPlayerStageProgress('battle-user', 'stage_01_ruins')).clearCount).toBe(1);
     expect((await repo.getWalletBalance('battle-user')).scrap).toBe(10);
     expect((await repo.getSession(session.id)).status).toBe('completed');
+  });
+
+  it('세션 완료 쓰기 실패 시 설계도는 지급되지 않고 재시도 후 보상 요약과 보유 상태가 일치한다', async () => {
+    const session = await finishableSession(true);
+    const repo = await getBattleRepo();
+    const craftRepo = await getCraftingRepo();
+    const updateSession = repo.updateSession.bind(repo);
+    vi.spyOn(repo, 'updateSession').mockImplementation(async (id, data) => {
+      if (data.status === 'completed') throw new Error('injected failure');
+      return updateSession(id, data);
+    });
+
+    await expect(endBattleSession(session.id, 'battle-user', finishReport)).rejects.toThrow('injected failure');
+    expect(await craftRepo.getBlueprints('battle-user')).toHaveLength(0);
+    expect(await repo.getBattleResult(session.id)).toBeNull();
+    expect((await repo.getSession(session.id)).status).toBe('active');
+
+    vi.restoreAllMocks();
+    const finished = await endBattleSession(session.id, 'battle-user', finishReport);
+    expect(finished.reward.blueprint).toBeTruthy();
+    const owned = await craftRepo.getBlueprints('battle-user');
+    expect(owned.map((b) => b.blueprintCode)).toEqual([finished.reward.blueprint]);
+    const result = await repo.getBattleResult(session.id);
+    expect(JSON.parse(result.rewardSummary).blueprint).toBe(finished.reward.blueprint);
   });
 });
