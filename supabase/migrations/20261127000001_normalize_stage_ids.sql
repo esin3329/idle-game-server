@@ -10,7 +10,8 @@
 --
 -- Steps:
 --   1. Re-key player_stage_progress / player_records rows stored under user_id to profile.player_id.
---   2. Per legacy stage: abandon in-flight sessions, then rewrite every referencing table.
+--   1b. On a populated DB, abandon ALL in-flight (active/completing) sessions on every stage.
+--   2. Per legacy stage: rewrite every referencing table (legacy-stage sessions are closed here too).
 --   3. Deterministically deduplicate stage_bosses / stage_rewards.
 --   4. Sync canonical stage metadata (mirrors src/data/stages.ts) so boss_timings/duration match
 --      the canonical boss lists even before `npm run db:battle-seed` runs.
@@ -80,6 +81,19 @@ BEGIN
     FROM stage_migration_player_map m
    WHERE l.player_id = m.from_id;
 
+  -- 1b. Metadata sync (step 4) changes duration/boss rules, so on a populated DB every in-flight session
+  --     (any stage, including userId-keyed ones) is closed first. Otherwise it could fail canonical rule
+  --     checks or, when finished later, recreate legacy progress / grant first-clear rewards twice.
+  IF EXISTS (SELECT 1 FROM game.stages) THEN
+    UPDATE game.battle_sessions
+       SET status       = 'abandoned',
+           result_code  = 'STAGE_MIGRATION_RESET',
+           end_time     = COALESCE(end_time, CURRENT_TIMESTAMP),
+           completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
+           updated_at   = CURRENT_TIMESTAMP
+     WHERE status IN ('active', 'completing');
+  END IF;
+
   -- 2. Legacy -> canonical stage IDs.
   FOR i IN 1 .. array_length(legacy_ids, 1) LOOP
     legacy_id := legacy_ids[i];
@@ -96,8 +110,8 @@ BEGIN
       UPDATE game.stages SET id = canonical_id WHERE id = legacy_id;
     END IF;
 
-    -- battle_sessions: in-flight sessions were created under the legacy stage's boss/duration rules
-    -- (e.g. 540s / 3 bosses) and would fail the canonical checks, so close them before retargeting.
+    -- battle_sessions: also close legacy-stage in-flight sessions on databases without stage rows
+    -- (the populated case is already covered by step 1b), then retarget stage_id.
     -- 'completing' is included because a failed finalize reverts it to 'active' (battle-session.ts).
     UPDATE game.battle_sessions
        SET status       = 'abandoned',

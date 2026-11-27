@@ -6,6 +6,8 @@ import EmbeddedPostgres from 'embedded-postgres';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { migratePostgres } from '../db/postgres-migrate.js';
+import { withPostgresConnection } from '../db/postgres-connection.js';
+import { seed } from '../db/battle-seed.js';
 import { STAGES, getStageBosses } from '../data/stages.js';
 
 const MIGRATION = '20261127000001_normalize_stage_ids.sql';
@@ -159,15 +161,21 @@ describe('stage ID normalization on a pre-normalization database', () => {
       await reward('stage_04_core', 'normal', 43, 'rw-tie-b');
       await reward('stage_04_core', 'normal', 44, 'rw-tie-a');
 
-      const session = (id: string, stage_id: string, status: string, resultCode: string | null = null, endTime: Date | null = null) => client.query(
+      const session = (id: string, stage_id: string, status: string, resultCode: string | null = null, endTime: Date | null = null, player = 'p1') => client.query(
         `INSERT INTO game.battle_sessions (id, player_id, stage_id, status, result_code, end_time, completed_at, start_time, started_at, created_at, updated_at)
-         VALUES ($1,'p1',$2,$3,$4,$5,$5,$6,$6,$6,$6)`,
-        [id, stage_id, status, resultCode, endTime, created]);
+         VALUES ($1,$7,$2,$3,$4,$5,$5,$6,$6,$6,$6)`,
+        [id, stage_id, status, resultCode, endTime, created, player]);
       await session('s-canyon', 'stage_02_canyon', 'active');
       await session('s-fortress', 'stage_04_fortress', 'completing');
       await session('s-furnace-active', 'stage_03_furnace', 'active');
       await session('s-furnace-done', 'stage_03_furnace', 'completed', 'victory', at('01-15'));
       await session('s-canonical', 'stage_02_factory', 'active');
+      await session('s-lab-active', 'stage_03_lab', 'active');
+      await session('s-ruins-active', 'stage_01_ruins', 'active');
+      await session('s-userkey-active', 'stage_01_ruins', 'active', null, null, 'q-user');
+      await session('s-userkey-completing', 'stage_03_lab', 'completing', null, null, 'q-user');
+      await session('s-ruins-done', 'stage_01_ruins', 'completed', 'victory', at('01-16'));
+      await session('s-ruins-abandoned', 'stage_01_ruins', 'abandoned', 'abandon', at('01-17'));
 
       const progress = (id: string, player: string, stage_id: string, unlocked: Date | null, first: Date | null,
         bestMs: number | null, boss: number, clears: number, updated: Date) => client.query(
@@ -323,11 +331,17 @@ describe('stage ID normalization on a pre-normalization database', () => {
     });
   });
 
-  it('abandons in-flight legacy sessions and keeps finished ones intact', () => {
+  it('abandons every in-flight session (any stage, any owner) and keeps finished ones intact', () => {
     const sessions = afterFirst.sessions as Row[];
     const byId = (id: string) => sessions.find((s) => s.id === id)!;
-    for (const id of ['s-canyon', 's-fortress', 's-furnace-active']) {
+    const inFlight: Record<string, string> = {
+      's-canyon': 'stage_02_factory', 's-fortress': 'stage_04_core', 's-furnace-active': 'stage_03_lab',
+      's-canonical': 'stage_02_factory', 's-lab-active': 'stage_03_lab', 's-ruins-active': 'stage_01_ruins',
+      's-userkey-active': 'stage_01_ruins', 's-userkey-completing': 'stage_03_lab',
+    };
+    for (const [id, stageId] of Object.entries(inFlight)) {
       const s = byId(id);
+      expect(s.stage_id, id).toBe(stageId);
       expect(s.status, id).toBe('abandoned');
       expect(s.result_code, id).toBe('STAGE_MIGRATION_RESET');
       expect(s.end_time, id).toBeInstanceOf(Date);
@@ -336,14 +350,14 @@ describe('stage ID normalization on a pre-normalization database', () => {
       // end_time is timestamp(3); applied_at keeps microseconds, so allow rounding.
       expect(Math.abs(s.end_time.getTime() - migrationRanAt.getTime()), id).toBeLessThan(5);
     }
-    expect(byId('s-canyon').stage_id).toBe('stage_02_factory');
-    expect(byId('s-fortress').stage_id).toBe('stage_04_core');
-    expect(byId('s-furnace-active').stage_id).toBe('stage_03_lab');
     const done = byId('s-furnace-done');
     expect(done).toMatchObject({ stage_id: 'stage_03_lab', status: 'completed', result_code: 'victory' });
     expect(iso(done.end_time)).toBe(at('01-15').toISOString());
     expect(iso(done.completed_at)).toBe(at('01-15').toISOString());
-    expect(byId('s-canonical')).toMatchObject({ stage_id: 'stage_02_factory', status: 'active', result_code: null });
+    // Already-finished sessions on other stages are untouched.
+    expect(byId('s-ruins-done')).toMatchObject({ stage_id: 'stage_01_ruins', status: 'completed', result_code: 'victory' });
+    expect(iso(byId('s-ruins-done').end_time)).toBe(at('01-16').toISOString());
+    expect(byId('s-ruins-abandoned')).toMatchObject({ status: 'abandoned', result_code: 'abandon' });
   });
 
   it('merges conflicting player_stage_progress rows and moves legacy-only rows', () => {
@@ -409,5 +423,48 @@ describe('stage ID normalization on a pre-normalization database', () => {
 
   it('is idempotent: re-running the SQL changes nothing', () => {
     expect(afterSecond).toEqual(afterFirst);
+  });
+});
+
+describe('battle-seed upsert after the migration', () => {
+  it('preserves operator flags on existing stages and updates content and rewards', async () => {
+    await withClient('stage_legacy', async (client) => {
+      await client.query(`UPDATE game.stages SET enabled = 0 WHERE id = 'stage_03_lab'`);
+      await client.query(`UPDATE game.stages SET unlocked = 1 WHERE id = 'stage_04_core'`);
+      await client.query(`UPDATE game.stages SET name = 'stale', duration_seconds = 1 WHERE id = 'stage_01_ruins'`);
+      await client.query(`UPDATE game.stage_rewards SET scrap_min = 1, scrap_max = 1, blueprint_drop_rate = 1 WHERE stage_id = 'stage_03_lab' AND clear_type = 'first'`);
+    });
+
+    await withPostgresConnection(url('stage_legacy'), seed);
+
+    await withClient('stage_legacy', async (client) => {
+      const stages = (await client.query('SELECT * FROM game.stages ORDER BY id')).rows as Row[];
+      const byId = (id: string) => stages.find((s) => s.id === id)!;
+      expect(byId('stage_03_lab').enabled).toBe(0);
+      expect(byId('stage_04_core').unlocked).toBe(1);
+      // Fixture rows kept the column default unlocked = 1; the old seed would have reset it to 0.
+      expect(byId('stage_02_factory')).toMatchObject({ enabled: 1, unlocked: 1 });
+      for (const def of STAGES) {
+        expect(byId(def.id)).toMatchObject({ name: def.name, duration_seconds: def.durationSeconds, boss_timings: JSON.stringify(def.bossTimings) });
+      }
+      const reward = (await client.query(
+        `SELECT scrap_min, scrap_max, blueprint_drop_rate FROM game.stage_rewards WHERE stage_id = 'stage_03_lab' AND clear_type = 'first'`)).rows;
+      expect(reward).toEqual([{ scrap_min: 800, scrap_max: 1200, blueprint_drop_rate: 100 }]);
+      const count = await client.query(`SELECT count(*)::int AS n FROM game.stage_rewards`);
+      expect(count.rows[0].n).toBe(12); // 5 pre-existing rows are updated in place, 7 inserted
+    });
+  });
+
+  it('inserts missing stages with default flags (only the first stage unlocked)', async () => {
+    await withPostgresConnection(url('stage_full'), seed);
+    await withClient('stage_full', async (client) => {
+      const rows = (await client.query('SELECT id, unlocked, enabled FROM game.stages ORDER BY sequence')).rows;
+      expect(rows).toEqual([
+        { id: 'stage_01_ruins', unlocked: 1, enabled: 1 },
+        { id: 'stage_02_factory', unlocked: 0, enabled: 1 },
+        { id: 'stage_03_lab', unlocked: 0, enabled: 1 },
+        { id: 'stage_04_core', unlocked: 0, enabled: 1 },
+      ]);
+    });
   });
 });

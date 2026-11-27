@@ -15,15 +15,16 @@
 실행 순서:
 
 1. **userId 키 행 정리** — `player_stage_progress`/`player_records`에 `player_id = users.id`로 저장된 행을 `player_profiles` 기준 `player_id`로 옮기고, 같은 `(player_id, stage_id)`가 있으면 아래 병합 규칙으로 합친 뒤 userId 행을 삭제한다. 프로필이 없거나 `user_id`가 여러 프로필에 걸린 행은 건드리지 않는다. `battle_sessions.player_id`는 CLOUDFLARE_DEPLOY.md의 호환성 확인 대상이므로 변경하지 않는다.
-2. **스테이지별 치환** — 아래 표.
-3. **중복 제거** — `stage_bosses (stage_id, sequence, boss_code)`, `stage_rewards (stage_id, clear_type)` 중복은 `created_at`이 가장 이른 행, 같으면 `id`가 가장 작은 행만 남긴다.
-4. **정규 스테이지 메타데이터 동기화** — `stage_02_factory`/`stage_03_lab`/`stage_04_core`의 `name`, `description`, `sequence`, `entry_requirement`, `duration_seconds`, `recommended_power`, `enemy_set`, `boss_timings`, `max_kills`, `max_core_energy`, `core_per_level`, `core_per_kill`, `scrap_per_kill`, `content_version`을 `src/data/stages.ts`와 동일한 값으로 upsert한다(기존 행의 `unlocked`/`enabled`는 유지). 따라서 `db:battle-seed` 실행 전에도 `boss_timings` 개수와 정규 보스 수가 일치한다. `game.stages`가 비어 있는 새 DB에서는 건너뛴다. **`stages.ts`의 해당 값이 바뀌면 이 SQL(이미 적용된 후에는 수정 불가)이 아니라 새 마이그레이션 또는 `db:battle-seed`로 반영한다.**
-5. 유니크 인덱스 `uq_sr_stage_clear_type`, `uq_sb_stage_sequence_boss`를 `IF NOT EXISTS`로 생성(중복 제거 이후).
+2. **진행 중 세션 종료** — `stages`에 행이 있는 DB에서 모든 `active`/`completing` 세션을 종료(아래 표 `battle_sessions` 참고).
+3. **스테이지별 치환** — 아래 표.
+4. **중복 제거** — `stage_bosses (stage_id, sequence, boss_code)`, `stage_rewards (stage_id, clear_type)` 중복은 `created_at`이 가장 이른 행, 같으면 `id`가 가장 작은 행만 남긴다.
+5. **정규 스테이지 메타데이터 동기화** — `stage_02_factory`/`stage_03_lab`/`stage_04_core`의 `name`, `description`, `sequence`, `entry_requirement`, `duration_seconds`, `recommended_power`, `enemy_set`, `boss_timings`, `max_kills`, `max_core_energy`, `core_per_level`, `core_per_kill`, `scrap_per_kill`, `content_version`을 `src/data/stages.ts`와 동일한 값으로 upsert한다(기존 행의 `unlocked`/`enabled`는 유지). 따라서 `db:battle-seed` 실행 전에도 `boss_timings` 개수와 정규 보스 수가 일치한다. `game.stages`가 비어 있는 새 DB에서는 건너뛴다. **`stages.ts`의 해당 값이 바뀌면 이 SQL(이미 적용된 후에는 수정 불가)이 아니라 새 마이그레이션 또는 `db:battle-seed`로 반영한다.**
+6. 유니크 인덱스 `uq_sr_stage_clear_type`, `uq_sb_stage_sequence_boss`를 `IF NOT EXISTS`로 생성(중복 제거 이후).
 
 | 테이블 | 처리 |
 |---|---|
 | `stages` | `entry_requirement` 내 레거시 ID를 먼저 치환(`clear_` 접두사 형태 포함). 정규 행이 없으면 `id`를 변경, 있으면 레거시 행 삭제 |
-| `battle_sessions` | 레거시 ID의 `active`/`completing` 세션은 먼저 `status='abandoned'`, `result_code='STAGE_MIGRATION_RESET'`, `end_time`/`completed_at`(없으면 현재 시각), `updated_at`로 종료한 뒤 `stage_id` 변경. 완료/포기된 세션은 내용 그대로 `stage_id`만 변경 (진행 중 540초/보스 3체 세션이 정규 360초/보스 2체 검증에 걸리는 것을 방지) |
+| `battle_sessions` | `stages`에 행이 있는 DB에서는 **모든 스테이지**(정규 ID, userId 키 세션 포함)의 `active`/`completing` 세션을 먼저 `status='abandoned'`, `result_code='STAGE_MIGRATION_RESET'`, `end_time`/`completed_at`(없으면 현재 시각), `updated_at`로 종료한다. 스테이지 메타데이터(`duration_seconds`, `boss_timings`)가 바뀌어 진행 중 세션이 새 규칙 검증에 걸리거나, 이후 종료되며 레거시 진행도를 되살리거나 첫 클리어 보상을 중복 지급하는 것을 막는다. 그다음 레거시 `stage_id`를 정규 ID로 변경하며, 완료/포기된 세션은 내용 그대로 유지한다 |
 | `stage_bosses` | 정규 스테이지에 같은 `sequence` 또는 `boss_code`가 있으면 레거시 행 삭제, 나머지는 `stage_id` 변경 |
 | `stage_rewards` | 정규 스테이지에 같은 `clear_type`이 있으면 레거시 행 삭제(정규 값 유지), 나머지는 `stage_id` 변경 |
 | `player_stage_progress` | `(player_id, stage_id)` 충돌 시 정규 행에 병합 후 레거시 행 삭제. `clear_count` 합산, `highest_boss_sequence` 최대, `best_clear_time_ms`/`first_cleared_at`/`unlocked_at` 최소(NULL 무시), `updated_at` 최대. 충돌 없으면 `stage_id` 변경 |
@@ -40,18 +41,25 @@
 
 ## 운영 적용 절차
 
-### 0. 주의: 원격 Supabase에 `db:migrate:postgres`를 그대로 실행하지 않는다
+### 0. 사전 확인: 마이그레이션 이력 테이블부터 확인한다
 
-`docs/CLOUDFLARE_DEPLOY.md`의 설명대로 `db:migrate:postgres`는 새 로컬 PostgreSQL용 실행기다. MCP로 초기 스키마를 이미 적용한 원격 프로젝트에는 `game.schema_migrations` 기준선이 없을 수 있고, 이 경우 실행기가 초기 SQL(`20261005083456_*`)부터 다시 실행해 이미 존재하는 객체에서 실패한다.
+`docs/CLOUDFLARE_DEPLOY.md`의 설명대로 `db:migrate:postgres`는 새 로컬 PostgreSQL용 실행기다. MCP로 초기 스키마를 이미 적용한 원격 프로젝트에는 `game.schema_migrations` 기준선이 없거나 불완전할 수 있고, 이 경우 실행기가 초기 SQL(`20261005083456_*`)부터 다시 실행해 이미 존재하는 객체에서 실패한다. **테이블 존재 여부를 확인하기 전에 `SELECT * FROM game.schema_migrations`를 실행하지 않는다**(테이블이 없으면 오류).
 
-먼저 원격에서 기준선을 확인한다:
+1. 존재 여부 확인:
 
-```sql
-SELECT * FROM game.schema_migrations ORDER BY name;
-```
+   ```sql
+   SELECT to_regclass('game.schema_migrations');   -- NULL이면 테이블 없음
+   ```
 
-- `20261005083456`, `…57`, `…58`이 모두 있으면 `npm run db:migrate:postgres`로 새 파일만 적용된다.
-- 테이블이 없거나 일부만 있으면 실행기를 쓰지 말고, 새 마이그레이션 SQL만 Supabase SQL Editor/MCP에서 **단일 트랜잭션**(`BEGIN; <파일 내용>; INSERT INTO game.schema_migrations(name, checksum) ...; COMMIT;`)으로 실행한다. 체크섬은 로컬에서 `Get-FileHash -Algorithm SHA256 supabase/migrations/20261127000001_normalize_stage_ids.sql`로 구한다(소문자 hex로 기록).
+2. 테이블이 있을 때만 내용을 확인한다:
+
+   ```sql
+   SELECT name, checksum FROM game.schema_migrations ORDER BY name;
+   ```
+
+3. 판단:
+   - **`npm run db:migrate:postgres`는 다음 둘 중 하나일 때만 실행한다.** (a) 로컬/신규 DB, (b) `game.schema_migrations`에 `20261005083456_game_postgres.sql`, `20261005083457_crafting_idempotency.sql`, `20261005083458_battle_upgrade_option_constraints.sql`가 모두 있고 각 `checksum`이 로컬 파일의 SHA-256(`Get-FileHash -Algorithm SHA256 <file>`, 소문자 hex)과 일치한다.
+   - 그 외(`to_regclass`가 NULL이거나 이력이 일부만 있는 MCP 초기화 운영 DB)는 실행기를 **쓰지 않는다.** 쓰기를 정지한 뒤 2단계의 경로 B로 이 마이그레이션 SQL만 단일 트랜잭션으로 적용한다.
 
 ### 1. 점검(쓰기 정지) 시간 확보 — 필수
 
@@ -65,13 +73,29 @@ SELECT * FROM game.schema_migrations ORDER BY name;
 
 ### 2. 적용
 
+**경로 A — 로컬/신규 DB 또는 기준선이 완전한 DB** (`npm run db:migrate:postgres` 사용 가능):
+
 ```powershell
 $env:DATABASE_URL = "<postgres connection string>"
-npm run db:migrate:postgres   # 새 마이그레이션 적용 (이미 적용되었으면 건너뜀)
+npm run db:migrate:postgres   # 새 마이그레이션만 적용 (이미 적용된 파일은 체크섬 검증 후 건너뜀)
 npm run db:battle-seed        # 정규 콘텐츠 upsert
 ```
 
-`db:battle-seed`는 정규 ID 기준으로 `stages`(전 컬럼)와 `stage_rewards`(`scrap_min`/`scrap_max`/`blueprint_drop_rate`)를 **upsert**한다. 이미 있는 `(stage_id, clear_type)` 보상은 건너뛰지 않고 값을 갱신한다. 마이그레이션 → 시드 순서를 지킨다.
+**경로 B — MCP로 초기화한 운영 Supabase (`schema_migrations` 없음/불완전)**: 쓰기 정지(1단계) 후 `supabase/migrations/20261127000001_normalize_stage_ids.sql` 내용을 Supabase SQL Editor/MCP에서 단일 트랜잭션으로 실행한다.
+
+```sql
+BEGIN;
+-- 파일 전체 내용을 그대로 붙여넣는다
+COMMIT;
+```
+
+이후 `npm run db:battle-seed`(아래 동작 참고)와 3단계 검증 쿼리를 실행한다. `game.schema_migrations`가 없는 DB에 기록을 억지로 만들지 않는다. 나중에 이 DB를 실행기로 관리하려면 기준선 3개 + 이 파일을 체크섬과 함께 별도로 backfill해야 한다.
+
+`db:battle-seed` 동작:
+
+- `stages`: 기존 행은 `name`~`content_version` 콘텐츠 컬럼만 갱신하고 **`unlocked`/`enabled` 운영 플래그는 보존**한다. 신규 행만 `unlocked = (sequence = 1)`, `enabled = 1`로 삽입한다.
+- `stage_rewards`: 이미 있는 `(stage_id, clear_type)` 행은 건너뛰지 않고 `scrap_min`/`scrap_max`/`blueprint_drop_rate`를 갱신한다.
+- 마이그레이션 → 시드 순서를 지킨다.
 
 ### 3. 사후 검증 — 모든 `n`이 0이어야 한다
 
