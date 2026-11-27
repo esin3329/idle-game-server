@@ -298,6 +298,12 @@ export const jsonAdminRepo: AdminRepository = {
     if (!user) {
       throw new AppError('사용자를 찾을 수 없습니다.', 404, 'NOT_FOUND');
     }
+    const { getAllUsers } = await import('./store-auth.js');
+    const isAdminRole = (r: string) => r === 'admin' || r === 'administrator';
+    const activeAdmins = getAllUsers().filter((u) => u.status === 'active' && isAdminRole(u.role));
+    if (user.status === 'active' && isAdminRole(user.role) && !isAdminRole(role) && activeAdmins.length <= 1) {
+      throw new AppError('마지막 활성 관리자의 권한은 강등할 수 없습니다.', 409, 'LAST_ADMIN_PROTECTED');
+    }
     const oldRole = user.role;
     await jsonAuthRepo.createUser({ ...user, role, updatedAt: new Date().toISOString() });
     recordAudit({

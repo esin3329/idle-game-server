@@ -9,6 +9,7 @@ import { BATTLE_POLICY } from './shared/battle-policy.js';
 import { analysisInputSchema, sanitizeQuestion } from './ai/game-ops.js';
 import { listProviders } from './ai/provider.js';
 import { enqueueAiRun, getAiRun, hashAiRequest } from './ai/runs.js';
+import { usesSupabaseAuth } from './shared/supabase-auth.js';
 
 const adminRoutes = new Hono<{ Variables: { userId: string; role: string; idempotencyKey: string } }>();
 
@@ -278,7 +279,7 @@ adminRoutes.get('/admin/health', (c) => {
   const userId = c.get('userId');
   const role = c.get('role');
   logger.info({ userId, role, event: 'admin_health' }, 'Admin health check');
-  return c.json({ status: 'ok', role });
+  return c.json({ status: 'ok', userId, role, authProvider: usesSupabaseAuth() ? 'supabase' : 'local' });
 });
 
 // ─── POST /admin/operators ──────────────────────────
@@ -289,6 +290,12 @@ adminRoutes.post('/admin/operators', idempotencyGuard, requirePermission('admin.
 
   if (!['admin', 'administrator'].includes(operatorRole)) {
     return c.json({ error: '운영자 생성은 admin만 가능합니다.', code: 'FORBIDDEN' }, 403);
+  }
+  if (usesSupabaseAuth()) {
+    return c.json({
+      error: 'Supabase Auth 사용 시 운영자 계정은 Supabase에서 먼저 생성해야 하며, 이 API로는 만들 수 없습니다.',
+      code: 'SUPABASE_AUTH_OPERATOR_CREATE_UNSUPPORTED',
+    }, 501);
   }
 
   const { email, password, nickname, role } = await c.req.json<{ email: string; password: string; nickname: string; role: string }>();

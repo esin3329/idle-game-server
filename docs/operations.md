@@ -52,7 +52,20 @@ $env:OPERATOR_PASSWORD = "<한 번만 쓰는 초기 비밀번호>"
 npm run db:seed-operator
 ```
 
-`src/db/seed-operator.ts`는 역할(`admin`, `operator`, `viewer`, `support`, `game_master`, `administrator`)과 권한 코드를 만들고, 지정 이메일을 `role=admin`으로 upsert합니다. 환경변수를 생략하면 `admin@projectcoreforge.local` / `admin-change-me-immediately`가 쓰이므로 운영 DB에서는 둘 다 지정합니다. 비밀번호 변경이 필요하면 새 `OPERATOR_PASSWORD`를 설정한 후 `npm run db:seed-operator`를 재실행합니다. 재실행은 그 계정의 비밀번호 해시를 현재 `OPERATOR_PASSWORD`로 덮어씁니다. 로그인·갱신·로그아웃 API와 관리자 UI에는 비밀번호 변경 화면이 없습니다.
+`src/db/seed-operator.ts`는 **초기 admin 시드 전용**입니다. 역할(`admin`, `operator`, `viewer`, `support`, `game_master`, `administrator`)과 권한 코드를 만들고, 지정 이메일을 `role=admin`, `status=active`로 upsert합니다. 같은 이메일의 기존 계정이 있으면 역할·상태·비밀번호 해시를 모두 덮어쓰므로 일반 `operator` 계정의 비밀번호 변경에 쓰면 안 됩니다. 환경변수를 생략하면 `admin@projectcoreforge.local` / `admin-change-me-immediately`가 쓰이므로 운영 DB에서는 둘 다 지정합니다.
+
+### 운영자 비밀번호 변경
+
+기존 운영자(`operator`, `admin`, `administrator`, `viewer`, `support`, `game_master`)의 비밀번호는 역할·상태를 보존하는 전용 명령으로 바꿉니다. 기본 이메일·비밀번호는 없으며 둘 다 필수입니다(비밀번호 8자 이상). `AUTH_PROVIDER=supabase`에서는 실행되지 않으므로 Supabase Auth에서 재설정합니다.
+
+```powershell
+$env:DATABASE_URL = "<postgres connection string>"
+$env:OPERATOR_EMAIL = "operator@example.com"
+$env:OPERATOR_NEW_PASSWORD = "<새 비밀번호>"
+npm run db:reset-operator-password
+```
+
+`src/db/reset-operator-password.ts`는 대상 `users` 행의 `password_hash`와 `updated_at`만 갱신하고 `operator_audit_logs`에 `operator_password_reset`을 기록합니다(비밀번호·해시는 기록하지 않음). 로그인·갱신·로그아웃 API와 관리자 UI에는 비밀번호 변경 화면이 없습니다.
 
 ## 3. Worker 라우팅
 

@@ -1,6 +1,6 @@
 process.env.DB_DRIVER = 'json';
 
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import jwt from 'jsonwebtoken';
@@ -242,6 +242,93 @@ describe('Admin API 권한, 정책 및 저장소 통합 (JSON)', () => {
     for (const op of operators) {
       expect(op).not.toHaveProperty('passwordHash');
     }
+  });
+
+  it('일반 operator 토큰은 운영자 목록·생성·역할 변경이 모두 403이고 admin 토큰은 허용된다', async () => {
+    const operatorHeaders = () => bearerFor(OPERATOR_ID, 'operator');
+    const newOperator = { email: 'gate@example.test', password: 'password1234', nickname: '게이트', role: 'operator' };
+
+    expect((await app.request('/api/admin/operators', { headers: operatorHeaders() })).status).toBe(403);
+    expect((await app.request('/api/admin/operators', { method: 'POST', headers: operatorHeaders(), body: JSON.stringify(newOperator) })).status).toBe(403);
+    expect((await app.request(`/api/admin/operators/${OPERATOR_ID}/role`, {
+      method: 'PUT', headers: operatorHeaders(), body: JSON.stringify({ role: 'admin', reason: '자기 승격 시도' }),
+    })).status).toBe(403);
+
+    expect((await app.request('/api/admin/operators', { headers: bearerFor(ADMIN_ID, 'admin') })).status).toBe(200);
+    const created = await app.request('/api/admin/operators', {
+      method: 'POST', headers: bearerFor(ADMIN_ID, 'admin'), body: JSON.stringify(newOperator),
+    });
+    expect(created.status).toBe(201);
+    const { id } = await created.json() as { id: string };
+    expect((await app.request(`/api/admin/operators/${id}/role`, {
+      method: 'PUT', headers: bearerFor(ADMIN_ID, 'admin'), body: JSON.stringify({ role: 'admin', reason: '관리자 위임' }),
+    })).status).toBe(200);
+  });
+
+  it('마지막 활성 admin 강등은 409 LAST_ADMIN_PROTECTED로 차단되고, 다른 활성 admin이 있으면 허용된다', async () => {
+    const demote = (targetId: string) => app.request(`/api/admin/operators/${targetId}/role`, {
+      method: 'PUT', headers: bearerFor(ADMIN_ID, 'admin'), body: JSON.stringify({ role: 'operator', reason: '강등 테스트' }),
+    });
+    const blocked = await demote(ADMIN_ID);
+    expect(blocked.status).toBe(409);
+    expect(((await blocked.json()) as { code: string }).code).toBe('LAST_ADMIN_PROTECTED');
+    expect((await jsonAuthRepo.findUserById(ADMIN_ID))?.role).toBe('admin');
+
+    await app.request(`/api/admin/operators/${OPERATOR_ID}/role`, {
+      method: 'PUT', headers: bearerFor(ADMIN_ID, 'admin'), body: JSON.stringify({ role: 'admin', reason: '관리자 추가' }),
+    });
+    expect((await demote(ADMIN_ID)).status).toBe(200);
+    expect((await jsonAuthRepo.findUserById(ADMIN_ID))?.role).toBe('operator');
+  });
+
+  /** AUTH_PROVIDER=supabase 환경에서 Supabase Auth /user 응답을 스텁하고, env·fetch를 반드시 복원한다. */
+  async function withSupabaseAdmin(run: (headers: () => Record<string, string>, adminId: string) => Promise<void>) {
+    const adminId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    await jsonAuthRepo.createUser({
+      id: adminId, email: 'sb-admin@example.test', nickname: '수파관리자',
+      passwordHash: 'secret-hash', status: 'active', role: 'admin', createdAt: now, updatedAt: now,
+    });
+    vi.stubEnv('AUTH_PROVIDER', 'supabase');
+    vi.stubEnv('SUPABASE_URL', 'https://supabase.example.test');
+    vi.stubEnv('SUPABASE_PUBLISHABLE_KEY', 'test-publishable-key');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => Response.json({ id: adminId }));
+    try {
+      await run(() => ({ Authorization: 'Bearer supabase-access-token', 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }), adminId);
+    } finally {
+      fetchSpy.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  }
+
+  it('AUTH_PROVIDER=supabase이면 POST /admin/operators는 501을 반환하고 계정을 만들지 않는다', async () => {
+    await withSupabaseAdmin(async (headers) => {
+      const res = await app.request('/api/admin/operators', {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ email: 'sb@example.test', password: 'password1234', nickname: '수파', role: 'operator' }),
+      });
+      expect(res.status).toBe(501);
+      const body: { code: string } = await res.json();
+      expect(body.code).toBe('SUPABASE_AUTH_OPERATOR_CREATE_UNSUPPORTED');
+      expect(await jsonAuthRepo.findUserByEmail('sb@example.test')).toBeFalsy();
+    });
+  });
+
+  it('GET /admin/health는 userId·role·authProvider를 반환한다', async () => {
+    vi.stubEnv('AUTH_PROVIDER', 'local');
+    try {
+      const local = await app.request('/api/admin/health', { headers: bearerFor(ADMIN_ID, 'admin') });
+      expect(local.status).toBe(200);
+      expect(await local.json()).toEqual({ status: 'ok', userId: ADMIN_ID, role: 'admin', authProvider: 'local' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    await withSupabaseAdmin(async (headers, adminId) => {
+      const supabase = await app.request('/api/admin/health', { headers: headers() });
+      expect(supabase.status).toBe(200);
+      expect(await supabase.json()).toEqual({ status: 'ok', userId: adminId, role: 'admin', authProvider: 'supabase' });
+    });
   });
 
   it('보안 이벤트 필터·잘못된 날짜 400 및 리뷰 정상/404를 처리한다', async () => {

@@ -21,6 +21,8 @@ export interface MechaStatSnapshot {
 export interface EffectiveBattleStats extends MechaStatSnapshot {
   hpRegenPerSec: number; shieldHp: number;
   critRate: number; critDamage: number; healOnKill: number;
+  projectileSpeed: number; splashRadius: number; duration: number;
+  chainTargets: number; bombRadius: number;
 }
 
 export interface LoadoutPartSnapshot { code: string; level: number }
@@ -230,9 +232,11 @@ export function applyBattleUpgrades(
 ): EffectiveBattleStats {
   const sum: Required<Pick<UpgradeStatEffect,
     'attackPower' | 'attackSpeed' | 'moveSpeed' | 'maxHp' | 'dashCooldown' | 'ultimatePower' | 'ultimateCooldown' |
-    'critRate' | 'critDamage' | 'hpRegenPerSec' | 'shieldHp' | 'healAmount'>> = {
+    'critRate' | 'critDamage' | 'hpRegenPerSec' | 'shieldHp' | 'healAmount' |
+    'projectileSpeed' | 'splashRadius' | 'duration' | 'chainTargets' | 'bombRadius'>> = {
     attackPower: 0, attackSpeed: 0, moveSpeed: 0, maxHp: 0, dashCooldown: 0, ultimatePower: 0, ultimateCooldown: 0,
     critRate: 0, critDamage: 0, hpRegenPerSec: 0, shieldHp: 0, healAmount: 0,
+    projectileSpeed: 0, splashRadius: 0, duration: 0, chainTargets: 0, bombRadius: 0,
   };
   for (const id of upgradesApplied) {
     const effects = getUpgrade(id)?.effects;
@@ -257,6 +261,11 @@ export function applyBattleUpgrades(
     critRate: sum.critRate,
     critDamage: sum.critDamage,
     healOnKill: sum.healAmount,
+    projectileSpeed: sum.projectileSpeed,
+    splashRadius: sum.splashRadius,
+    duration: sum.duration,
+    chainTargets: sum.chainTargets,
+    bombRadius: sum.bombRadius,
   };
 }
 

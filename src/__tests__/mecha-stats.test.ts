@@ -144,6 +144,19 @@ describe('applyBattleUpgrades', () => {
     expect(stats).toMatchObject({ attackPower: 12, attackSpeed: 80, moveSpeed: 100, maxHp: 100, shieldHp: 0, critRate: 0, healOnKill: 0 });
   });
 
+  it('projectileSpeed·splashRadius·duration·chainTargets·bombRadius를 여러 강화에서 합산한다', () => {
+    // projectileSpeed: machine_gun_2(+15) + sniper_1(+20), splashRadius: shotgun_1(+1) + shotgun_2(+2) + laser_1(+1),
+    // duration: laser_1(+15) + laser_2(+20), bombRadius: bomb_1(+3), chainTargets: chain_1(+2)
+    const stats = applyBattleUpgrades(BASE, ['machine_gun_2', 'sniper_1', 'shotgun_1', 'shotgun_2', 'laser_1', 'laser_2', 'bomb_1', 'chain_1']);
+    expect(stats).toMatchObject({ projectileSpeed: 35, splashRadius: 4, duration: 35, chainTargets: 2, bombRadius: 3 });
+  });
+
+  it('해당 효과 강화가 없으면 5개 필드는 0이다', () => {
+    const stats = applyBattleUpgrades(BASE, ['armor_1']);
+    expect(stats).toMatchObject({ projectileSpeed: 0, splashRadius: 0, duration: 0, chainTargets: 0, bombRadius: 0 });
+    expect(applyBattleUpgrades(BASE, [])).toMatchObject({ projectileSpeed: 0, splashRadius: 0, duration: 0, chainTargets: 0, bombRadius: 0 });
+  });
+
   it('moveSpeed·ultimatePower는 %, 나머지는 절대값으로 가산하고 모듈 보너스를 유지한다', () => {
     const stats = applyBattleUpgrades(BASE, ['speed_1', 'armor_3', 'shield_1', 'crit_2', 'heal_1', 'ulti_1'], { bonuses: { shieldHp: 50, hpRegenPerSec: 2 } });
     expect(stats.moveSpeed).toBe(110);
@@ -269,8 +282,9 @@ describe('강화 offer/select 흐름', () => {
     });
     expect(selectedBody.effectiveStats).toEqual(applyBattleUpgrades(BASE, [chosen.upgradeId]));
     expect(Object.keys(selectedBody.effectiveStats).sort()).toEqual([
-      'attackPower', 'attackSpeed', 'critDamage', 'critRate', 'dashCooldown', 'healOnKill', 'hpRegenPerSec',
-      'maxHp', 'moveSpeed', 'shieldHp', 'ultimateCooldown', 'ultimatePower',
+      'attackPower', 'attackSpeed', 'bombRadius', 'chainTargets', 'critDamage', 'critRate', 'dashCooldown', 'duration',
+      'healOnKill', 'hpRegenPerSec', 'maxHp', 'moveSpeed', 'projectileSpeed', 'shieldHp', 'splashRadius',
+      'ultimateCooldown', 'ultimatePower',
     ]);
 
     // 선택 후에는 미선택 offer가 없고 코어 에너지가 다음 레벨 문턱(100)에 못 미쳐 새 offer를 만들 수 없다

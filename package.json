@@ -16,6 +16,7 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:battle-seed": "tsx src/db/battle-seed.ts",
     "db:seed-operator": "tsx src/db/seed-operator.ts",
+    "db:reset-operator-password": "tsx src/db/reset-operator-password.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/postgres-migrate-cli.ts",
     "clean": "rm -rf dist/",
