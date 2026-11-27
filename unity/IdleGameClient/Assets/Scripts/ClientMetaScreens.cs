@@ -16,6 +16,11 @@ namespace IdleGame
         private static readonly string[] PartSlots = { "frame", "weapon", "core", "module" };
         private static readonly string[] PartSlotNames = { "프레임", "무기", "코어", "모듈" };
 
+        private const string HangarTitle = "격납고 · 파츠";
+        private const string WorkshopTitle = "제작소 · 설계도";
+        private const string ResearchTitle = "연구소";
+        private const string ResearchNotice =
+            "실시간 적용 태그가 붙은 연구만 현재 전기 생산량에 즉시 반영되며, 나머지 연구는 서버에 저장되는 프리뷰 기능입니다.";
         private const string MetaPreviewNotice =
             "파츠 장착 및 연구 강화는 서버에 저장됩니다. (현재 전투 세션 스탯 스냅샷에는 아직 자동 반영되지 않는 메타 관리 프리뷰 기능입니다.)";
 
@@ -37,21 +42,45 @@ namespace IdleGame
         private Task ShowResearch() => ShowResearch(null);
 
         /// <summary>
-        /// 변경 요청을 actionId 단위의 안정적인 Idempotency-Key로 보낸다. 요청이 실패하면 키를 유지해 재시도 시 재사용하고,
-        /// 성공하면 즉시 폐기한다. 이후 화면 갱신이 실패해도 이미 처리된 요청을 다시 보내지 않는다.
+        /// 변경 요청을 actionId 단위의 안정적인 Idempotency-Key로 보낸다. 모호한 실패(네트워크/타임아웃/5xx 등)는 키를 유지해
+        /// 재시도 시 재사용하고, 4xx 비즈니스 거절과 성공은 키를 폐기한다. 성공 후 화면 갱신이 실패하면 오래된 변경 버튼이
+        /// 다시 눌리지 않도록 화면을 잠그고 다시 불러오기만 제공한다.
         /// </summary>
         private async Task ExecuteMetaMutation(string actionId, Func<string, Task<JToken>> mutation,
-            Func<JToken, string> successBanner, Func<string, Task> refreshScreen)
+            Func<JToken, string> successBanner, Func<string, Task> refreshScreen, string screenTitle)
         {
             if (!pendingActionKeys.TryGetValue(actionId, out string key))
                 pendingActionKeys[actionId] = key = Guid.NewGuid().ToString();
-            var result = await mutation(key);
+            JToken result;
+            try { result = await mutation(key); }
+            catch (Exception error)
+            {
+                if (!ShouldKeepPendingKey(error)) pendingActionKeys.Remove(actionId);
+                throw;
+            }
             pendingActionKeys.Remove(actionId);
             try { await refreshScreen(successBanner(result)); }
             catch (Exception)
             {
-                if (this && notice) notice.text = "처리되었으나 화면 갱신에 실패했습니다. 새로고침해 주세요.";
+                if (this) ShowMetaRefreshError(screenTitle, refreshScreen);
             }
+        }
+
+        /// <summary>결정적인 4xx 거절(408/429 제외)은 처리되지 않았으므로 키를 폐기하고, 모호한 실패는 키를 유지한다.</summary>
+        public static bool ShouldKeepPendingKey(Exception error) =>
+            !(error is ApiException apiError && apiError.Status >= 400 && apiError.Status < 500 &&
+              apiError.Status != 408 && apiError.Status != 429);
+
+        /// <summary>서버에 반영된 연구 중 현재 전기 생산/방치 보상 계산(routes.ts getResearchBonus)에 쓰이는 것만 true.</summary>
+        public static bool IsLiveResearchEffect(string code) =>
+            code == "prod_passive" || code == "prod_cap" || code == "util_idle_reward";
+
+        private void ShowMetaRefreshError(string screenTitle, Func<string, Task> refreshScreen)
+        {
+            Clear(screenTitle);
+            notice.text = "요청이 서버에 반영되었으나 최신 화면을 불러오지 못했습니다. 새로고침해 주세요.";
+            ActionButton("화면 다시 불러오기", () => Run(() => refreshScreen(null)), true);
+            ActionButton("기지로 돌아가기", () => Run(ShowBase));
         }
 
         private async Task ShowHangar(string message)
@@ -69,7 +98,7 @@ namespace IdleGame
                     if (detail["partCode"] != null) stats[(string)detail["partCode"]] = detail["stats"];
             var equipped = mine["equipped"] as JObject;
 
-            Clear("격납고 · 파츠");
+            Clear(HangarTitle);
             notice.text = message ?? "보유 파츠를 장착하거나 강화하세요.";
             Label(MetaPreviewNotice, 16, Muted, TextHeight(4, 16));
             WalletLines(wallet);
@@ -96,11 +125,11 @@ namespace IdleGame
                     ActionButton("장착", () => Run(() => ExecuteMetaMutation("part-equip:" + code,
                         key => api.EquipPart(code, key),
                         result => $"{NameOf(names, code)} 장착 완료",
-                        ShowHangar)));
+                        ShowHangar, HangarTitle)));
                 ActionButton("파츠 강화", () => Run(() => ExecuteMetaMutation("part-upgrade:" + code,
                     key => api.UpgradePart(code, key),
                     result => $"{NameOf(names, code)} Lv {(int?)result["level"] ?? 0} 강화 완료",
-                    ShowHangar)));
+                    ShowHangar, HangarTitle)));
             }
             ActionButton("새로고침", () => Run(ShowHangar), true);
             ActionButton("기지로 돌아가기", () => Run(ShowBase));
@@ -120,7 +149,7 @@ namespace IdleGame
                 foreach (var blueprint in catalogList) byCode[(string)blueprint["code"]] = blueprint;
             var queue = (queueResult["queue"] as JArray ?? new JArray()).Where(craft => !Truthy(craft["completed"])).ToList();
 
-            Clear("제작소 · 설계도");
+            Clear(WorkshopTitle);
             notice.text = message ?? "설계도로 파츠를 제작하고 완료된 제작물을 수령하세요.";
             WalletLines(wallet);
             Label($"제작 대기열 {queue.Count}", 22, Accent, 34);
@@ -134,7 +163,7 @@ namespace IdleGame
                 timer.Claim = ActionButton("제작 완료 · 수령", () => Run(() => ExecuteMetaMutation("craft-complete:" + craftId,
                     key => api.CompleteCraft(craftId, key),
                     result => $"{NameOf(partNames, (string)result["partCode"])} 수령 완료",
-                    ShowWorkshop)), true, false);
+                    ShowWorkshop, WorkshopTitle)), true, false);
                 craftTimers.Add(timer);
             }
             RefreshCraftTimers();
@@ -155,7 +184,7 @@ namespace IdleGame
                 ActionButton("제작 시작", () => Run(() => ExecuteMetaMutation("craft-start:" + code,
                     key => api.StartCraft(code, key),
                     result => $"{name} 제작을 시작했습니다.",
-                    ShowWorkshop)));
+                    ShowWorkshop, WorkshopTitle)));
             }
             ActionButton("새로고침", () => Run(ShowWorkshop), true);
             ActionButton("기지로 돌아가기", () => Run(ShowBase));
@@ -199,9 +228,9 @@ namespace IdleGame
             var progress = tree.ToDictionary(node => (string)node["code"]);
             var nodes = catalog["nodes"] as JArray ?? tree;
 
-            Clear("연구소");
-            notice.text = message ?? "연구를 강화해 생산과 전투 능력을 높이세요.";
-            Label(MetaPreviewNotice, 16, Muted, TextHeight(4, 16));
+            Clear(ResearchTitle);
+            notice.text = message ?? "연구 레벨을 올려 보세요.";
+            Label(ResearchNotice, 16, Muted, TextHeight(4, 16));
             WalletLines(wallet);
             foreach (var node in nodes)
             {
@@ -211,6 +240,8 @@ namespace IdleGame
                 string name = (string)node["name"] ?? code;
                 bool can = Truthy(state["canResearch"]);
                 Label($"{name} · Lv {level}/{maxLevel}", 21, Accent, 32);
+                Label(IsLiveResearchEffect(code) ? "[실시간 적용]" : "[프리뷰 · 저장 전용]", 15,
+                    IsLiveResearchEffect(code) ? Accent : Muted, 22);
                 Label((string)node["description"] ?? "", 17, Color.white, TextHeight(2, 17));
                 string currentEffect = (string)state["currentEffect"] ?? "없음";
                 if (level >= maxLevel)
@@ -222,7 +253,7 @@ namespace IdleGame
                     () => Run(() => ExecuteMetaMutation("research-up:" + code,
                         key => api.LevelUpResearch(code, key),
                         result => $"{name} Lv {(int?)result["research"]?["level"] ?? level + 1} · 비용 {CostText(result["cost"])}\n{(string)result["nextEffect"]}",
-                        ShowResearch)), false, can);
+                        ShowResearch, ResearchTitle)), false, can);
             }
             ActionButton("새로고침", () => Run(ShowResearch), true);
             ActionButton("기지로 돌아가기", () => Run(ShowBase));
