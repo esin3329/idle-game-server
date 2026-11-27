@@ -4,13 +4,24 @@
  * 서버가 전투 세션을 생성·관리하며, 클라이언트가 보고하는
  * 이벤트(kill, core_energy, boss defeat)를 통계적 상한선으로 검증한다.
  */
-import { getBattleRepo } from '../provider.js';
+import { getBattleRepo, getCraftingRepo, getPartsRepo, getResearchRepo } from '../provider.js';
 import { playerIdForUser } from './player-identity.js';
 import { BATTLE_POLICY } from './battle-policy.js';
-import { ALL_UPGRADES } from '../data/upgrades.js';
+import { ALL_UPGRADES, getUpgrade } from '../data/upgrades.js';
+import type { UpgradeStatEffect } from '../data/upgrades.js';
+import type { BattleRepository } from '../repository.js';
+import type { EquipSlot, PlayerPart, PlayerResearch } from '../types.js';
 import { randomBlueprintByDropWeight } from '../data/crafting.js';
 import { getNextStageId, getBoss, requiredStageIdFor, parseStageJsonArray } from '../data/stages.js';
 import { AppError } from './errors.js';
+import {
+  computeBattleLoadoutStats, applyBattleUpgrades, enrichUpgradeChoice, calcBattleScrapReward,
+  DEFAULT_MECH_STATS,
+} from './mecha-stats.js';
+import type {
+  MechaStatSnapshot, EffectiveBattleStats, EnrichedUpgradeChoice, BattleLoadoutStats,
+  LoadoutSnapshot, ResearchSnapshot,
+} from './mecha-stats.js';
 import { logger, auditLog } from './logger.js';
 
 const P = BATTLE_POLICY;
@@ -26,15 +37,10 @@ export interface BattleSessionState {
   upgradesApplied: string[]; offeredChoices: UpgradeChoice[];
   bossDefeated: string[]; highestBossSequence: number;
   statSnapshot: MechaStatSnapshot;
+  loadoutSnapshot: LoadoutSnapshot; researchSnapshot: ResearchSnapshot;
   sessionSeed: string; contentVersion: string;
   startTime: string; endTime?: string; expiresAt: string;
   reward?: BattleReward;
-}
-
-export interface MechaStatSnapshot {
-  attackPower: number; attackSpeed: number; moveSpeed: number;
-  dashCooldown: number; ultimatePower: number; ultimateCooldown: number;
-  maxHp: number;
 }
 
 export interface UpgradeChoice {
@@ -145,7 +151,7 @@ export async function startBattleSession(userId: string, stageCode: string): Pro
   // 메카 스탯 조회 (없으면 기본 생성)
   let mechStats = await repo.getMechStats(playerId);
   if (!mechStats) {
-    mechStats = { attackPower: 10, attackSpeed: 100, moveSpeed: 100, dashCooldown: 5000, ultimatePower: 30, ultimateCooldown: 30000, maxHp: 100 };
+    mechStats = { ...DEFAULT_MECH_STATS };
     await repo.createMechStats(playerId, mechStats);
   }
 
@@ -167,15 +173,7 @@ export async function startBattleSession(userId: string, stageCode: string): Pro
   const expiresAt = new Date(now.getTime() + stageDef.durationSeconds * 1000 + P.SESSION_EXPIRY_GRACE_SECONDS * 1000);
   const sessionSeed = Math.floor(Math.random() * 2147483647);
 
-  const statSnapshot: MechaStatSnapshot = {
-    attackPower: mechStats.attackPower || 10,
-    attackSpeed: mechStats.attackSpeed || 100,
-    moveSpeed: mechStats.moveSpeed || 100,
-    dashCooldown: mechStats.dashCooldown || 5000,
-    ultimatePower: mechStats.ultimatePower || 30,
-    ultimateCooldown: mechStats.ultimateCooldown || 30000,
-    maxHp: mechStats.maxHp || 100,
-  };
+  const { statSnapshot, loadoutSnapshot, researchSnapshot, baseStats } = await getPlayerBattleStats(playerId, mechStats);
 
   await repo.createSession({
     id: sessionId, playerId, userId, stageId: stageDef.id,
@@ -185,7 +183,9 @@ export async function startBattleSession(userId: string, stageCode: string): Pro
     upgradesApplied: '[]', offeredChoices: '[]',
     bossDefeated: '[]', highestBossSequence: 0,
     statSnapshot: JSON.stringify(statSnapshot),
-    loadoutSnapshot: '{}', researchSnapshot: '{}', baseStatsSnapshot: '{}',
+    loadoutSnapshot: JSON.stringify(loadoutSnapshot),
+    researchSnapshot: JSON.stringify(researchSnapshot),
+    baseStatsSnapshot: JSON.stringify(baseStats),
     sessionSeed: String(sessionSeed), randomSeed: String(sessionSeed),
     contentVersion: stageDef.contentVersion || '1.0.0',
     startTime: now, startedAt: now, lastEventAt: now,
@@ -202,7 +202,7 @@ export async function startBattleSession(userId: string, stageCode: string): Pro
     killsReported: 0, scrapAccumulated: 0,
     upgradesApplied: [], offeredChoices: [],
     bossDefeated: [], highestBossSequence: 0,
-    statSnapshot, sessionSeed: String(sessionSeed),
+    statSnapshot, loadoutSnapshot, researchSnapshot, sessionSeed: String(sessionSeed),
     contentVersion: stageDef.contentVersion || '1.0.0',
     startTime: now.toISOString(), expiresAt: expiresAt.toISOString(),
   };
@@ -212,7 +212,7 @@ export async function startBattleSession(userId: string, stageCode: string): Pro
 // reportBattleEvent
 // ═══════════════════════════════════════════════════════
 
-export async function reportBattleEvent(sessionId: string, userId: string, event: BattleEventReport): Promise<{ accepted: boolean; battleLevel: number; upgradesAvailable: boolean }> {
+export async function reportBattleEvent(sessionId: string, userId: string, event: BattleEventReport): Promise<{ accepted: boolean; battleLevel: number; upgradesAvailable: boolean; pendingOffer: EnrichedUpgradeChoice | null }> {
   const repo = await getBattleRepo();
   const session = await repo.getSession(sessionId);
   if (!session) throw new AppError('전투 세션을 찾을 수 없습니다.', 404, 'SESSION_NOT_FOUND');
@@ -242,7 +242,9 @@ export async function reportBattleEvent(sessionId: string, userId: string, event
   }
 
   const newKills = (session.killsReported || 0) + event.killsDelta;
-  const maxKills = Math.floor(elapsedMs / statSnapshotTo(stageDef, session).attackSpeed * 2);
+  const sessionApplied: string[] = JSON.parse(session.upgradesApplied || '[]');
+  const effectiveAttackSpeed = applyBattleUpgrades(parseStatSnapshot(session), sessionApplied).attackSpeed;
+  const maxKills = Math.floor(elapsedMs / effectiveAttackSpeed * 2);
   if (!Number.isSafeInteger(event.killsDelta) || event.killsDelta < 0 || newKills > maxKills || newKills > stageDef.maxKills) {
     logRejection(sessionId, session.playerId, 'KILLS_OUT_OF_RANGE', { reported: event.killsDelta, total: newKills, max: maxKills });
     throw new AppError('처치 수가 허용 범위를 벗어났습니다.', 400, 'KILLS_OUT_OF_RANGE');
@@ -271,9 +273,8 @@ export async function reportBattleEvent(sessionId: string, userId: string, event
   const newScrap = (session.scrapAccumulated || 0) + event.killsDelta * (stageDef.scrapPerKill || 1);
   const newBosses = event.bossId ? JSON.stringify([...sessionBosses, event.bossId]) : session.bossDefeated;
   const newLevel = session.battleLevel || 1;
-  const corePerLevel = stageDef.corePerLevel || 50;
-  const nextLevelCore = newLevel * corePerLevel;
-  const upgradesAvailable = newCore >= nextLevelCore && newLevel < (stageDef.maxCoreEnergy || 300) / corePerLevel;
+  const pendingOffer = findPendingOffer(JSON.parse(session.offeredChoices || '[]'), sessionApplied);
+  const upgradesAvailable = pendingOffer !== undefined || canOfferUpgrade(newCore, newLevel, stageDef);
 
   await repo.updateSession(sessionId, {
     killsReported: newKills, totalKills: newKills,
@@ -287,66 +288,98 @@ export async function reportBattleEvent(sessionId: string, userId: string, event
     sequence: event.sequence, eventType: event.bossId ? 'boss_kill' : 'progress',
     elapsedMs, payload: JSON.stringify(event), createdAt: new Date(),
   });
-  return { accepted: true, battleLevel: newLevel, upgradesAvailable };
+  return { accepted: true, battleLevel: newLevel, upgradesAvailable, pendingOffer: pendingOffer ? enrichUpgradeChoice(pendingOffer) : null };
+}
+
+// ═══════════════════════════════════════════════════════
+// offerBattleUpgrades
+// ═══════════════════════════════════════════════════════
+
+export async function offerBattleUpgrades(sessionId: string, userId: string): Promise<{ offer: EnrichedUpgradeChoice; battleLevel: number; applied: string[] }> {
+  const repo = await getBattleRepo();
+  const session = await repo.getSession(sessionId);
+  if (!session) throw new AppError('전투 세션을 찾을 수 없습니다.', 404, 'SESSION_NOT_FOUND');
+  if (session.userId !== userId) throw new AppError('권한이 없습니다.', 403, 'FORBIDDEN');
+  if (session.status !== 'active') throw new AppError('세션이 활성 상태가 아닙니다.', 400, 'SESSION_NOT_ACTIVE');
+  if (new Date(session.expiresAt) < new Date()) throw new AppError('세션이 만료되었습니다.', 400, 'SESSION_EXPIRED');
+
+  const stageDef = await repo.getStage(session.stageId);
+  if (!stageDef) throw new AppError('스테이지를 찾을 수 없습니다.', 404, 'STAGE_NOT_FOUND');
+
+  const applied: string[] = JSON.parse(session.upgradesApplied || '[]');
+  const offers: UpgradeChoice[] = JSON.parse(session.offeredChoices || '[]');
+  const existing = findPendingOffer(offers, applied);
+  if (existing) {
+    return { offer: enrichUpgradeChoice(existing), battleLevel: session.battleLevel || 1, applied };
+  }
+
+  if (!canOfferUpgrade(session.coreEnergy || 0, session.battleLevel || 1, stageDef)) {
+    throw new AppError('강화를 선택할 수 있는 상태가 아닙니다.', 400, 'UPGRADE_NOT_AVAILABLE');
+  }
+
+  const { offer } = await createUpgradeOffer(repo, session, applied, offers);
+  return { offer: enrichUpgradeChoice(offer), battleLevel: offer.level, applied };
 }
 
 // ═══════════════════════════════════════════════════════
 // selectUpgrade
 // ═══════════════════════════════════════════════════════
 
-export async function selectUpgrade(sessionId: string, userId: string, selectedUpgradeCode: string): Promise<{ applied: string[]; offeredChoices: UpgradeChoice[] }> {
+export interface SelectedUpgradeInfo {
+  id: string; name: string; description: string; category: string; tier: number;
+  effects: UpgradeStatEffect;
+}
+
+export interface SelectUpgradeResult {
+  applied: string[]; offeredChoices: UpgradeChoice[];
+  effectiveStats: EffectiveBattleStats; selectedUpgrade: SelectedUpgradeInfo;
+}
+
+export async function selectUpgrade(sessionId: string, userId: string, selectedUpgradeCode: string): Promise<SelectUpgradeResult> {
   const repo = await getBattleRepo();
   const session = await repo.getSession(sessionId);
   if (!session) throw new AppError('세션을 찾을 수 없습니다.', 404, 'SESSION_NOT_FOUND');
   if (session.userId !== userId) throw new AppError('권한이 없습니다.', 403, 'FORBIDDEN');
   if (session.status !== 'active') throw new AppError('세션이 활성 상태가 아닙니다.', 400, 'SESSION_NOT_ACTIVE');
+  if (new Date(session.expiresAt) < new Date()) throw new AppError('세션이 만료되었습니다.', 400, 'SESSION_EXPIRED');
 
   const applied: string[] = JSON.parse(session.upgradesApplied || '[]');
   const offers: UpgradeChoice[] = JSON.parse(session.offeredChoices || '[]');
-  const pendingOffer = offers.find((offer) =>
-    !offer.options.some((option) => applied.includes(option.upgradeId)));
+  const pendingOffer = findPendingOffer(offers, applied);
 
   if (!pendingOffer) {
-    const newLevel = (session.battleLevel || 1) + 1;
-    const seed = parseInt(session.sessionSeed || '0') + newLevel * 1000 + session.killsReported;
-    const available = ALL_UPGRADES.filter((upgrade) => {
-      if (applied.includes(upgrade.id)) return false;
-      const parentTier = upgrade.tier > 1
-        ? ALL_UPGRADES.find((candidate) => candidate.group === upgrade.group && candidate.tier === upgrade.tier - 1)
-        : null;
-      return !parentTier || applied.includes(parentTier.id);
-    });
-    const chosen: { slot: number; upgradeId: string }[] = [];
-    for (let slot = 0; slot < P.UPGRADE_CHOICES_PER_LEVEL && available.length > 0; slot += 1) {
-      const idx = seededWeightedChoice(seed + slot, available);
-      chosen.push({ slot, upgradeId: available[idx].id });
-      available.splice(idx, 1);
+    // 레벨업 조건(코어 에너지) 없이 호출해 선택지를 무한 생성하는 것을 차단한다.
+    const stageDef = await repo.getStage(session.stageId);
+    if (!stageDef) throw new AppError('스테이지를 찾을 수 없습니다.', 404, 'STAGE_NOT_FOUND');
+    if (!canOfferUpgrade(session.coreEnergy || 0, session.battleLevel || 1, stageDef)) {
+      throw new AppError('강화를 선택할 수 있는 상태가 아닙니다.', 400, 'UPGRADE_NOT_AVAILABLE');
     }
-    if (chosen.length === 0) {
-      throw new AppError('더 이상 선택할 수 있는 강화가 없습니다.', 409, 'NO_UPGRADES_AVAILABLE');
-    }
-
-    offers.push({ level: newLevel, options: chosen });
-    await repo.saveUpgradeChoices(sessionId, newLevel, chosen, {
-      battleLevel: newLevel,
-      currentLevel: newLevel,
-      offeredChoices: JSON.stringify(offers),
-    });
+    await createUpgradeOffer(repo, session, applied, offers);
     throw new AppError('선택지가 생성되었습니다. 다시 요청해주세요.', 400, 'CHOICES_GENERATED');
   }
 
-  if (!pendingOffer.options.some((option) => option.upgradeId === selectedUpgradeCode)) {
+  const upgrade = getUpgrade(selectedUpgradeCode);
+  if (!upgrade || !pendingOffer.options.some((option) => option.upgradeId === selectedUpgradeCode)) {
     throw new AppError('유효하지 않은 선택입니다.', 400, 'INVALID_CHOICE');
   }
 
+  const stageDef = await repo.getStage(session.stageId);
   const nextApplied = [...applied, selectedUpgradeCode];
   const selected = await repo.selectUpgradeOffer(sessionId, pendingOffer.level, selectedUpgradeCode, {
     upgradesApplied: JSON.stringify(nextApplied),
-    currentCoreEnergy: (session.currentCoreEnergy || 0) - (pendingOffer.level * P.DEFAULT_CORE_PER_LEVEL),
+    currentCoreEnergy: Math.max(0, (session.currentCoreEnergy || 0) - (stageDef?.corePerLevel || P.DEFAULT_CORE_PER_LEVEL)),
   });
   if (!selected) throw new AppError('이미 처리된 강화 선택입니다.', 409, 'UPGRADE_ALREADY_SELECTED');
 
-  return { applied: nextApplied, offeredChoices: offers };
+  return {
+    applied: nextApplied,
+    offeredChoices: offers,
+    effectiveStats: applyBattleUpgrades(parseStatSnapshot(session), nextApplied, parseJsonObject<LoadoutSnapshot>(session.loadoutSnapshot)),
+    selectedUpgrade: {
+      id: upgrade.id, name: upgrade.name, description: upgrade.description,
+      category: upgrade.category, tier: upgrade.tier, effects: upgrade.effects,
+    },
+  };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -410,7 +443,7 @@ export async function endBattleSession(sessionId: string, userId: string, report
 
     const appliedUpgrades: string[] = JSON.parse(session.upgradesApplied || '[]');
     const offers: UpgradeChoice[] = JSON.parse(session.offeredChoices || '[]');
-    const hasPending = offers.some((offer) => !offer.options.some((option) => appliedUpgrades.includes(option.upgradeId)));
+    const hasPending = findPendingOffer(offers, appliedUpgrades) !== undefined;
     if (hasPending) {
       throw new AppError('선택하지 않은 강화가 있습니다.', 400, 'PENDING_UPGRADES');
     }
@@ -425,12 +458,24 @@ export async function endBattleSession(sessionId: string, userId: string, report
     // 보상 계산
     // ═══════════════════════════════════════════════
     const scrapPerKill = stageDef.scrapPerKill || 1;
-    const scrapReward = report.totalKills * scrapPerKill;
+    const scrapReward = calcBattleScrapReward(report.totalKills, scrapPerKill, parseJsonObject<ResearchSnapshot>(session.researchSnapshot));
     const bossSequence = sessionBosses.length;  // 검증부에서 선언된 sessionBosses 재사용
 
-    // 첫 클리어 확인
+    // ─── 사전 조회·검증 (쓰기 이전에 끝내 고아 battleResult 방지) ───
     const existingRecord = await repo.getPlayerRecord(session.playerId, stageDef.id);
     const isFirstClear = !existingRecord || (existingRecord.totalClears || 0) === 0;
+    const existingProgress = await repo.getPlayerStageProgress(session.playerId, stageDef.id);
+
+    const wallet = scrapReward > 0 ? await repo.getWalletBalance(session.playerId) : null;
+    if (scrapReward > 0 && !wallet) throw new AppError('지갑을 찾을 수 없습니다.', 404, 'WALLET_NOT_FOUND');
+
+    const allStages = await repo.getStages();
+    const nextStageId =
+      allStages.find((s: { sequence?: number }) => s.sequence === (stageDef.sequence ?? 0) + 1)?.id
+      ?? getNextStageId(stageDef.id);
+    const needsNextUnlock = nextStageId
+      ? !(await repo.getPlayerStageProgress(session.playerId, nextStageId))
+      : false;
 
     // ─── 설계도 보상 (sessionSeed 기반 결정론) ──────────
     const dropSeed = ((parseInt(session.sessionSeed || '0', 10) || 0) ^ 0x9e3779b9) >>> 0;
@@ -448,17 +493,9 @@ export async function endBattleSession(sessionId: string, userId: string, report
       blueprintCode = randomBlueprintByDropWeight(undefined, dropRng).code;
     }
 
-    // 설계도 지급
-    if (blueprintCode) {
-      const { getCraftingRepo } = await import('../provider.js');
-      const craftRepo = await getCraftingRepo();
-      const already = await craftRepo.hasBlueprint(session.playerId, blueprintCode);
-      if (!already) {
-        await craftRepo.grantBlueprint(session.playerId, blueprintCode);
-        logger.info({ playerId: session.playerId, blueprintCode, sessionId, event: 'battle_blueprint_drop' }, 'Blueprint dropped');
-      } else {
-        blueprintCode = undefined;
-      }
+    const craftRepo = await getCraftingRepo();
+    if (blueprintCode && await craftRepo.hasBlueprint(session.playerId, blueprintCode)) {
+      blueprintCode = undefined;
     }
 
     const rewards: BattleReward = {
@@ -466,81 +503,42 @@ export async function endBattleSession(sessionId: string, userId: string, report
       blueprint: blueprintCode,
     };
 
-    // ─── 보상 확정 (completed) ────────────────────
-    await repo.updateSession(sessionId, {
-      status: 'completed', endTime: new Date(),
-      completedAt: new Date(), resultCode: 'clear',
-      rewardScrap: scrapReward,
-    });
-
     // 멱등성 키: 전투 세션 ID 기반 (중복 실행 방지)
     const idempotencyKey = `battle-${sessionId}`;
-
-    await repo.createBattleResult({
-      id: crypto.randomUUID(), battleSessionId: sessionId,
-      userId, result: 'clear', isFirstClear: isFirstClear ? 1 : 0,
-      verifiedElapsedMs: report.elapsedSeconds * 1000,
-      verifiedKills: report.totalKills,
-      verifiedBossSequence: bossSequence,
-      scrapReward, rewardSummary: JSON.stringify(rewards),
-      finalizedAt: new Date(), createdAt: new Date(),
-    });
-
-    // ─── 지갑 + 원장 ──────────────────────────────
-    if (scrapReward > 0) {
-      const wallet = await repo.getWalletBalance(session.playerId);
-      if (!wallet) throw new AppError('지갑을 찾을 수 없습니다.', 404, 'WALLET_NOT_FOUND');
-      const balanceAfter = (wallet.scrap || 0) + scrapReward;
-      await repo.updateWalletScrap(session.playerId, balanceAfter);
-      await repo.insertCurrencyLedger({
-        id: crypto.randomUUID(), playerId: session.playerId, userId,
-        currency: 'scrap', amount: scrapReward,
-        balanceAfter,
-        source: 'battle', reason: '전투 보상',
-        referenceType: 'battle_session', referenceId: sessionId,
-        idempotencyKey: idempotencyKey + '-scrap',
-        createdAt: new Date(),
-      });
-    }
-
-    // ─── 기록 및 스테이지 진행도 갱신 ───────────
     const clearedAt = new Date();
-    const recordId = existingRecord?.id || crypto.randomUUID();
-    await repo.upsertPlayerRecord({
-      id: recordId, playerId: session.playerId,
-      stageId: stageDef.id, bestClearTimeSec: report.elapsedSeconds,
-      bestKillCount: report.totalKills, totalClears: (existingRecord?.totalClears || 0) + 1,
-      firstClearedAt: isFirstClear ? clearedAt : existingRecord?.firstClearedAt,
-      lastClearedAt: clearedAt, createdAt: existingRecord?.createdAt || clearedAt, updatedAt: clearedAt,
-    });
-
-    const existingProgress = await repo.getPlayerStageProgress(session.playerId, stageDef.id);
     const clearTimeMs = report.elapsedSeconds * 1000;
     const bestClearTimeMs = existingProgress?.bestClearTimeMs != null
       ? Math.min(existingProgress.bestClearTimeMs, clearTimeMs)
       : clearTimeMs;
-    await repo.upsertPlayerStageProgress({
-      id: existingProgress?.id || crypto.randomUUID(),
-      playerId: session.playerId,
-      userId,
-      stageId: stageDef.id,
-      unlockedAt: existingProgress?.unlockedAt || clearedAt,
-      firstClearedAt: existingProgress?.firstClearedAt || clearedAt,
-      bestClearTimeMs,
-      highestBossSequence: Math.max(existingProgress?.highestBossSequence || 0, bossSequence),
-      clearCount: (existingProgress?.clearCount || 0) + 1,
-      createdAt: existingProgress?.createdAt || clearedAt,
-      updatedAt: clearedAt,
-    });
 
-    // ─── 다음 스테이지 해금 ─────────────────────
-    const allStages = await repo.getStages();
-    const nextStageId =
-      allStages.find((s: { sequence?: number }) => s.sequence === (stageDef.sequence ?? 0) + 1)?.id
-      ?? getNextStageId(stageDef.id);
-    if (nextStageId) {
-      const nextProgress = await repo.getPlayerStageProgress(session.playerId, nextStageId);
-      if (!nextProgress) {
+    // ─── 쓰기 구간 ──────────────────────────────
+    // repo.runInTransaction: postgres는 DB 트랜잭션(요청 트랜잭션 안에서는 savepoint),
+    // json은 메모리·파일 스냅샷 복원으로 중간 실패 시 모든 쓰기를 되돌린다.
+    // 지갑 지급은 멱등 키가 있어 재시도해도 한 번만 반영된다.
+    const commitRewards = async (): Promise<void> => {
+      await repo.upsertPlayerRecord({
+        id: existingRecord?.id || crypto.randomUUID(), playerId: session.playerId,
+        stageId: stageDef.id, bestClearTimeSec: report.elapsedSeconds,
+        bestKillCount: report.totalKills, totalClears: (existingRecord?.totalClears || 0) + 1,
+        firstClearedAt: isFirstClear ? clearedAt : existingRecord?.firstClearedAt,
+        lastClearedAt: clearedAt, createdAt: existingRecord?.createdAt || clearedAt, updatedAt: clearedAt,
+      });
+
+      await repo.upsertPlayerStageProgress({
+        id: existingProgress?.id || crypto.randomUUID(),
+        playerId: session.playerId,
+        userId,
+        stageId: stageDef.id,
+        unlockedAt: existingProgress?.unlockedAt || clearedAt,
+        firstClearedAt: existingProgress?.firstClearedAt || clearedAt,
+        bestClearTimeMs,
+        highestBossSequence: Math.max(existingProgress?.highestBossSequence || 0, bossSequence),
+        clearCount: (existingProgress?.clearCount || 0) + 1,
+        createdAt: existingProgress?.createdAt || clearedAt,
+        updatedAt: clearedAt,
+      });
+
+      if (nextStageId && needsNextUnlock) {
         await repo.upsertPlayerStageProgress({
           id: crypto.randomUUID(),
           playerId: session.playerId,
@@ -555,6 +553,46 @@ export async function endBattleSession(sessionId: string, userId: string, report
           updatedAt: clearedAt,
         });
       }
+
+      await repo.createBattleResult({
+        id: crypto.randomUUID(), battleSessionId: sessionId,
+        userId, result: 'clear', isFirstClear: isFirstClear ? 1 : 0,
+        verifiedElapsedMs: clearTimeMs,
+        verifiedKills: report.totalKills,
+        verifiedBossSequence: bossSequence,
+        scrapReward, rewardSummary: JSON.stringify(rewards),
+        finalizedAt: new Date(), createdAt: new Date(),
+      });
+
+      if (scrapReward > 0 && wallet) {
+        const balanceAfter = (wallet.scrap || 0) + scrapReward;
+        await repo.updateWalletScrap(session.playerId, balanceAfter);
+        await repo.insertCurrencyLedger({
+          id: crypto.randomUUID(), playerId: session.playerId, userId,
+          currency: 'scrap', amount: scrapReward,
+          balanceAfter,
+          source: 'battle', reason: '전투 보상',
+          referenceType: 'battle_session', referenceId: sessionId,
+          idempotencyKey: idempotencyKey + '-scrap',
+          createdAt: new Date(),
+        });
+      }
+
+      await repo.updateSession(sessionId, {
+        status: 'completed', endTime: new Date(),
+        completedAt: new Date(), resultCode: 'clear',
+        rewardScrap: scrapReward,
+      });
+
+      // JSON 모드는 설계도 지급을 스냅샷으로 되돌릴 수 없으므로 마지막 쓰기로 둔다
+      if (blueprintCode) {
+        await craftRepo.grantBlueprint(session.playerId, blueprintCode);
+      }
+    };
+
+    await repo.runInTransaction(commitRewards);
+    if (blueprintCode) {
+      logger.info({ playerId: session.playerId, blueprintCode, sessionId, event: 'battle_blueprint_drop' }, 'Blueprint dropped');
     }
 
     logger.info({ sessionId, playerId: session.playerId, scrapReward, blueprintCode, isFirstClear, event: 'battle_end' }, 'Battle ended');
@@ -598,7 +636,10 @@ export async function getBattleSession(sessionId: string, userId: string): Promi
     killsReported: session.killsReported || 0, scrapAccumulated: session.scrapAccumulated || 0,
     upgradesApplied: applied, offeredChoices: offers,
     bossDefeated: bosses, highestBossSequence: session.highestBossSequence || 0,
-    statSnapshot: statSnap, sessionSeed: session.sessionSeed || '',
+    statSnapshot: statSnap,
+    loadoutSnapshot: parseJsonObject<LoadoutSnapshot>(session.loadoutSnapshot),
+    researchSnapshot: parseJsonObject<ResearchSnapshot>(session.researchSnapshot),
+    sessionSeed: session.sessionSeed || '',
     contentVersion: session.contentVersion || '1.0.0',
     startTime: session.startTime?.toISOString?.() || session.startTime,
     expiresAt: session.expiresAt?.toISOString?.() || session.expiresAt,
@@ -609,15 +650,101 @@ export async function getBattleSession(sessionId: string, userId: string): Promi
 // 헬퍼
 // ═══════════════════════════════════════════════════════
 
-function statSnapshotTo(stageDef: any, session: any): MechaStatSnapshot {
-  const snap = JSON.parse(session.statSnapshot || '{}');
+function parseJsonObject<T extends object>(value: unknown): T {
+  if (typeof value === 'string') return JSON.parse(value || '{}') as T;
+  return (value ?? {}) as T;
+}
+
+function parseStatSnapshot(session: { statSnapshot?: unknown }): MechaStatSnapshot {
+  const snap = parseJsonObject<Partial<MechaStatSnapshot>>(session.statSnapshot);
   return {
-    attackPower: stageDef.recommendedPower || snap.attackPower || 10,
-    attackSpeed: snap.attackSpeed || 100,
-    moveSpeed: snap.moveSpeed || 100,
-    dashCooldown: snap.dashCooldown || 5000,
-    ultimatePower: snap.ultimatePower || 30,
-    ultimateCooldown: snap.ultimateCooldown || 30000,
-    maxHp: snap.maxHp || 100,
+    attackPower: snap.attackPower || DEFAULT_MECH_STATS.attackPower,
+    attackSpeed: snap.attackSpeed || DEFAULT_MECH_STATS.attackSpeed,
+    moveSpeed: snap.moveSpeed || DEFAULT_MECH_STATS.moveSpeed,
+    dashCooldown: snap.dashCooldown || DEFAULT_MECH_STATS.dashCooldown,
+    ultimatePower: snap.ultimatePower || DEFAULT_MECH_STATS.ultimatePower,
+    ultimateCooldown: snap.ultimateCooldown || DEFAULT_MECH_STATS.ultimateCooldown,
+    maxHp: snap.maxHp || DEFAULT_MECH_STATS.maxHp,
   };
+}
+
+/** 선택하지 않은(적용된 옵션이 없는) 첫 번째 강화 제안 */
+function findPendingOffer(offers: UpgradeChoice[], applied: string[]): UpgradeChoice | undefined {
+  return offers.find((offer) => !offer.options.some((option) => applied.includes(option.upgradeId)));
+}
+
+/** 누적 core energy 가 다음 레벨 문턱을 넘었고 최대 레벨 미만인지 */
+function canOfferUpgrade(coreEnergy: number, battleLevel: number, stageDef: { corePerLevel?: number; maxCoreEnergy?: number }): boolean {
+  const corePerLevel = stageDef.corePerLevel || P.DEFAULT_CORE_PER_LEVEL;
+  return coreEnergy >= battleLevel * corePerLevel
+    && battleLevel < (stageDef.maxCoreEnergy || P.DEFAULT_MAX_CORE_ENERGY) / corePerLevel;
+}
+
+interface OfferSessionRow {
+  id: string; battleLevel?: number; sessionSeed?: string; killsReported?: number;
+}
+
+/**
+ * 다음 레벨 강화 선택지를 시드 기반으로 생성·저장한다 (select/offer 공용).
+ * 동시 요청으로 이미 저장된 경우 저장된 제안을 그대로 돌려준다.
+ */
+async function createUpgradeOffer(
+  repo: BattleRepository,
+  session: OfferSessionRow,
+  applied: string[],
+  offers: UpgradeChoice[],
+): Promise<{ offer: UpgradeChoice; offers: UpgradeChoice[] }> {
+  const newLevel = (session.battleLevel || 1) + 1;
+  const seed = parseInt(session.sessionSeed || '0') + newLevel * 1000 + (session.killsReported || 0);
+  const available = ALL_UPGRADES.filter((upgrade) => {
+    if (applied.includes(upgrade.id)) return false;
+    const parentTier = upgrade.tier > 1
+      ? ALL_UPGRADES.find((candidate) => candidate.group === upgrade.group && candidate.tier === upgrade.tier - 1)
+      : null;
+    return !parentTier || applied.includes(parentTier.id);
+  });
+  const chosen: { slot: number; upgradeId: string }[] = [];
+  for (let slot = 0; slot < P.UPGRADE_CHOICES_PER_LEVEL && available.length > 0; slot += 1) {
+    const idx = seededWeightedChoice(seed + slot, available);
+    chosen.push({ slot, upgradeId: available[idx].id });
+    available.splice(idx, 1);
+  }
+  if (chosen.length === 0) {
+    throw new AppError('더 이상 선택할 수 있는 강화가 없습니다.', 409, 'NO_UPGRADES_AVAILABLE');
+  }
+
+  const offer: UpgradeChoice = { level: newLevel, options: chosen };
+  const nextOffers = [...offers, offer];
+  const saved = await repo.saveUpgradeChoices(session.id, newLevel, chosen, {
+    battleLevel: newLevel,
+    currentLevel: newLevel,
+    offeredChoices: JSON.stringify(nextOffers),
+  });
+  if (saved) return { offer, offers: nextOffers };
+
+  const latest = await repo.getSession(session.id);
+  const latestOffers: UpgradeChoice[] = JSON.parse(latest?.offeredChoices || '[]');
+  const pending = findPendingOffer(latestOffers, JSON.parse(latest?.upgradesApplied || '[]'));
+  if (!pending) throw new AppError('강화 선택지를 저장하지 못했습니다.', 409, 'UPGRADE_OFFER_CONFLICT');
+  return { offer: pending, offers: latestOffers };
+}
+
+/** 플레이어의 장착 파츠·연구를 반영한 전투 스탯. 파츠/연구 저장소 조회 실패 시 baseStats 로 대체한다. */
+export async function getPlayerBattleStats(playerId: string, mechStats?: Partial<MechaStatSnapshot> | null): Promise<BattleLoadoutStats> {
+  const baseStats = parseStatSnapshot({ statSnapshot: mechStats ?? {} });
+  let equipped: EquipSlot | null = null;
+  let inventory: PlayerPart[] = [];
+  let research: PlayerResearch[] = [];
+  try {
+    const partsRepo = await getPartsRepo();
+    [equipped, inventory] = await Promise.all([partsRepo.getEquipped(playerId), partsRepo.getInventory(playerId)]);
+  } catch (err) {
+    logger.warn({ playerId, err, event: 'battle_parts_unavailable' }, 'Parts lookup failed; using base stats');
+  }
+  try {
+    research = await (await getResearchRepo()).getAll(playerId);
+  } catch (err) {
+    logger.warn({ playerId, err, event: 'battle_research_unavailable' }, 'Research lookup failed; using base stats');
+  }
+  return computeBattleLoadoutStats(baseStats, equipped, inventory, research);
 }

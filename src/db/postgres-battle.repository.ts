@@ -2,7 +2,7 @@
  * PostgreSQL 기반 전투 세션 저장소
  */
 import { eq, and, gt, isNull, lte, or, inArray, desc } from 'drizzle-orm';
-import { getDb } from './postgres-connection.js';
+import { getDb, withPostgresTransaction } from './postgres-connection.js';
 import { stages, stageRewards, battleSessions, playerRecords, mechaStats, walletBalances, currencyLedger, battleUpgradeOffers, battleEvents, battleResults, playerStageProgress, accountSanctions, securityEvents } from './postgres-schema.js';
 import type { BattleRepository } from '../repository.js';
 import { toPostgresDate } from './postgres-timestamps.js';
@@ -235,6 +235,10 @@ export const postgresBattleRepo: BattleRepository = {
       const db = getDb();
       await db.insert(securityEvents).values(normalizeTimestampFields(event));
     } catch {}
+  },
+
+  runInTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    return withPostgresTransaction(fn);
   },
 };
 

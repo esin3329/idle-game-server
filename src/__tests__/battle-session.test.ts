@@ -103,12 +103,20 @@ describe('서버 검증 전투 보상 확정', () => {
 
     const selected = await selectUpgrade(session.id, 'battle-user', choices[0].upgradeId);
     expect(selected.applied).toEqual([choices[0].upgradeId]);
+    expect(selected.selectedUpgrade.id).toBe(choices[0].upgradeId);
+    expect(selected.effectiveStats).toMatchObject({ attackPower: expect.any(Number), shieldHp: expect.any(Number), healOnKill: expect.any(Number) });
+    // 코어 에너지는 음수로 내려가지 않고 stage corePerLevel(50)만큼 차감된다
+    expect((await repo.getSession(session.id)).currentCoreEnergy).toBe(450);
+    expect(session.loadoutSnapshot).toEqual({});
+    expect(session.researchSnapshot).toEqual({});
 
     const persistedChoices = (await repo.getUpgradeOffers(session.id)).filter((offer) => offer.level === 2);
     expect(persistedChoices).toHaveLength(2);
     expect(persistedChoices.filter((offer) => offer.selected === 1).map((offer) => offer.upgradeId))
       .toEqual([choices[0].upgradeId]);
 
+    // 다음 레벨(3) 선택지 생성은 코어 에너지 조건(level 2 × 50 = 100)을 충족해야 한다
+    await repo.updateSession(session.id, { coreEnergy: 100 });
     await expect(selectUpgrade(session.id, 'battle-user', choices[1].upgradeId))
       .rejects.toMatchObject({ code: 'CHOICES_GENERATED' });
     const refreshed = await repo.getSession(session.id);

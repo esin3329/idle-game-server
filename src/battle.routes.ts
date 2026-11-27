@@ -7,14 +7,16 @@ import {
   startBattleSession,
   reportBattleEvent,
   selectUpgrade,
+  offerBattleUpgrades,
   endBattleSession,
   getBattleSession,
   abandonBattleSession,
 } from './shared/battle-session.js';
 import type { BattleEventReport, BattleEndReport } from './shared/battle-session.js';
+import { AppError } from './shared/errors.js';
 import { logger } from './shared/logger.js';
 
-const battleRoutes = new Hono<{ Variables: { userId: string; idempotencyKey: string } }>();
+const battleRoutes = new Hono<{ Variables: { userId: string; idempotencyKey: string; requestId?: string; commitOnError?: boolean } }>();
 
 // ─── POST /battles/start ──────────────────────────────
 // 전투 세션 생성. JWT로 userId 추출, body로 stageId 전달.
@@ -82,6 +84,22 @@ battleRoutes.post(
   },
 );
 
+// ─── POST /battles/:sessionId/upgrades/offer ───────────
+// 레벨업 조건을 만족하면 강화 선택지를 생성(이미 있으면 그대로 반환)
+
+battleRoutes.post(
+  '/battles/:sessionId/upgrades/offer',
+  jwtAuth,
+  idempotencyGuard,
+  async (c) => {
+    const sessionId = c.req.param('sessionId')!;
+    const userId = c.get('userId');
+
+    const result = await offerBattleUpgrades(sessionId, userId);
+    return c.json(result);
+  },
+);
+
 
 // ─── POST /battles/:sessionId/upgrades/select ──────────
 // 서버가 제시한 강화 선택지 중 하나 선택
@@ -99,8 +117,18 @@ battleRoutes.post(
       return c.json({ error: 'selectedUpgradeCode가 필요합니다.', code: 'BAD_REQUEST' }, 400);
     }
 
-    const result = await selectUpgrade(sessionId, userId, selectedId);
-    return c.json(result);
+    try {
+      return c.json(await selectUpgrade(sessionId, userId, selectedId));
+    } catch (err) {
+      // 선택지 생성은 400으로 응답하지만 저장된 선택지는 postgres 요청 트랜잭션에서
+      // 롤백되면 안 된다. 예외를 다시 던지지 않고 commitOnError로 커밋을 요청한다.
+      if (err instanceof AppError && err.code === 'CHOICES_GENERATED') {
+        c.set('commitOnError', true);
+        const requestId = c.get('requestId') || c.res.headers.get('X-Request-Id');
+        return c.json({ error: err.message, code: err.code, ...(requestId ? { requestId } : {}) }, 400);
+      }
+      throw err;
+    }
   },
 );
 

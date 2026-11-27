@@ -2,10 +2,11 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { jwtAuth } from './shared/jwt-auth.js';
 import { validateJson } from './shared/validator.js';
-import { getMechaConfigRepo, getPartsRepo } from './provider.js';
+import { getMechaConfigRepo, getPartsRepo, getBattleRepo } from './provider.js';
 import { getFrame, getWeapon, getCore, getModule } from './data/parts.js';
 import { playerIdForUser } from './shared/player-identity.js';
 import { NotFoundError, AppError } from './shared/errors.js';
+import { getPlayerBattleStats } from './shared/battle-session.js';
 
 const mechaRoutes = new Hono<{ Variables: { userId: string; parsedBody: Record<string, unknown> } }>();
 
@@ -110,6 +111,14 @@ mechaRoutes.get('/mecha/parts', jwtAuth, async (c) => {
   });
 
   return c.json(details);
+});
+
+// ─── GET /mecha/stats — 장착 파츠·연구 반영 전투 스탯 ─────
+
+mechaRoutes.get('/mecha/stats', jwtAuth, async (c) => {
+  const playerId = await playerIdForUser(c.get('userId'));
+  const mechStats = await (await getBattleRepo()).getMechStats(playerId);
+  return c.json(await getPlayerBattleStats(playerId, mechStats));
 });
 
 export default mechaRoutes;

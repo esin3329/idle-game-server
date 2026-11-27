@@ -493,7 +493,7 @@ describe('전투 진행 이벤트', () => {
 
     const ok = await progress(user, sessionId, { sequence: 1, killsDelta: 3, coreEnergyDelta: 15, elapsedSeconds: 20 });
     expect(ok.status).toBe(200);
-    expect(ok.body).toEqual({ accepted: true, battleLevel: 1, upgradesAvailable: false });
+    expect(ok.body).toEqual({ accepted: true, battleLevel: 1, upgradesAvailable: false, pendingOffer: null });
 
     for (const sequence of [1, 3]) {
       const bad = await progress(user, sessionId, { sequence, killsDelta: 1, coreEnergyDelta: 5, elapsedSeconds: 21 });
