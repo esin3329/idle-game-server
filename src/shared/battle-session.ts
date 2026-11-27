@@ -4,7 +4,8 @@
  * 서버가 전투 세션을 생성·관리하며, 클라이언트가 보고하는
  * 이벤트(kill, core_energy, boss defeat)를 통계적 상한선으로 검증한다.
  */
-import { getBattleRepo, getPartsRepo, getResearchRepo } from '../provider.js';
+import { getBattleRepo, getCraftingRepo, getPartsRepo, getResearchRepo } from '../provider.js';
+import { withPostgresTransaction } from '../db/postgres-connection.js';
 import { playerIdForUser } from './player-identity.js';
 import { BATTLE_POLICY } from './battle-policy.js';
 import { ALL_UPGRADES, getUpgrade } from '../data/upgrades.js';
@@ -341,12 +342,19 @@ export async function selectUpgrade(sessionId: string, userId: string, selectedU
   if (!session) throw new AppError('세션을 찾을 수 없습니다.', 404, 'SESSION_NOT_FOUND');
   if (session.userId !== userId) throw new AppError('권한이 없습니다.', 403, 'FORBIDDEN');
   if (session.status !== 'active') throw new AppError('세션이 활성 상태가 아닙니다.', 400, 'SESSION_NOT_ACTIVE');
+  if (new Date(session.expiresAt) < new Date()) throw new AppError('세션이 만료되었습니다.', 400, 'SESSION_EXPIRED');
 
   const applied: string[] = JSON.parse(session.upgradesApplied || '[]');
   const offers: UpgradeChoice[] = JSON.parse(session.offeredChoices || '[]');
   const pendingOffer = findPendingOffer(offers, applied);
 
   if (!pendingOffer) {
+    // 레벨업 조건(코어 에너지) 없이 호출해 선택지를 무한 생성하는 것을 차단한다.
+    const stageDef = await repo.getStage(session.stageId);
+    if (!stageDef) throw new AppError('스테이지를 찾을 수 없습니다.', 404, 'STAGE_NOT_FOUND');
+    if (!canOfferUpgrade(session.coreEnergy || 0, session.battleLevel || 1, stageDef)) {
+      throw new AppError('강화를 선택할 수 있는 상태가 아닙니다.', 400, 'UPGRADE_NOT_AVAILABLE');
+    }
     await createUpgradeOffer(repo, session, applied, offers);
     throw new AppError('선택지가 생성되었습니다. 다시 요청해주세요.', 400, 'CHOICES_GENERATED');
   }
@@ -454,9 +462,21 @@ export async function endBattleSession(sessionId: string, userId: string, report
     const scrapReward = calcBattleScrapReward(report.totalKills, scrapPerKill, parseJsonObject<ResearchSnapshot>(session.researchSnapshot));
     const bossSequence = sessionBosses.length;  // 검증부에서 선언된 sessionBosses 재사용
 
-    // 첫 클리어 확인
+    // ─── 사전 조회·검증 (쓰기 이전에 끝내 고아 battleResult 방지) ───
     const existingRecord = await repo.getPlayerRecord(session.playerId, stageDef.id);
     const isFirstClear = !existingRecord || (existingRecord.totalClears || 0) === 0;
+    const existingProgress = await repo.getPlayerStageProgress(session.playerId, stageDef.id);
+
+    const wallet = scrapReward > 0 ? await repo.getWalletBalance(session.playerId) : null;
+    if (scrapReward > 0 && !wallet) throw new AppError('지갑을 찾을 수 없습니다.', 404, 'WALLET_NOT_FOUND');
+
+    const allStages = await repo.getStages();
+    const nextStageId =
+      allStages.find((s: { sequence?: number }) => s.sequence === (stageDef.sequence ?? 0) + 1)?.id
+      ?? getNextStageId(stageDef.id);
+    const needsNextUnlock = nextStageId
+      ? !(await repo.getPlayerStageProgress(session.playerId, nextStageId))
+      : false;
 
     // ─── 설계도 보상 (sessionSeed 기반 결정론) ──────────
     const dropSeed = ((parseInt(session.sessionSeed || '0', 10) || 0) ^ 0x9e3779b9) >>> 0;
@@ -474,17 +494,9 @@ export async function endBattleSession(sessionId: string, userId: string, report
       blueprintCode = randomBlueprintByDropWeight(undefined, dropRng).code;
     }
 
-    // 설계도 지급
-    if (blueprintCode) {
-      const { getCraftingRepo } = await import('../provider.js');
-      const craftRepo = await getCraftingRepo();
-      const already = await craftRepo.hasBlueprint(session.playerId, blueprintCode);
-      if (!already) {
-        await craftRepo.grantBlueprint(session.playerId, blueprintCode);
-        logger.info({ playerId: session.playerId, blueprintCode, sessionId, event: 'battle_blueprint_drop' }, 'Blueprint dropped');
-      } else {
-        blueprintCode = undefined;
-      }
+    const craftRepo = await getCraftingRepo();
+    if (blueprintCode && await craftRepo.hasBlueprint(session.playerId, blueprintCode)) {
+      blueprintCode = undefined;
     }
 
     const rewards: BattleReward = {
@@ -492,81 +504,61 @@ export async function endBattleSession(sessionId: string, userId: string, report
       blueprint: blueprintCode,
     };
 
-    // ─── 보상 확정 (completed) ────────────────────
-    await repo.updateSession(sessionId, {
-      status: 'completed', endTime: new Date(),
-      completedAt: new Date(), resultCode: 'clear',
-      rewardScrap: scrapReward,
-    });
-
     // 멱등성 키: 전투 세션 ID 기반 (중복 실행 방지)
     const idempotencyKey = `battle-${sessionId}`;
-
-    await repo.createBattleResult({
-      id: crypto.randomUUID(), battleSessionId: sessionId,
-      userId, result: 'clear', isFirstClear: isFirstClear ? 1 : 0,
-      verifiedElapsedMs: report.elapsedSeconds * 1000,
-      verifiedKills: report.totalKills,
-      verifiedBossSequence: bossSequence,
-      scrapReward, rewardSummary: JSON.stringify(rewards),
-      finalizedAt: new Date(), createdAt: new Date(),
-    });
-
-    // ─── 지갑 + 원장 ──────────────────────────────
-    if (scrapReward > 0) {
-      const wallet = await repo.getWalletBalance(session.playerId);
-      if (!wallet) throw new AppError('지갑을 찾을 수 없습니다.', 404, 'WALLET_NOT_FOUND');
-      const balanceAfter = (wallet.scrap || 0) + scrapReward;
-      await repo.updateWalletScrap(session.playerId, balanceAfter);
-      await repo.insertCurrencyLedger({
-        id: crypto.randomUUID(), playerId: session.playerId, userId,
-        currency: 'scrap', amount: scrapReward,
-        balanceAfter,
-        source: 'battle', reason: '전투 보상',
-        referenceType: 'battle_session', referenceId: sessionId,
-        idempotencyKey: idempotencyKey + '-scrap',
-        createdAt: new Date(),
-      });
-    }
-
-    // ─── 기록 및 스테이지 진행도 갱신 ───────────
     const clearedAt = new Date();
-    const recordId = existingRecord?.id || crypto.randomUUID();
-    await repo.upsertPlayerRecord({
-      id: recordId, playerId: session.playerId,
-      stageId: stageDef.id, bestClearTimeSec: report.elapsedSeconds,
-      bestKillCount: report.totalKills, totalClears: (existingRecord?.totalClears || 0) + 1,
-      firstClearedAt: isFirstClear ? clearedAt : existingRecord?.firstClearedAt,
-      lastClearedAt: clearedAt, createdAt: existingRecord?.createdAt || clearedAt, updatedAt: clearedAt,
-    });
-
-    const existingProgress = await repo.getPlayerStageProgress(session.playerId, stageDef.id);
     const clearTimeMs = report.elapsedSeconds * 1000;
     const bestClearTimeMs = existingProgress?.bestClearTimeMs != null
       ? Math.min(existingProgress.bestClearTimeMs, clearTimeMs)
       : clearTimeMs;
-    await repo.upsertPlayerStageProgress({
-      id: existingProgress?.id || crypto.randomUUID(),
-      playerId: session.playerId,
-      userId,
-      stageId: stageDef.id,
-      unlockedAt: existingProgress?.unlockedAt || clearedAt,
-      firstClearedAt: existingProgress?.firstClearedAt || clearedAt,
-      bestClearTimeMs,
-      highestBossSequence: Math.max(existingProgress?.highestBossSequence || 0, bossSequence),
-      clearCount: (existingProgress?.clearCount || 0) + 1,
-      createdAt: existingProgress?.createdAt || clearedAt,
-      updatedAt: clearedAt,
-    });
 
-    // ─── 다음 스테이지 해금 ─────────────────────
-    const allStages = await repo.getStages();
-    const nextStageId =
-      allStages.find((s: { sequence?: number }) => s.sequence === (stageDef.sequence ?? 0) + 1)?.id
-      ?? getNextStageId(stageDef.id);
-    if (nextStageId) {
-      const nextProgress = await repo.getPlayerStageProgress(session.playerId, nextStageId);
-      if (!nextProgress) {
+    // ─── 쓰기 구간 ──────────────────────────────
+    // postgres: 단일 트랜잭션(요청 트랜잭션 안에서는 savepoint).
+    // json: 원자성이 없으므로 재시도에 안전한(멱등 키 보유) 지갑 지급을 먼저,
+    //       결과 기록·세션 완료는 마지막에 두어 중간 실패 시 battleResult가 남지 않게 한다.
+    const commitRewards = async (): Promise<void> => {
+      if (scrapReward > 0 && wallet) {
+        const balanceAfter = (wallet.scrap || 0) + scrapReward;
+        await repo.updateWalletScrap(session.playerId, balanceAfter);
+        await repo.insertCurrencyLedger({
+          id: crypto.randomUUID(), playerId: session.playerId, userId,
+          currency: 'scrap', amount: scrapReward,
+          balanceAfter,
+          source: 'battle', reason: '전투 보상',
+          referenceType: 'battle_session', referenceId: sessionId,
+          idempotencyKey: idempotencyKey + '-scrap',
+          createdAt: new Date(),
+        });
+      }
+
+      if (blueprintCode) {
+        await craftRepo.grantBlueprint(session.playerId, blueprintCode);
+        logger.info({ playerId: session.playerId, blueprintCode, sessionId, event: 'battle_blueprint_drop' }, 'Blueprint dropped');
+      }
+
+      await repo.upsertPlayerRecord({
+        id: existingRecord?.id || crypto.randomUUID(), playerId: session.playerId,
+        stageId: stageDef.id, bestClearTimeSec: report.elapsedSeconds,
+        bestKillCount: report.totalKills, totalClears: (existingRecord?.totalClears || 0) + 1,
+        firstClearedAt: isFirstClear ? clearedAt : existingRecord?.firstClearedAt,
+        lastClearedAt: clearedAt, createdAt: existingRecord?.createdAt || clearedAt, updatedAt: clearedAt,
+      });
+
+      await repo.upsertPlayerStageProgress({
+        id: existingProgress?.id || crypto.randomUUID(),
+        playerId: session.playerId,
+        userId,
+        stageId: stageDef.id,
+        unlockedAt: existingProgress?.unlockedAt || clearedAt,
+        firstClearedAt: existingProgress?.firstClearedAt || clearedAt,
+        bestClearTimeMs,
+        highestBossSequence: Math.max(existingProgress?.highestBossSequence || 0, bossSequence),
+        clearCount: (existingProgress?.clearCount || 0) + 1,
+        createdAt: existingProgress?.createdAt || clearedAt,
+        updatedAt: clearedAt,
+      });
+
+      if (nextStageId && needsNextUnlock) {
         await repo.upsertPlayerStageProgress({
           id: crypto.randomUUID(),
           playerId: session.playerId,
@@ -581,6 +573,28 @@ export async function endBattleSession(sessionId: string, userId: string, report
           updatedAt: clearedAt,
         });
       }
+
+      await repo.createBattleResult({
+        id: crypto.randomUUID(), battleSessionId: sessionId,
+        userId, result: 'clear', isFirstClear: isFirstClear ? 1 : 0,
+        verifiedElapsedMs: clearTimeMs,
+        verifiedKills: report.totalKills,
+        verifiedBossSequence: bossSequence,
+        scrapReward, rewardSummary: JSON.stringify(rewards),
+        finalizedAt: new Date(), createdAt: new Date(),
+      });
+
+      await repo.updateSession(sessionId, {
+        status: 'completed', endTime: new Date(),
+        completedAt: new Date(), resultCode: 'clear',
+        rewardScrap: scrapReward,
+      });
+    };
+
+    if (process.env.DB_DRIVER === 'postgres') {
+      await withPostgresTransaction(commitRewards);
+    } else {
+      await commitRewards();
     }
 
     logger.info({ sessionId, playerId: session.playerId, scrapReward, blueprintCode, isFirstClear, event: 'battle_end' }, 'Battle ended');

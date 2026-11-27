@@ -115,6 +115,8 @@ describe('서버 검증 전투 보상 확정', () => {
     expect(persistedChoices.filter((offer) => offer.selected === 1).map((offer) => offer.upgradeId))
       .toEqual([choices[0].upgradeId]);
 
+    // 다음 레벨(3) 선택지 생성은 코어 에너지 조건(level 2 × 50 = 100)을 충족해야 한다
+    await repo.updateSession(session.id, { coreEnergy: 100 });
     await expect(selectUpgrade(session.id, 'battle-user', choices[1].upgradeId))
       .rejects.toMatchObject({ code: 'CHOICES_GENERATED' });
     const refreshed = await repo.getSession(session.id);

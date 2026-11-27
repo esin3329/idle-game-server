@@ -204,7 +204,8 @@ export function computeBattleLoadoutStats(
     dashCooldown = Math.max(MIN_RESEARCH_DASH_COOLDOWN_MS, dashCooldown * (1 - lv('combat_speed') * R.combat_speed_dash));
   }
   if (lv('combat_ult') > 0) {
-    ultimateCooldown = Math.max(MIN_RESEARCH_ULTIMATE_COOLDOWN_MS, ultimateCooldown * (1 - lv('combat_ult') * R.combat_ult));
+    // 충전 속도 +10%/lv: power_module과 동일하게 나눗셈으로 쿨다운 단축
+    ultimateCooldown = Math.max(MIN_RESEARCH_ULTIMATE_COOLDOWN_MS, Math.round(ultimateCooldown / (1 + lv('combat_ult') * R.combat_ult)));
   }
 
   const statSnapshot: MechaStatSnapshot = {

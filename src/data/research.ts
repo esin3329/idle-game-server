@@ -156,10 +156,10 @@ const ECONOMY: ResearchNodeData[] = [
   {
     code: 'econ_battle_reward',
     name: '전투 보상 증대',
-    description: '전투 승리 시 획득하는 전기 보상이 증가한다.',
+    description: '전투 클리어 시 획득하는 스크랩 보상이 증가한다.',
     category: 'economy', maxLevel: 3,
     costPerLevel: (l) => ({ scrap: 20 * l }),
-    effectPerLevel: (l) => `전투 보상 +${l * 15}%`,
+    effectPerLevel: (l) => `전투 스크랩 보상 +${l * 15}%`,
     prerequisites: [],
     gridPos: { row: 0, col: 2 },
   },
