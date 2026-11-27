@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using IdleGame.Network;
 using Newtonsoft.Json.Linq;
+using UnityEngine.UI;
 using UnityEngine;
 
 namespace IdleGame
@@ -15,9 +16,43 @@ namespace IdleGame
         private static readonly string[] PartSlots = { "frame", "weapon", "core", "module" };
         private static readonly string[] PartSlotNames = { "프레임", "무기", "코어", "모듈" };
 
+        private const string MetaPreviewNotice =
+            "파츠 장착 및 연구 강화는 서버에 저장됩니다. (현재 전투 세션 스탯 스냅샷에는 아직 자동 반영되지 않는 메타 관리 프리뷰 기능입니다.)";
+
+        // 서버에서 성공 처리됐는지 알 수 없는 요청을 재시도할 때 같은 Idempotency-Key를 재사용하기 위한 보관소.
+        private readonly Dictionary<string, string> pendingActionKeys = new Dictionary<string, string>();
+        private readonly List<CraftTimer> craftTimers = new List<CraftTimer>();
+        private float nextCraftTick;
+
+        private sealed class CraftTimer
+        {
+            public Text Label;
+            public Button Claim;
+            public string PartName;
+            public DateTime CompletesAtUtc;
+        }
+
         private Task ShowHangar() => ShowHangar(null);
         private Task ShowWorkshop() => ShowWorkshop(null);
         private Task ShowResearch() => ShowResearch(null);
+
+        /// <summary>
+        /// 변경 요청을 actionId 단위의 안정적인 Idempotency-Key로 보낸다. 요청이 실패하면 키를 유지해 재시도 시 재사용하고,
+        /// 성공하면 즉시 폐기한다. 이후 화면 갱신이 실패해도 이미 처리된 요청을 다시 보내지 않는다.
+        /// </summary>
+        private async Task ExecuteMetaMutation(string actionId, Func<string, Task<JToken>> mutation,
+            Func<JToken, string> successBanner, Func<string, Task> refreshScreen)
+        {
+            if (!pendingActionKeys.TryGetValue(actionId, out string key))
+                pendingActionKeys[actionId] = key = Guid.NewGuid().ToString();
+            var result = await mutation(key);
+            pendingActionKeys.Remove(actionId);
+            try { await refreshScreen(successBanner(result)); }
+            catch (Exception)
+            {
+                if (this && notice) notice.text = "처리되었으나 화면 갱신에 실패했습니다. 새로고침해 주세요.";
+            }
+        }
 
         private async Task ShowHangar(string message)
         {
@@ -36,6 +71,7 @@ namespace IdleGame
 
             Clear("격납고 · 파츠");
             notice.text = message ?? "보유 파츠를 장착하거나 강화하세요.";
+            Label(MetaPreviewNotice, 16, Muted, TextHeight(4, 16));
             WalletLines(wallet);
             Label("장착 중", 22, Accent, 34);
             for (int i = 0; i < PartSlots.Length; i++)
@@ -57,16 +93,14 @@ namespace IdleGame
                 Label($"{SlotName(type)} · Lv {(int?)part["level"] ?? 1}" + (statLine.Length > 0 ? "\n" + statLine : ""),
                     17, Muted, TextHeight(statLine.Length > 0 ? 2 : 1, 17));
                 if (!isEquipped)
-                    ActionButton("장착", () => Run(async () =>
-                    {
-                        await api.EquipPart(code);
-                        await ShowHangar($"{NameOf(names, code)} 장착 완료");
-                    }));
-                ActionButton("파츠 강화", () => Run(async () =>
-                {
-                    var upgraded = await api.UpgradePart(code);
-                    await ShowHangar($"{NameOf(names, code)} Lv {(int?)upgraded["level"] ?? 0} 강화 완료");
-                }));
+                    ActionButton("장착", () => Run(() => ExecuteMetaMutation("part-equip:" + code,
+                        key => api.EquipPart(code, key),
+                        result => $"{NameOf(names, code)} 장착 완료",
+                        ShowHangar)));
+                ActionButton("파츠 강화", () => Run(() => ExecuteMetaMutation("part-upgrade:" + code,
+                    key => api.UpgradePart(code, key),
+                    result => $"{NameOf(names, code)} Lv {(int?)result["level"] ?? 0} 강화 완료",
+                    ShowHangar)));
             }
             ActionButton("새로고침", () => Run(ShowHangar), true);
             ActionButton("기지로 돌아가기", () => Run(ShowBase));
@@ -95,15 +129,15 @@ namespace IdleGame
             {
                 string craftId = (string)craft["id"];
                 string partName = NameOf(partNames, (string)craft["resultCode"]);
-                var remaining = ParseUtc(craft["completesAt"]) - DateTime.UtcNow;
-                Label(remaining.TotalSeconds <= 0 ? $"{partName} · 제작 완료" : $"{partName} · 남은 시간 {Duration(remaining)}",
-                    19, Color.white, 30);
-                ActionButton("제작 완료 · 수령", () => Run(async () =>
-                {
-                    var result = await api.CompleteCraft(craftId);
-                    await ShowWorkshop($"{NameOf(partNames, (string)result["partCode"])} 수령 완료");
-                }), remaining.TotalSeconds <= 0);
+                var timer = new CraftTimer { PartName = partName, CompletesAtUtc = ParseUtc(craft["completesAt"]) };
+                timer.Label = Label("", 19, Color.white, 30);
+                timer.Claim = ActionButton("제작 완료 · 수령", () => Run(() => ExecuteMetaMutation("craft-complete:" + craftId,
+                    key => api.CompleteCraft(craftId, key),
+                    result => $"{NameOf(partNames, (string)result["partCode"])} 수령 완료",
+                    ShowWorkshop)), true, false);
+                craftTimers.Add(timer);
             }
+            RefreshCraftTimers();
             Label($"보유 설계도 {ownedList.Count}개", 22, Accent, 34);
             if (ownedList.Count == 0) Label("보유한 설계도가 없습니다. 전투에서 설계도를 획득하세요.", 17, Muted, 40);
             foreach (var entry in ownedList)
@@ -118,14 +152,41 @@ namespace IdleGame
                 Label($"{name} · {(string)info["rarity"]}", 21, Color.white, 32);
                 Label($"결과 {NameOf(partNames, (string)info["partCode"])} · {Duration(TimeSpan.FromSeconds((double?)info["craftSeconds"] ?? 0))}\n재료 {materials}",
                     17, Muted, TextHeight(2, 17));
-                ActionButton("제작 시작", () => Run(async () =>
-                {
-                    await api.StartCraft(code);
-                    await ShowWorkshop($"{name} 제작을 시작했습니다.");
-                }));
+                ActionButton("제작 시작", () => Run(() => ExecuteMetaMutation("craft-start:" + code,
+                    key => api.StartCraft(code, key),
+                    result => $"{name} 제작을 시작했습니다.",
+                    ShowWorkshop)));
             }
             ActionButton("새로고침", () => Run(ShowWorkshop), true);
             ActionButton("기지로 돌아가기", () => Run(ShowBase));
+        }
+
+        /// <summary>제작 대기열의 남은 시간을 1초마다 갱신하고 완료된 항목의 수령 버튼을 활성화한다.</summary>
+        private void TickCraftTimers()
+        {
+            if (craftTimers.Count == 0 || Time.unscaledTime < nextCraftTick) return;
+            nextCraftTick = Time.unscaledTime + 1f;
+            RefreshCraftTimers();
+        }
+
+        private void RefreshCraftTimers()
+        {
+            var now = DateTime.UtcNow;
+            foreach (var timer in craftTimers)
+            {
+                if (!timer.Label || !timer.Claim) continue;
+                var remaining = timer.CompletesAtUtc - now;
+                timer.Label.text = $"{timer.PartName} · {CraftRemainingText(remaining)}";
+                timer.Claim.interactable = remaining.TotalSeconds <= 0;
+            }
+        }
+
+        public static string CraftRemainingText(TimeSpan remaining)
+        {
+            if (remaining.TotalSeconds <= 0) return "완료됨";
+            int total = Mathf.CeilToInt((float)remaining.TotalSeconds);
+            return total >= 3600 ? $"남은 시간 {total / 3600}:{total % 3600 / 60:00}:{total % 60:00}"
+                : $"남은 시간 {total / 60:00}:{total % 60:00}";
         }
 
         private async Task ShowResearch(string message)
@@ -140,6 +201,7 @@ namespace IdleGame
 
             Clear("연구소");
             notice.text = message ?? "연구를 강화해 생산과 전투 능력을 높이세요.";
+            Label(MetaPreviewNotice, 16, Muted, TextHeight(4, 16));
             WalletLines(wallet);
             foreach (var node in nodes)
             {
@@ -150,14 +212,17 @@ namespace IdleGame
                 bool can = Truthy(state["canResearch"]);
                 Label($"{name} · Lv {level}/{maxLevel}", 21, Accent, 32);
                 Label((string)node["description"] ?? "", 17, Color.white, TextHeight(2, 17));
-                if (can)
-                    ActionButton("연구 레벨업", () => Run(async () =>
-                    {
-                        var result = await api.LevelUpResearch(code);
-                        await ShowResearch($"{name} Lv {(int?)result["research"]?["level"] ?? level + 1} · 비용 {CostText(result["cost"])}\n{(string)result["nextEffect"]}");
-                    }));
+                string currentEffect = (string)state["currentEffect"] ?? "없음";
+                if (level >= maxLevel)
+                    Label($"최대 레벨 · 효과: {currentEffect}", 17, Muted, TextHeight(2, 17));
                 else
-                    Label(level >= maxLevel ? "최대 레벨" : "선행 연구 필요", 17, Muted, 28);
+                    Label($"다음 비용: {CostText(state["nextCost"] ?? node["baseCost"])}\n효과: {currentEffect} → {(string)state["nextEffect"] ?? (string)node["baseEffect"]}",
+                        17, Muted, TextHeight(2, 17));
+                ActionButton(level >= maxLevel ? "최대 레벨" : can ? "연구 레벨업" : "선행 연구 필요",
+                    () => Run(() => ExecuteMetaMutation("research-up:" + code,
+                        key => api.LevelUpResearch(code, key),
+                        result => $"{name} Lv {(int?)result["research"]?["level"] ?? level + 1} · 비용 {CostText(result["cost"])}\n{(string)result["nextEffect"]}",
+                        ShowResearch)), false, can);
             }
             ActionButton("새로고침", () => Run(ShowResearch), true);
             ActionButton("기지로 돌아가기", () => Run(ShowBase));
