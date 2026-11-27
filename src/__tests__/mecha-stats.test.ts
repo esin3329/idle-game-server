@@ -397,4 +397,27 @@ describe('강화 offer/select 흐름', () => {
     // 지갑 지급은 멱등 키로 한 번만 반영된다
     expect((await repo.getWalletBalance('battle-user')).scrap).toBe(10);
   });
+
+  it.each([
+    ['upsertPlayerRecord 성공 후 upsertPlayerStageProgress 실패', 'upsertPlayerStageProgress'],
+    ['upsertPlayerStageProgress 성공 후 createBattleResult 실패', 'createBattleResult'],
+  ] as const)('%s 시 클리어 횟수가 중복 증가하지 않는다', async (_label, failingMethod) => {
+    const session = await finishableSession(true);
+    const repo = await getBattleRepo();
+    vi.spyOn(repo, failingMethod).mockRejectedValueOnce(new Error('injected failure'));
+
+    await expect(endBattleSession(session.id, 'battle-user', finishReport)).rejects.toThrow('injected failure');
+    expect(await repo.getBattleResult(session.id)).toBeNull();
+    expect((await repo.getSession(session.id)).status).toBe('active');
+    // 실패한 시도의 기록·진행도 증가는 롤백된다
+    expect(await repo.getPlayerRecord('battle-user', 'stage_01_ruins')).toBeFalsy();
+    expect(await repo.getPlayerStageProgress('battle-user', 'stage_01_ruins')).toBeFalsy();
+
+    const retried = await endBattleSession(session.id, 'battle-user', finishReport);
+    expect(retried.reward.scrap).toBe(10);
+    expect((await repo.getPlayerRecord('battle-user', 'stage_01_ruins')).totalClears).toBe(1);
+    expect((await repo.getPlayerStageProgress('battle-user', 'stage_01_ruins')).clearCount).toBe(1);
+    expect((await repo.getWalletBalance('battle-user')).scrap).toBe(10);
+    expect((await repo.getSession(session.id)).status).toBe('completed');
+  });
 });

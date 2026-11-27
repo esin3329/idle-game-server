@@ -5,7 +5,6 @@
  * 이벤트(kill, core_energy, boss defeat)를 통계적 상한선으로 검증한다.
  */
 import { getBattleRepo, getCraftingRepo, getPartsRepo, getResearchRepo } from '../provider.js';
-import { withPostgresTransaction } from '../db/postgres-connection.js';
 import { playerIdForUser } from './player-identity.js';
 import { BATTLE_POLICY } from './battle-policy.js';
 import { ALL_UPGRADES, getUpgrade } from '../data/upgrades.js';
@@ -513,29 +512,10 @@ export async function endBattleSession(sessionId: string, userId: string, report
       : clearTimeMs;
 
     // ─── 쓰기 구간 ──────────────────────────────
-    // postgres: 단일 트랜잭션(요청 트랜잭션 안에서는 savepoint).
-    // json: 원자성이 없으므로 재시도에 안전한(멱등 키 보유) 지갑 지급을 먼저,
-    //       결과 기록·세션 완료는 마지막에 두어 중간 실패 시 battleResult가 남지 않게 한다.
+    // repo.runInTransaction: postgres는 DB 트랜잭션(요청 트랜잭션 안에서는 savepoint),
+    // json은 메모리·파일 스냅샷 복원으로 중간 실패 시 모든 쓰기를 되돌린다.
+    // 지갑 지급은 멱등 키가 있어 재시도해도 한 번만 반영된다.
     const commitRewards = async (): Promise<void> => {
-      if (scrapReward > 0 && wallet) {
-        const balanceAfter = (wallet.scrap || 0) + scrapReward;
-        await repo.updateWalletScrap(session.playerId, balanceAfter);
-        await repo.insertCurrencyLedger({
-          id: crypto.randomUUID(), playerId: session.playerId, userId,
-          currency: 'scrap', amount: scrapReward,
-          balanceAfter,
-          source: 'battle', reason: '전투 보상',
-          referenceType: 'battle_session', referenceId: sessionId,
-          idempotencyKey: idempotencyKey + '-scrap',
-          createdAt: new Date(),
-        });
-      }
-
-      if (blueprintCode) {
-        await craftRepo.grantBlueprint(session.playerId, blueprintCode);
-        logger.info({ playerId: session.playerId, blueprintCode, sessionId, event: 'battle_blueprint_drop' }, 'Blueprint dropped');
-      }
-
       await repo.upsertPlayerRecord({
         id: existingRecord?.id || crypto.randomUUID(), playerId: session.playerId,
         stageId: stageDef.id, bestClearTimeSec: report.elapsedSeconds,
@@ -584,6 +564,26 @@ export async function endBattleSession(sessionId: string, userId: string, report
         finalizedAt: new Date(), createdAt: new Date(),
       });
 
+      if (scrapReward > 0 && wallet) {
+        const balanceAfter = (wallet.scrap || 0) + scrapReward;
+        await repo.updateWalletScrap(session.playerId, balanceAfter);
+        await repo.insertCurrencyLedger({
+          id: crypto.randomUUID(), playerId: session.playerId, userId,
+          currency: 'scrap', amount: scrapReward,
+          balanceAfter,
+          source: 'battle', reason: '전투 보상',
+          referenceType: 'battle_session', referenceId: sessionId,
+          idempotencyKey: idempotencyKey + '-scrap',
+          createdAt: new Date(),
+        });
+      }
+
+      if (blueprintCode) {
+        await craftRepo.grantBlueprint(session.playerId, blueprintCode);
+        logger.info({ playerId: session.playerId, blueprintCode, sessionId, event: 'battle_blueprint_drop' }, 'Blueprint dropped');
+      }
+
+      // 완료 표시는 결과·지급이 모두 끝난 뒤
       await repo.updateSession(sessionId, {
         status: 'completed', endTime: new Date(),
         completedAt: new Date(), resultCode: 'clear',
@@ -591,11 +591,7 @@ export async function endBattleSession(sessionId: string, userId: string, report
       });
     };
 
-    if (process.env.DB_DRIVER === 'postgres') {
-      await withPostgresTransaction(commitRewards);
-    } else {
-      await commitRewards();
-    }
+    await repo.runInTransaction(commitRewards);
 
     logger.info({ sessionId, playerId: session.playerId, scrapReward, blueprintCode, isFirstClear, event: 'battle_end' }, 'Battle ended');
     return { ...rewards, reward: rewards };

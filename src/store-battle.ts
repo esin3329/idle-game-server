@@ -76,6 +76,12 @@ async function withUpgradeLock<T>(sessionId: string, action: () => Promise<T>): 
 
 // data/stages.ts 에서 STAGES 임포트
 
+function cloneMap<T>(map: Map<string, T>): Map<string, T> {
+  return new Map(Array.from(map, ([key, value]) => [key, structuredClone(value)]));
+}
+
+let transactionQueue: Promise<void> = Promise.resolve();
+
 export const jsonBattleRepo: BattleRepository = {
   async getStage(stageId: string) { return STAGES.find((s) => s.id === stageId) || null; },
   async getStages() { return STAGES; },
@@ -201,6 +207,29 @@ export const jsonBattleRepo: BattleRepository = {
   },
 
   async createSecurityEvent(_event: any) { /* best effort */ },
+
+  // 메모리 맵과 파일을 스냅샷으로 되돌리는 롤백. 동시에 실행되는 다른 쓰기는 보호하지 못하므로
+  // (개발/테스트용 JSON 모드) 호출 간에는 직렬화한다.
+  runInTransaction<T>(fn: () => Promise<T>): Promise<T> {
+    const run = async (): Promise<T> => {
+      ensure();
+      const snapshot = {
+        sessions: cloneMap(sessions), results: cloneMap(results),
+        playerRecords: cloneMap(playerRecords), playerStageProgress: cloneMap(playerStageProgress),
+      };
+      try {
+        return await fn();
+      } catch (err) {
+        ({ sessions, results, playerRecords, playerStageProgress } = snapshot);
+        saveMap(sessions, sessionsFile, 'sessions');
+        saveMap(results, resultsFile, 'results');
+        throw err;
+      }
+    };
+    const result = transactionQueue.then(run, run);
+    transactionQueue = result.then(() => undefined, () => undefined);
+    return result;
+  },
 };
 
 export function resetBattleStores(): void {

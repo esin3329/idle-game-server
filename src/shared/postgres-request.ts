@@ -8,7 +8,7 @@ import { jwtAuth } from './jwt-auth.js';
 
 class RollbackResponse extends Error {}
 
-export async function postgresRequestTransaction(c: Context<{ Variables: { userId: string } }>, next: Next): Promise<void> {
+export async function postgresRequestTransaction(c: Context<{ Variables: { userId: string; commitOnError?: boolean } }>, next: Next): Promise<void> {
   if (process.env.DB_DRIVER !== 'postgres' || ['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
     await next();
     return;
@@ -24,7 +24,8 @@ export async function postgresRequestTransaction(c: Context<{ Variables: { userI
           if (profile?.playerId !== requestedPlayer) throw new AppError('본인 플레이어만 변경할 수 있습니다.', 403, 'FORBIDDEN');
         }
         await next();
-        if (c.res.status >= 400) throw new RollbackResponse();
+        // 핸들러가 400 응답과 함께 쓰기를 남겨야 하는 경우(commitOnError) 롤백하지 않는다.
+        if (c.res.status >= 400 && !c.get('commitOnError')) throw new RollbackResponse();
       });
     } catch (error) {
       if (!(error instanceof RollbackResponse)) throw error;

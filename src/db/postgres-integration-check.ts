@@ -8,6 +8,7 @@ import { migratePostgres } from './postgres-migrate.js';
 import { withPostgresConnection, withPostgresTransaction, closePostgresPool } from './postgres-connection.js';
 import { registerUserTransaction } from './postgres-auth.repository.js';
 import { postgresWalletRepo } from './postgres-wallet.repository.js';
+import { seed as seedBattleContent } from './battle-seed.js';
 
 await mkdir('.tools', { recursive: true });
 const dir = await mkdtemp(resolve('.tools/postgres-check-'));
@@ -90,6 +91,35 @@ try {
   assert.equal(Number(craftedParts.rows[0].count), 1);
   const craftedLedger = await client.query<{ count: string }>('SELECT count(*) FROM game.item_ledger WHERE reference_id=$1', [craftId]);
   assert.equal(Number(craftedLedger.rows[0].count), 1);
+  // 선택지 생성(400 CHOICES_GENERATED)이 요청 트랜잭션 롤백으로 사라지지 않고 영속되는지 확인
+  await withPostgresConnection(connectionString, () => seedBattleContent());
+  interface BattleSessionBody { id: string }
+  interface ProgressBody { upgradesAvailable: boolean }
+  interface ErrorBody { code: string }
+  interface PersistedBattleBody { offeredChoices: { level: number; options: { upgradeId: string }[] }[] }
+  interface SelectBody { applied: string[] }
+  const battleStart = await request('/api/battles/start', 'POST', { stageCode: 'stage_01_ruins' }, token);
+  assert.equal(battleStart.status, 201, await battleStart.clone().text());
+  const battleSession: BattleSessionBody = await battleStart.json();
+  const battlePath = '/api/battles/' + battleSession.id;
+  const battleProgress = await request(battlePath + '/progress', 'POST', { sequence: 1, killsDelta: 10, coreEnergyDelta: 50, elapsedSeconds: 2 }, token);
+  assert.equal(battleProgress.status, 200, await battleProgress.clone().text());
+  const progressBody: ProgressBody = await battleProgress.json();
+  assert.equal(progressBody.upgradesAvailable, true);
+  const generated = await request(battlePath + '/upgrades/select', 'POST', { selectedUpgradeCode: 'machine_gun_1' }, token);
+  assert.equal(generated.status, 400);
+  const generatedBody: ErrorBody = await generated.json();
+  assert.equal(generatedBody.code, 'CHOICES_GENERATED');
+  const battleState = await request(battlePath, 'GET', undefined, token);
+  assert.equal(battleState.status, 200, await battleState.clone().text());
+  const persisted: PersistedBattleBody = await battleState.json();
+  assert.equal(persisted.offeredChoices.length, 1);
+  assert.equal(persisted.offeredChoices[0].level, 2);
+  const offeredCode = persisted.offeredChoices[0].options[0].upgradeId;
+  const selectedUpgrade = await request(battlePath + '/upgrades/select', 'POST', { selectedUpgradeCode: offeredCode }, token);
+  assert.equal(selectedUpgrade.status, 200, await selectedUpgrade.clone().text());
+  const selectedBody: SelectBody = await selectedUpgrade.json();
+  assert.deepEqual(selectedBody.applied, [offeredCode]);
   const unauthorized = await request('/api/players/' + account.playerId + '/claim', 'POST', {}, token);
   assert.equal(unauthorized.status, 403);
   await client.query("UPDATE game.users SET role='admin' WHERE id=$1", [registered.userId]);

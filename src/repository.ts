@@ -198,6 +198,11 @@ export interface BattleRepository {
   getPlayerStageProgress(playerId: string, stageId: string): Promise<any>;
   upsertPlayerStageProgress(progress: any): Promise<void>;
   createSecurityEvent(event: any): Promise<void>;
+  /**
+   * fn 내부의 쓰기를 하나의 단위로 묶는다. fn이 예외를 던지면 그 안의 쓰기는 모두 되돌린다.
+   * (postgres: DB 트랜잭션/savepoint, json: 메모리·파일 스냅샷 복원)
+   */
+  runInTransaction<T>(fn: () => Promise<T>): Promise<T>;
 }
 
 // ─── Admin (운영 API) ────────────────────────────
