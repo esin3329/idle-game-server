@@ -8,6 +8,7 @@ import { migratePostgres } from './postgres-migrate.js';
 import { withPostgresConnection, withPostgresTransaction, closePostgresPool } from './postgres-connection.js';
 import { registerUserTransaction } from './postgres-auth.repository.js';
 import { postgresWalletRepo } from './postgres-wallet.repository.js';
+import { postgresAdminRepo } from './postgres-admin.repository.js';
 import { seed as seedBattleContent } from './battle-seed.js';
 
 await mkdir('.tools', { recursive: true });
@@ -142,7 +143,25 @@ try {
   await client.query("UPDATE game.users SET role='user' WHERE id=$1", [registered.userId]);
   const revoked = await request('/api/admin/users', 'GET', undefined, adminToken);
   assert.equal(revoked.status, 403);
-  console.log('PostgreSQL check passed: schema/RLS, duplicate credit, rollback, API signup/login, concurrent claim/grant replay, ownership and revoked admin access.');
+  // updateOperatorRole: users.role 과 operator_accounts.role_id 동기화 (기존 행 갱신 + 행 없을 때 생성)
+  const operatorKey = randomUUID();
+  const createdOperator = await withPostgresConnection(connectionString, () => postgresAdminRepo.createOperator({
+    email: 'operator-' + operatorKey + '@example.test', passwordHash: 'test-only-hash', nickname: 'op' + operatorKey.slice(0, 8),
+    role: 'operator', grantedBy: registered.userId,
+  }));
+  const roleChange = await withPostgresConnection(connectionString, () => postgresAdminRepo.updateOperatorRole(createdOperator.id, 'admin', registered.userId, 'integration role sync'));
+  assert.equal(roleChange.oldRole, 'operator');
+  const syncedRoles = await client.query<{ user_role: string; role_id: string; accounts: string }>(
+    'SELECT u.role AS user_role, oa.role_id, (SELECT count(*) FROM game.operator_accounts WHERE user_id=u.id) AS accounts FROM game.users u JOIN game.operator_accounts oa ON oa.user_id=u.id WHERE u.id=$1', [createdOperator.id]);
+  assert.equal(syncedRoles.rows.length, 1);
+  assert.equal(syncedRoles.rows[0].user_role, 'admin');
+  assert.equal(syncedRoles.rows[0].role_id, 'admin');
+  assert.equal(Number(syncedRoles.rows[0].accounts), 1);
+  await withPostgresConnection(connectionString, () => postgresAdminRepo.updateOperatorRole(registered.userId, 'operator', createdOperator.id, 'integration role upsert'));
+  const upserted = await client.query<{ user_role: string; role_id: string }>(
+    'SELECT u.role AS user_role, oa.role_id FROM game.users u JOIN game.operator_accounts oa ON oa.user_id=u.id WHERE u.id=$1', [registered.userId]);
+  assert.deepEqual(upserted.rows, [{ user_role: 'operator', role_id: 'operator' }]);
+  console.log('PostgreSQL check passed: schema/RLS, duplicate credit, rollback, API signup/login, concurrent claim/grant replay, ownership, operator role sync and revoked admin access.');
 } finally {
   await closePostgresPool();
   await client?.end();

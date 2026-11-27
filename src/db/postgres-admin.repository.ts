@@ -302,6 +302,10 @@ export const postgresAdminRepo: AdminRepository = {
       }
       const oldRole = userRows[0].role;
       await db.update(users).set({ role, updatedAt: now }).where(eq(users.id, targetId));
+      await db.insert(operatorAccounts).values({
+        id: crypto.randomUUID(), userId: targetId, roleId: role,
+        grantedBy: operatorId, grantedAt: now, status: 'active', createdAt: now, updatedAt: now,
+      }).onConflictDoUpdate({ target: operatorAccounts.userId, set: { roleId: role, updatedAt: now } });
       await db.insert(operatorAuditLogs).values({
         id: crypto.randomUUID(),
         operatorId,

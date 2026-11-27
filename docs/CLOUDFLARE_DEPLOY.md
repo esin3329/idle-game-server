@@ -2,7 +2,11 @@
 
 현재 Worker는 Hono 게임 API와 관리자 정적 자산을 함께 제공하며, 백엔드는 **Supabase PostgreSQL + JSON(테스트/개발)** 단일 구조로 정리되었습니다(기존 MySQL·Docker·CI MySQL 잡 제거 완료).
 
-## 현재 상태 (2026-11-26)
+## 현재 상태 (2026-11-27)
+
+- 최신 배포 버전: `6df6abfc-30e6-40fb-95b9-9023c011e4ff` (PR #17~#19 반영). https://idle-game-server.qlqlf2226.workers.dev
+
+아래는 2026-11-26 기준 이전·검증 기록이며 그대로 보존합니다.
 
 - Supabase `hiactimawqbccldjtqxb` 복원 완료. `game_postgres` 스키마 마이그레이션 적용 완료.
 - 업무 테이블 34개와 요청 제어 테이블 2개. game 스키마는 클라이언트 Data API 접근을 허용하지 않으며 RLS를 활성화했습니다.
@@ -11,7 +15,7 @@
 - 이전 대상: 원본 업무 데이터 157행. 원본 MySQL 마이그레이션 이력은 백업으로만 보존합니다.
 - SQL 변환 리허설에서 34개 테이블 건수, 전기 잔액/원장 8096, bcrypt 해시 3개, UTC 시간 및 한글 보존을 확인했습니다.
 - 계정·인증 데이터를 포함한 이전에 대한 사용자 승인 후 Supabase에 157행 적용 완료. 34개 테이블 건수, 잔액/원장 8096, 계정 bcrypt 3개, 역할/권한/매핑 6/16/28을 검증했습니다.
-- Cloudflare 로그인 갱신 후 게임 API와 관리자 페이지 배포 완료: https://idle-game-server.qlqlf2226.workers.dev (버전 5357be35-e838-4f3f-9145-3a7ba5ba799d).
+- Cloudflare 로그인 갱신 후 게임 API와 관리자 페이지 배포 완료: https://idle-game-server.qlqlf2226.workers.dev (당시 버전 5357be35-e838-4f3f-9145-3a7ba5ba799d, 이후 위 최신 버전으로 갱신).
 - Unity 기본 서버 주소(`ClientApp.cs`, `Bootstrap.unity`)를 Cloudflare Worker 주소로 전환했습니다. 실서버 완주, Android 실기기 검증, 필요 시 최종 데이터 재동기화는 별도 확인 대상입니다.
 
 ## 로컬 검증
