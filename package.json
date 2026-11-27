@@ -17,8 +17,7 @@
     "db:battle-seed": "tsx src/db/battle-seed.ts",
     "db:seed-operator": "tsx src/db/seed-operator.ts",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts",
-    "db:import-json": "tsx src/db/import-json.ts",
+    "db:migrate": "tsx src/db/postgres-migrate-cli.ts",
     "clean": "rm -rf dist/",
     "db:migrate:postgres": "tsx src/db/postgres-migrate-cli.ts",
     "test:postgres": "tsx src/db/postgres-integration-check.ts",
@@ -30,13 +29,12 @@
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.32",
     "jsonwebtoken": "^9.0.3",
-    "mysql2": "^3.23.1",
     "pg": "8.23.1",
     "pino": "^10.3.1",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20260929.1",
+    "@cloudflare/workers-types": "5.20261127.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.1.1",
@@ -49,7 +47,7 @@
     "tsx": "^4.23.0",
     "typescript": "~5.7.0",
     "vitest": "^4.1.10",
-    "wrangler": "4.143.1"
+    "wrangler": "4.168.0"
   },
   "overrides": {
     "@esbuild-kit/core-utils": {

@@ -3,8 +3,6 @@ import { logger } from './logger.js';
 const REQUIRED_IN_PRODUCTION: { name: string; defaultHint: string }[] = [
   { name: 'JWT_ACCESS_SECRET', defaultHint: 'dev-secret-change-in-production' },
   { name: 'JWT_REFRESH_SECRET', defaultHint: 'dev-secret-change-in-production' },
-  { name: 'DB_PASSWORD', defaultHint: 'changeme' },
-  { name: 'MYSQL_ROOT_PASSWORD', defaultHint: 'changeme' },
 ];
 
 export function validateProductionSecrets(): void {
@@ -13,7 +11,6 @@ export function validateProductionSecrets(): void {
   const missing: string[] = [];
 
   for (const { name, defaultHint } of REQUIRED_IN_PRODUCTION) {
-    if (process.env.DB_DRIVER === 'postgres' && ['DB_PASSWORD', 'MYSQL_ROOT_PASSWORD'].includes(name)) continue;
     const value = process.env[name];
     if (!value || value === defaultHint || value === '') {
       missing.push(name);

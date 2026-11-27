@@ -1,4 +1,4 @@
-import { pgSchema, varchar, integer as int, timestamp, index, unique, text as longtext, check } from 'drizzle-orm/pg-core';
+import { pgSchema, varchar, integer as int, timestamp, index, unique, uniqueIndex, text as longtext, check } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const gameSchema = pgSchema('game');
@@ -107,6 +107,7 @@ export const stageBosses = gameSchema.table('stage_bosses', {
   createdAt: datetime('created_at').notNull(),
 }, (table) => [
   index('idx_sb_stage_id').on(table.stageId),
+  uniqueIndex('uq_sb_stage_sequence_boss').on(table.stageId, table.sequence, table.bossCode),
 ]);
 
 /** stages — 스테이지 정의 */
@@ -144,6 +145,7 @@ export const stageRewards = gameSchema.table('stage_rewards', {
   createdAt: datetime('created_at').notNull(),
 }, (table) => [
   index('idx_sr_stage_id').on(table.stageId),
+  uniqueIndex('uq_sr_stage_clear_type').on(table.stageId, table.clearType),
 ]);
 
 /** mecha_stats — 플레이어별 메카 스탯 */

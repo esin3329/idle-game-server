@@ -16,6 +16,7 @@ import upgradesRoutes from './upgrades.routes.js';
 import adminRoutes from './admin.routes.js';
 import { AppError } from './shared/errors.js';
 import { logger } from './shared/logger.js';
+import { operatorAuth } from './shared/jwt-auth.js';
 import { recordRequest, getMetrics } from './shared/metrics.js';
 
 export const app = new Hono<{ Variables: { requestId: string; userId: string; role: string } }>();
@@ -130,15 +131,13 @@ app.get('/health/live', (c) => c.json({ status: 'ok' }));
 app.get('/ready', async (c) => {
   if (!isReady) return c.json({ status: 'not ready' }, 503);
   try {
-    if (process.env.DB_DRIVER === 'postgres') {
-      const { getDb } = await import('./db/postgres-connection.js');
-      await getDb().execute(sql`SELECT 1`);
-      dbConnected = true;
-    } else if (process.env.DB_DRIVER === 'json') {
+    const usesJson = process.env.DB_DRIVER === 'json'
+      || (process.env.DB_DRIVER === undefined && process.env.NODE_ENV !== 'production' && !process.env.DATABASE_URL);
+    if (usesJson) {
       dbConnected = true;
     } else {
-      const { getPool } = await import('./db/connection.js');
-      await getPool().query('SELECT 1');
+      const { getDb } = await import('./db/postgres-connection.js');
+      await getDb().execute(sql`SELECT 1`);
       dbConnected = true;
     }
   } catch (error) {
@@ -153,7 +152,7 @@ app.get('/ready', async (c) => {
 
 // ─── 메트릭 ──────────────────────────────────────────
 
-app.get('/metrics', (c) => c.json(getMetrics()));
+app.get('/metrics', operatorAuth, (c) => c.json(getMetrics()));
 
 const api = new Hono();
 api.route('/', routes);

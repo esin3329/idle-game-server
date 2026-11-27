@@ -3,8 +3,8 @@
  *
  * stage_01_ruins  (3분)  → 중간보스 1체
  * stage_02_factory (3분) → 중간보스 2체
- * stage_03_lab    (6분)  → 중간보스 2체 + 준최종보스
- * stage_04_core   (6분)  → 중간보스 3체 + 최종보스
+ * stage_03_lab    (6분)  → 보스 2체
+ * stage_04_core   (6분)  → 중간보스 2체 + 최종보스
  */
 
 // ─── 보스 데이터 ─────────────────────────────────────
@@ -154,7 +154,7 @@ export const STAGES: StageData[] = [
     durationSeconds: 360,        // 6분
     recommendedPower: 60,
     enemySet: ['돌연변이', '실험체', '방어드론'],
-    bossTimings: [120, 240, 300], // 2분, 4분, 5분
+    bossTimings: [240, 300], // 4분, 5분
     bossCodes: ['boss_lab_mutant', 'boss_lab_defender'],
     maxKills: 500,
     maxCoreEnergy: 500,
@@ -172,7 +172,7 @@ export const STAGES: StageData[] = [
     durationSeconds: 360,        // 6분
     recommendedPower: 100,
     enemySet: ['엘리트 경비병', 'AI 병사', '차원 왜곡체'],
-    bossTimings: [90, 180, 270, 330], // 1분30초, 3분, 4분30초, 5분30초
+    bossTimings: [180, 270, 330], // 3분, 4분30초, 5분30초
     bossCodes: ['boss_core_sentinel', 'boss_core_overlord', 'boss_final_overmind'],
     maxKills: 600,
     maxCoreEnergy: 600,
@@ -194,10 +194,16 @@ export function getBoss(code: string): BossData | undefined {
   return BOSSES[code];
 }
 
+const LEGACY_STAGE_BOSS_CODES: Record<string, string[]> = {
+  stage_02_canyon: ['boss_factory_foreman', 'boss_factory_assembly'],
+  stage_03_furnace: ['boss_factory_assembly', 'boss_lab_mutant', 'boss_lab_defender'],
+  stage_04_fortress: ['boss_core_sentinel', 'boss_core_overlord', 'boss_final_overmind'],
+};
+
 export function getStageBosses(stageId: string): BossData[] {
   const stage = getStage(stageId);
-  if (!stage) return [];
-  return stage.bossCodes.map((c) => BOSSES[c]).filter(Boolean);
+  const codes = stage?.bossCodes ?? LEGACY_STAGE_BOSS_CODES[stageId] ?? [];
+  return codes.map((c) => BOSSES[c]).filter(Boolean);
 }
 
 /** 다음 스테이지 ID 반환 (없으면 undefined) */
@@ -206,4 +212,26 @@ export function getNextStageId(currentStageId: string): string | undefined {
   if (!current) return undefined;
   const next = STAGES.find((s) => s.sequence === current.sequence + 1);
   return next?.id;
+}
+
+/** entryRequirement 문자열에서 선행 스테이지 ID를 추출 ('none'이면 null, 'clear_' 접두사 제거) */
+export function requiredStageIdFor(entryRequirement?: string | null): string | null {
+  if (!entryRequirement || entryRequirement === 'none') return null;
+  return entryRequirement.startsWith('clear_')
+    ? entryRequirement.slice('clear_'.length)
+    : entryRequirement;
+}
+
+/** DB JSON 문자열 또는 배열 컬럼을 안전하게 배열로 파싱 */
+export function parseStageJsonArray<T>(value: unknown, fallback: T[] = []): T[] {
+  if (Array.isArray(value)) return value as T[];
+  if (typeof value === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return Array.isArray(parsed) ? (parsed as T[]) : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
 }

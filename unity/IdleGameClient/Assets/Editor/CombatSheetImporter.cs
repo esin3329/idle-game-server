@@ -34,11 +34,18 @@ namespace IdleGame.Editor
                 string[] kinds = { "Guard", "Rifle", "Armored", "MachineGun" };
                 string[] states = { "idle", "walk", "attack", "death" };
                 int[] rows = { 397, 486, 584, 684 };
+                int[] machineGunX = { 1245, 1341, 1440 };
                 for (int kind = 0; kind < kinds.Length; kind++)
                     for (int state = 0; state < states.Length; state++)
                         for (int frame = 0; frame < 4; frame++)
+                        {
+                            int x = kind == 3
+                                ? machineGunX[frame < 3 ? frame : (state >= 2 ? 2 : 1)]
+                                : kind * 384 + 96 + frame * 74;
+                            int w = kind == 3 ? 96 : 74;
                             frames.Add(Frame($"enemy-{kinds[kind]}-{states[state]}-{frame}",
-                                kind * 384 + 96 + frame * 74, rows[state], 74, 84, height));
+                                x, rows[state], w, 84, height));
+                        }
             }
             else if (assetPath == "Assets/Resources/Art/RuinsSheet.png")
             {

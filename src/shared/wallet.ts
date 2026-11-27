@@ -1,7 +1,7 @@
 /**
  * 재화(Wallet) 서비스
  *
- * getWalletRepo()를 통해 JSON/MySQL 저장소를 자동 선택.
+ * getWalletRepo()를 통해 PostgreSQL/JSON 저장소를 자동 선택.
  * 모든 함수는 provider에 위임하는 thin wrapper.
  */
 import { getWalletRepo, getWalletRepoMode } from '../provider.js';
@@ -16,7 +16,7 @@ export async function getBalance(playerId: string): Promise<BalanceResult | null
 /**
  * 원자적 잔액 증감 + 원장 기록
  *
- * MySQL 모드: 트랜잭션 (SELECT FOR UPDATE → UPDATE → INSERT)
+ * PostgreSQL 모드: 트랜잭션 (SELECT FOR UPDATE → UPDATE → INSERT)
  * JSON 모드: 순차 저장 (멱등성 키로 중복 방지)
  */
 export async function adjustBalance(

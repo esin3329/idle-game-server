@@ -5,25 +5,59 @@ import * as schema from './postgres-schema.js';
 
 export type PostgresDb = Pick<NodePgDatabase<typeof schema>, 'select' | 'insert' | 'update' | 'delete' | 'execute' | 'transaction'>;
 const context = new AsyncLocalStorage<PostgresDb>();
+const connectionStringContext = new AsyncLocalStorage<string>();
 let pool: Pool | undefined;
+let independentPool: Pool | undefined;
 
 export function getDb(): PostgresDb {
   const current = context.getStore();
   if (current) return current;
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) throw new Error('DATABASE_URL is required for PostgreSQL');
-  pool ??= new Pool({ connectionString, max: 10, connectionTimeoutMillis: 10000 });
+  if (!pool) {
+    pool = new Pool({ connectionString, max: 10, connectionTimeoutMillis: 10000 });
+    pool.on('error', () => {});
+  }
   return drizzle(pool, { schema });
 }
 
 export async function withPostgresConnection<T>(connectionString: string, callback: () => Promise<T>): Promise<T> {
   const client = new Client({ connectionString, connectionTimeoutMillis: 10000 });
+  client.on('error', () => {});
   try {
     await client.connect();
-    return await context.run(drizzle(client, { schema }), callback);
+    return await connectionStringContext.run(connectionString, () => context.run(drizzle(client, { schema }), callback));
   } finally {
-    await client.end();
+    await client.end().catch(() => {});
   }
+}
+
+/**
+ * Runs `callback` on a connection that is NOT part of the surrounding request transaction (autocommit),
+ * so its writes survive a rollback of that transaction (e.g. rate-limit counters on 4xx responses).
+ * - Inside withPostgresConnection (Workers): a fresh short-lived client.
+ * - Otherwise (Node): a dedicated pool, separate from the request pool so concurrent in-flight
+ *   transactions cannot exhaust it and deadlock waiting for their own independent query.
+ */
+export async function withIndependentPostgresConnection<T>(callback: (db: PostgresDb) => Promise<T>): Promise<T> {
+  const activeConnectionString = connectionStringContext.getStore();
+  if (activeConnectionString) {
+    const client = new Client({ connectionString: activeConnectionString, connectionTimeoutMillis: 10000 });
+    client.on('error', () => {});
+    try {
+      await client.connect();
+      return await callback(drizzle(client, { schema }));
+    } finally {
+      await client.end().catch(() => {});
+    }
+  }
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) throw new Error('DATABASE_URL is required for PostgreSQL');
+  if (!independentPool) {
+    independentPool = new Pool({ connectionString, max: 5, connectionTimeoutMillis: 10000 });
+    independentPool.on('error', () => {});
+  }
+  return callback(drizzle(independentPool, { schema }));
 }
 
 export function withPostgresTransaction<T>(callback: () => Promise<T>): Promise<T> {
@@ -31,8 +65,10 @@ export function withPostgresTransaction<T>(callback: () => Promise<T>): Promise<
 }
 
 export async function closePostgresPool(): Promise<void> {
-  await pool?.end();
+  const pools = [pool, independentPool];
   pool = undefined;
+  independentPool = undefined;
+  await Promise.all(pools.map((p) => p?.end().catch(() => {})));
 }
 
 export function isPostgresUniqueViolation(error: unknown): boolean {

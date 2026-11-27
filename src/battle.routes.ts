@@ -13,80 +13,8 @@ import {
 } from './shared/battle-session.js';
 import type { BattleEventReport, BattleEndReport } from './shared/battle-session.js';
 import { logger } from './shared/logger.js';
-import { getDb } from './db/postgres-connection.js';
-import { stages, playerStageProgress, playerRecords } from './db/postgres-schema.js';
-import { asc, eq } from 'drizzle-orm';
 
 const battleRoutes = new Hono<{ Variables: { userId: string; idempotencyKey: string } }>();
-
-// ─── GET /stages ─────────────────────────────────────
-// 스테이지 목록 조회 (간소 경로)
-
-battleRoutes.get('/stages', async (c) => {
-  const db = getDb();
-  const rows = await db.select().from(stages).orderBy(asc(stages.sequence));
-
-  // JWT 있을 경우 플레이어별 해금 상태 조회
-  let progressMap: Map<string, { unlocked: boolean; firstCleared: boolean; bestKill: number; bestTimeMs: number | null; clearCount: number }> = new Map();
-  try {
-    const authHeader = c.req.header('Authorization');
-    if (authHeader?.startsWith('Bearer ')) {
-      const jwt = await import('jsonwebtoken');
-      const token = authHeader.slice(7);
-      const payload = jwt.default.verify(token, process.env.JWT_ACCESS_SECRET || 'dev-secret-change-in-production') as { sub: string };
-      const userId = payload.sub;
-
-      const progress = await db.select().from(playerStageProgress)
-        .where(eq(playerStageProgress.userId, userId));
-      const records = await db.select().from(playerRecords)
-        .where(eq(playerRecords.playerId, userId));
-
-      for (const p of progress) {
-        progressMap.set(p.stageId, {
-          unlocked: true,
-          firstCleared: p.firstClearedAt !== null,
-          bestKill: 0,
-          bestTimeMs: p.bestClearTimeMs || null,
-          clearCount: p.clearCount,
-        });
-      }
-      for (const r of records) {
-        const existing = progressMap.get(r.stageId);
-        progressMap.set(r.stageId, {
-          unlocked: existing?.unlocked ?? true,
-          firstCleared: r.firstClearedAt !== null,
-          bestKill: r.bestKillCount,
-          bestTimeMs: (r.bestClearTimeSec || 0) * 1000,
-          clearCount: r.totalClears,
-        });
-      }
-    }
-  } catch { /* 인증 없으면 기본값만 */ }
-
-  return c.json(rows.map((s) => ({
-    id: s.id,
-    name: s.name,
-    description: s.description,
-    sequence: s.sequence,
-    durationSeconds: s.durationSeconds,
-    entryRequirement: s.entryRequirement,
-    recommendedPower: s.recommendedPower,
-    enemySet: JSON.parse(s.enemySet),
-    bossTimings: JSON.parse(s.bossTimings),
-    maxKills: s.maxKills,
-    maxCoreEnergy: s.maxCoreEnergy,
-    scrapPerKill: s.scrapPerKill,
-    unlocked: s.unlocked === 1,
-    enabled: s.enabled === 1,
-    unlockedForPlayer: progressMap.has(s.id) || s.entryRequirement === 'none',
-    firstCleared: progressMap.get(s.id)?.firstCleared ?? false,
-    bestKillCount: progressMap.get(s.id)?.bestKill ?? 0,
-    bestClearTimeMs: progressMap.get(s.id)?.bestTimeMs ?? null,
-    clearCount: progressMap.get(s.id)?.clearCount ?? 0,
-    canEnter: (s.unlocked === 1 && s.enabled === 1) && (s.entryRequirement === 'none' || progressMap.has(s.id)),
-  })));
-});
-
 
 // ─── POST /battles/start ──────────────────────────────
 // 전투 세션 생성. JWT로 userId 추출, body로 stageId 전달.

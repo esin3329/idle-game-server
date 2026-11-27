@@ -9,7 +9,7 @@ import { playerIdForUser } from './player-identity.js';
 import { BATTLE_POLICY } from './battle-policy.js';
 import { ALL_UPGRADES } from '../data/upgrades.js';
 import { randomBlueprintByDropWeight } from '../data/crafting.js';
-import { getNextStageId, getBoss } from '../data/stages.js';
+import { getNextStageId, getBoss, requiredStageIdFor, parseStageJsonArray } from '../data/stages.js';
 import { AppError } from './errors.js';
 import { logger, auditLog } from './logger.js';
 
@@ -84,6 +84,18 @@ function seededWeightedChoice(seed: number, items: { weight: number }[]): number
   return items.length - 1;
 }
 
+async function getProgressForUser(repo: { getPlayerStageProgress(playerId: string, stageId: string): Promise<any> }, playerId: string, userId: string, stageId: string) {
+  const byPlayer = await repo.getPlayerStageProgress(playerId, stageId);
+  if (byPlayer || playerId === userId) return byPlayer;
+  return repo.getPlayerStageProgress(userId, stageId);
+}
+
+async function getRecordForUser(repo: { getPlayerRecord(playerId: string, stageId: string): Promise<any> }, playerId: string, userId: string, stageId: string) {
+  const byPlayer = await repo.getPlayerRecord(playerId, stageId);
+  if (byPlayer || playerId === userId) return byPlayer;
+  return repo.getPlayerRecord(userId, stageId);
+}
+
 // ═══════════════════════════════════════════════════════
 // startBattleSession
 // ═══════════════════════════════════════════════════════
@@ -99,15 +111,20 @@ export async function startBattleSession(userId: string, stageCode: string): Pro
   if (stageDef.enabled === false || stageDef.enabled === 0) throw new AppError('비활성화된 스테이지입니다.', 400, 'STAGE_DISABLED');
 
   // ─── 출격 조건 검증 ───────────────────────────
-  // 1. entryRequirement: 이전 스테이지 클리어 확인
-  if (stageDef.entryRequirement && stageDef.entryRequirement !== 'none') {
-    const prevProgress = await repo.getPlayerStageProgress(playerId, stageDef.entryRequirement);
-    const prevRecord = await repo.getPlayerRecord(playerId, stageDef.entryRequirement);
-    const prevCleared = prevProgress?.firstClearedAt !== undefined && prevProgress?.firstClearedAt !== null;
-    const prevClearedRecord = (prevRecord?.totalClears || 0) > 0;
-    if (!prevCleared && !prevClearedRecord) {
+  // 1. entryRequirement: 이전 스테이지 클리어 또는 해금 기록 확인
+  const requiredStageId = requiredStageIdFor(stageDef.entryRequirement);
+  if (requiredStageId) {
+    const [currentProgress, prevProgress, prevRecord] = await Promise.all([
+      getProgressForUser(repo, playerId, userId, stageDef.id),
+      getProgressForUser(repo, playerId, userId, requiredStageId),
+      getRecordForUser(repo, playerId, userId, requiredStageId),
+    ]);
+    const isUnlocked = Boolean(currentProgress?.unlockedAt)
+      || Boolean(prevProgress?.firstClearedAt)
+      || (prevRecord?.totalClears || 0) > 0;
+    if (!isUnlocked) {
       throw new AppError(
-        `이전 스테이지(${stageDef.entryRequirement})를 클리어해야 합니다.`,
+        `이전 스테이지(${requiredStageId})를 클리어해야 합니다.`,
         400, 'STAGE_LOCKED',
       );
     }
@@ -122,16 +139,6 @@ export async function startBattleSession(userId: string, stageCode: string): Pro
         // 권장 전투력의 70% 미만이면 경고 (진입은 허용)
         logger.warn({ playerId, stageId: stageDef.id, playerPower, recommended: stageDef.recommendedPower, event: 'battle_low_power' }, 'Player power below 70% of recommended');
       }
-    }
-  }
-
-  // 3. 기존 해금 검증 (하위 호환)
-  const progress = await repo.getPlayerStageProgress(playerId, stageDef.id);
-  if (!progress && stageDef.sequence > 1) {
-    const prevProgressFallback = await repo.getPlayerStageProgress(playerId, stageDef.entryRequirement || '');
-    const prevRecordFallback = await repo.getPlayerRecord(playerId, stageDef.entryRequirement || '');
-    if ((!prevProgressFallback || !prevProgressFallback.firstClearedAt) && (!prevRecordFallback || !prevRecordFallback.totalClears)) {
-      throw new AppError('스테이지가 해금되지 않았습니다.', 400, 'STAGE_LOCKED');
     }
   }
 
@@ -251,9 +258,7 @@ export async function reportBattleEvent(sessionId: string, userId: string, event
 
   const sessionBosses: string[] = JSON.parse(session.bossDefeated || '[]');
   if (event.bossId !== undefined) {
-    const timings: number[] = Array.isArray(stageDef.bossTimings)
-      ? stageDef.bossTimings
-      : JSON.parse(stageDef.bossTimings || '[]');
+    const timings = parseStageJsonArray<number>(stageDef.bossTimings);
     const nextTiming = timings[sessionBosses.length];
     if (typeof event.bossId !== 'string' || event.bossId.length < 1 || event.bossId.length > 50 ||
         !getBoss(event.bossId) || sessionBosses.includes(event.bossId) ||
@@ -387,9 +392,7 @@ export async function endBattleSession(sessionId: string, userId: string, report
     }
 
     const sessionBosses: string[] = JSON.parse(session.bossDefeated || '[]');
-    const bossTimings: number[] = Array.isArray(stageDef.bossTimings)
-      ? stageDef.bossTimings
-      : JSON.parse(stageDef.bossTimings || '[]');
+    const bossTimings = parseStageJsonArray<number>(stageDef.bossTimings);
     const expectedBossCount = bossTimings.length;
     const reportedBosses = report.bossDefeated;
     if (!Array.isArray(reportedBosses) ||
@@ -429,18 +432,20 @@ export async function endBattleSession(sessionId: string, userId: string, report
     const existingRecord = await repo.getPlayerRecord(session.playerId, stageDef.id);
     const isFirstClear = !existingRecord || (existingRecord.totalClears || 0) === 0;
 
-    // ─── 설계도 보상 ───────────────────────────────
+    // ─── 설계도 보상 (sessionSeed 기반 결정론) ──────────
+    const dropSeed = ((parseInt(session.sessionSeed || '0', 10) || 0) ^ 0x9e3779b9) >>> 0;
+    const dropRng = mulberry32(dropSeed);
     let blueprintCode: string | undefined;
     if (isFirstClear) {
-      // 첫 클리어: 확정 설계도 (stage_04 코어 = 희귀, else 랜덤)
-      if (stageDef.id === 'stage_04_core') {
-        blueprintCode = randomBlueprintByDropWeight('rare').code;
+      // 첫 클리어: 확정 설계도 (stage_04 코어/요새 = 희귀, else 랜덤)
+      if (stageDef.id === 'stage_04_core' || stageDef.id === 'stage_04_fortress') {
+        blueprintCode = randomBlueprintByDropWeight('rare', dropRng).code;
       } else {
-        blueprintCode = randomBlueprintByDropWeight().code;
+        blueprintCode = randomBlueprintByDropWeight(undefined, dropRng).code;
       }
-    } else if (Math.random() < 0.15) {
+    } else if (dropRng() < 0.15) {
       // 일반 클리어: 15% 확률로 랜덤 설계도
-      blueprintCode = randomBlueprintByDropWeight().code;
+      blueprintCode = randomBlueprintByDropWeight(undefined, dropRng).code;
     }
 
     // 설계도 지급
@@ -498,24 +503,56 @@ export async function endBattleSession(sessionId: string, userId: string, report
       });
     }
 
-    // ─── 기록 갱신 ──────────────────────────────
+    // ─── 기록 및 스테이지 진행도 갱신 ───────────
+    const clearedAt = new Date();
     const recordId = existingRecord?.id || crypto.randomUUID();
     await repo.upsertPlayerRecord({
       id: recordId, playerId: session.playerId,
       stageId: stageDef.id, bestClearTimeSec: report.elapsedSeconds,
       bestKillCount: report.totalKills, totalClears: (existingRecord?.totalClears || 0) + 1,
-      firstClearedAt: isFirstClear ? new Date() : existingRecord?.firstClearedAt,
-      lastClearedAt: new Date(), createdAt: existingRecord?.createdAt || new Date(), updatedAt: new Date(),
+      firstClearedAt: isFirstClear ? clearedAt : existingRecord?.firstClearedAt,
+      lastClearedAt: clearedAt, createdAt: existingRecord?.createdAt || clearedAt, updatedAt: clearedAt,
+    });
+
+    const existingProgress = await repo.getPlayerStageProgress(session.playerId, stageDef.id);
+    const clearTimeMs = report.elapsedSeconds * 1000;
+    const bestClearTimeMs = existingProgress?.bestClearTimeMs != null
+      ? Math.min(existingProgress.bestClearTimeMs, clearTimeMs)
+      : clearTimeMs;
+    await repo.upsertPlayerStageProgress({
+      id: existingProgress?.id || crypto.randomUUID(),
+      playerId: session.playerId,
+      userId,
+      stageId: stageDef.id,
+      unlockedAt: existingProgress?.unlockedAt || clearedAt,
+      firstClearedAt: existingProgress?.firstClearedAt || clearedAt,
+      bestClearTimeMs,
+      highestBossSequence: Math.max(existingProgress?.highestBossSequence || 0, bossSequence),
+      clearCount: (existingProgress?.clearCount || 0) + 1,
+      createdAt: existingProgress?.createdAt || clearedAt,
+      updatedAt: clearedAt,
     });
 
     // ─── 다음 스테이지 해금 ─────────────────────
-    if (isFirstClear) {
-      const nextStageId = stageDef.entryRequirement ? undefined : getNextStageId(stageDef.id);
-      if (nextStageId) {
+    const allStages = await repo.getStages();
+    const nextStageId =
+      allStages.find((s: { sequence?: number }) => s.sequence === (stageDef.sequence ?? 0) + 1)?.id
+      ?? getNextStageId(stageDef.id);
+    if (nextStageId) {
+      const nextProgress = await repo.getPlayerStageProgress(session.playerId, nextStageId);
+      if (!nextProgress) {
         await repo.upsertPlayerStageProgress({
-          id: crypto.randomUUID(), playerId: session.playerId, userId,
-          stageId: nextStageId, unlockedAt: new Date(),
-          createdAt: new Date(), updatedAt: new Date(),
+          id: crypto.randomUUID(),
+          playerId: session.playerId,
+          userId,
+          stageId: nextStageId,
+          unlockedAt: clearedAt,
+          firstClearedAt: null,
+          bestClearTimeMs: null,
+          highestBossSequence: 0,
+          clearCount: 0,
+          createdAt: clearedAt,
+          updatedAt: clearedAt,
         });
       }
     }

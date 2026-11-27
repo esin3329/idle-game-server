@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { validateJson } from './shared/validator.js';
 import { idempotencyGuard } from './shared/idempotency.js';
+import { rateLimit } from './shared/rate-limit.js';
 import { registerUser, loginUser, refreshTokens, revokeRefreshToken } from './shared/auth-service.js';
 
 const authRoutes = new Hono<{ Variables: { parsedBody: { email?: string; password?: string; nickname?: string; refreshToken?: string }; idempotencyKey: string } }>();
@@ -23,7 +24,7 @@ const tokenSchema = z.object({
 
 // ─── POST /auth/register ────────────────────────────
 
-authRoutes.post('/auth/register', idempotencyGuard, validateJson(registerSchema), async (c) => {
+authRoutes.post('/auth/register', rateLimit(5, 60_000, { scope: 'ip' }), idempotencyGuard, validateJson(registerSchema), async (c) => {
   const { email, password, nickname } = c.get('parsedBody') as z.infer<typeof registerSchema>;
   const result = await registerUser(email, password, nickname);
   return c.json(result, 201);
@@ -31,7 +32,7 @@ authRoutes.post('/auth/register', idempotencyGuard, validateJson(registerSchema)
 
 // ─── POST /auth/login ───────────────────────────────
 
-authRoutes.post('/auth/login', validateJson(loginSchema), async (c) => {
+authRoutes.post('/auth/login', rateLimit(10, 60_000, { scope: 'ip' }), validateJson(loginSchema), async (c) => {
   const { email, password } = c.get('parsedBody') as z.infer<typeof loginSchema>;
   const result = await loginUser(email, password);
   return c.json(result);
@@ -39,7 +40,7 @@ authRoutes.post('/auth/login', validateJson(loginSchema), async (c) => {
 
 // ─── POST /auth/refresh ─────────────────────────────
 
-authRoutes.post('/auth/refresh', validateJson(tokenSchema), async (c) => {
+authRoutes.post('/auth/refresh', rateLimit(20, 60_000, { scope: 'ip' }), validateJson(tokenSchema), async (c) => {
   const { refreshToken } = c.get('parsedBody') as z.infer<typeof tokenSchema>;
   const tokens = await refreshTokens(refreshToken);
   return c.json(tokens);

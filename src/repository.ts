@@ -212,6 +212,36 @@ export interface WalletSummary {
   electricityPerSecond: number; lastClaimedAt: string;
 }
 
+export interface AuditLogFilter {
+  limit?: number;
+  offset?: number;
+  action?: string;
+  operatorId?: string;
+  targetId?: string;
+  startDate?: Date;
+  endDate?: Date;
+}
+
+export interface SecurityEventFilter {
+  limit?: number;
+  offset?: number;
+  eventType?: string;
+  userId?: string;
+  severity?: string;
+  source?: string;
+  startDate?: Date;
+  endDate?: Date;
+}
+
+export interface OperatorSummary {
+  id: string;
+  email: string;
+  nickname: string;
+  role: string;
+  status: string;
+  createdAt: string;
+}
+
 export interface AdminRepository {
   listUsers(limit: number, offset: number, search?: string, status?: string): Promise<{ users: UserSummary[]; total: number }>;
   getUserDetail(userId: string): Promise<any>;
@@ -226,7 +256,12 @@ export interface AdminRepository {
   revokeSanction(sanctionId: string, operatorId: string, reason?: string): Promise<void>;
   createGrant(data: any): Promise<any>;
   listGrants(limit?: number, offset?: number, targetUserId?: string): Promise<any[]>;
-  listAuditLogs(limit?: number, action?: string): Promise<any[]>;
+  listAuditLogs(filter?: AuditLogFilter): Promise<any[]>;
+  listOperators(): Promise<OperatorSummary[]>;
+  createOperator(data: { email: string; passwordHash: string; nickname: string; role: string; grantedBy: string }): Promise<{ id: string; email: string; role: string; status: string }>;
+  updateOperatorRole(targetId: string, role: string, operatorId: string, reason: string): Promise<{ id: string; role: string; oldRole: string }>;
+  listSecurityEvents(filter?: SecurityEventFilter): Promise<any[]>;
+  reviewSecurityEvent(eventId: string, operatorId: string, resolution: string, resolutionNote?: string): Promise<boolean>;
   suspendUser(userId: string, operatorId: string, reason: string): Promise<void>;
   unsuspendUser(userId: string, operatorId: string, reason: string): Promise<void>;
   checkPermission(roleCode: string, permissionCode: string): Promise<boolean>;

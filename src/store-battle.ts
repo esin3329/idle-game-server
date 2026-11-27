@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import type { BattleRepository } from './repository.js';
 import { STAGES } from './data/stages.js';
 import { logger } from './shared/logger.js';
+import { jsonWalletRepo } from './store-wallet.js';
 
 const sessionsFile = process.env.DATA_FILE_BATTLES || join(process.cwd(), 'data-battles.json');
 const eventsFile = process.env.DATA_FILE_BEVENTS || join(process.cwd(), 'data-battle-events.json');
@@ -15,6 +16,8 @@ const resultsFile = process.env.DATA_FILE_RESULTS || join(process.cwd(), 'data-b
 let sessions = new Map<string, any>();
 let events: any[] = [];
 let results = new Map<string, any>();
+let playerRecords = new Map<string, any>();
+let playerStageProgress = new Map<string, any>();
 let _initialized = false;
 
 function loadMap<T>(fp: string, _name: string): Map<string, T> {
@@ -152,20 +155,57 @@ export const jsonBattleRepo: BattleRepository = {
   async createBattleResult(result: any) { ensure(); results.set(result.id, result); saveMap(results, resultsFile, 'results'); },
   async getBattleResult(sessionId: string) { ensure(); return Array.from(results.values()).find((r: any) => r.battleSessionId === sessionId) || null; },
 
-  async getWalletBalance() { return null; },
+  async getWalletBalance(playerId: string) {
+    const balance = await jsonWalletRepo.getBalance(playerId);
+    if (!balance) return null;
+    return {
+      playerId: balance.playerId,
+      electricity: balance.balance,
+      scrap: balance.scrap,
+      electricityPerSecond: balance.electricityPerSecond,
+      lastClaimedAt: balance.lastClaimedAt,
+    };
+  },
   async updateWalletElectricity() {},
   async updateWalletScrap() {},
-  async insertCurrencyLedger() {},
+  async insertCurrencyLedger(entry: any) {
+    if (entry?.playerId && entry?.currency && entry?.amount && entry?.idempotencyKey) {
+      await jsonWalletRepo.adjustBalance({
+        playerId: entry.playerId,
+        amount: entry.amount,
+        source: entry.source || 'battle',
+        idempotencyKey: entry.idempotencyKey,
+        currency: entry.currency,
+        reason: entry.reason,
+        referenceType: entry.referenceType,
+        referenceId: entry.referenceId,
+      });
+    }
+  },
 
-  async getPlayerRecord() { return null; },
-  async upsertPlayerRecord() {},
-  async getPlayerStageProgress() { return null; },
-  async upsertPlayerStageProgress() {},
+  async getPlayerRecord(playerId: string, stageId: string) {
+    return playerRecords.get(`${playerId}:${stageId}`) || null;
+  },
+  async upsertPlayerRecord(record: any) {
+    const key = `${record.playerId}:${record.stageId}`;
+    const existing = playerRecords.get(key);
+    playerRecords.set(key, existing ? { ...existing, ...record } : record);
+  },
+  async getPlayerStageProgress(playerId: string, stageId: string) {
+    return playerStageProgress.get(`${playerId}:${stageId}`) || null;
+  },
+  async upsertPlayerStageProgress(progress: any) {
+    const key = `${progress.playerId}:${progress.stageId}`;
+    const existing = playerStageProgress.get(key);
+    playerStageProgress.set(key, existing ? { ...existing, ...progress } : progress);
+  },
 
   async createSecurityEvent(_event: any) { /* best effort */ },
 };
 
 export function resetBattleStores(): void {
-  sessions = new Map(); events = []; results = new Map(); _initialized = false;
+  sessions = new Map(); events = []; results = new Map();
+  playerRecords = new Map(); playerStageProgress = new Map();
+  _initialized = false;
   upgradeLocks.clear();
 }

@@ -3,14 +3,24 @@
  */
 import { getDb, withPostgresTransaction } from './postgres-connection.js';
 import {
-  users, operatorRoles, operatorRolePermissions, operatorPermissions,
+  users, operatorRoles, operatorRolePermissions, operatorPermissions, operatorAccounts,
   playerProfiles, walletBalances, currencyLedger, battleSessions, battleResults, securityEvents, operatorGrants, accountSanctions, operatorAuditLogs,
 } from './postgres-schema.js';
-import { eq, and, or, inArray, desc, count, like, type SQL } from 'drizzle-orm';
+import { eq, and, or, inArray, desc, count, like, gte, lte, gt, isNull, type SQL } from 'drizzle-orm';
 import { AppError } from '../shared/errors.js';
 import { postgresWalletRepo } from './postgres-wallet.repository.js';
-import type { AdminRepository } from '../repository.js';
+import type { AdminRepository, AuditLogFilter, SecurityEventFilter } from '../repository.js';
 import { postgresTimestampToIso } from './postgres-timestamps.js';
+
+function parseSafeDetails(raw: string | null | undefined): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
 
 export const postgresAdminRepo: AdminRepository = {
   async listUsers(limit, offset, search, status) {
@@ -105,14 +115,57 @@ export const postgresAdminRepo: AdminRepository = {
       .limit(Math.max(1, Math.min(limit, 50)));
   },
   async createSanction(data: typeof accountSanctions.$inferInsert) {
-    await getDb().insert(accountSanctions).values(data);
-    return data;
+    return withPostgresTransaction(async () => {
+      const db = getDb();
+      const now = new Date();
+      const existing = await db.select({ id: accountSanctions.id }).from(accountSanctions).where(and(
+        eq(accountSanctions.userId, data.userId),
+        eq(accountSanctions.type, data.type),
+        eq(accountSanctions.status, 'active'),
+        or(isNull(accountSanctions.expiresAt), gt(accountSanctions.expiresAt, now)),
+      )).limit(1);
+      if (existing.length > 0) {
+        throw new AppError('동일한 유형의 활성 제재가 이미 존재합니다.', 409, 'DUPLICATE_SANCTION');
+      }
+      await db.insert(accountSanctions).values(data);
+      await db.insert(operatorAuditLogs).values({
+        id: crypto.randomUUID(),
+        operatorId: data.operatorId,
+        action: 'account_sanctioned',
+        targetType: 'user',
+        targetId: data.userId,
+        reasonCode: data.reasonCode || data.type,
+        reasonText: data.reasonText,
+        beforeSummary: '{}',
+        afterSummary: JSON.stringify({ sanctionId: data.id, type: data.type }),
+        result: 'success',
+        createdAt: now,
+      });
+      return data;
+    });
   },
   async revokeSanction(sanctionId, operatorId, reason) {
-    const rows = await getDb().update(accountSanctions).set({
-      status: 'revoked', revokedAt: new Date(), revokedByOperatorId: operatorId, revokeReason: reason,
-    }).where(eq(accountSanctions.id, sanctionId)).returning({ id: accountSanctions.id });
-    if (!rows.length) throw new AppError('제재를 찾을 수 없습니다.', 404, 'NOT_FOUND');
+    return withPostgresTransaction(async () => {
+      const db = getDb();
+      const now = new Date();
+      const rows = await db.update(accountSanctions).set({
+        status: 'revoked', revokedAt: now, revokedByOperatorId: operatorId, revokeReason: reason,
+      }).where(eq(accountSanctions.id, sanctionId)).returning({ id: accountSanctions.id, userId: accountSanctions.userId });
+      if (!rows.length) throw new AppError('제재를 찾을 수 없습니다.', 404, 'NOT_FOUND');
+      await db.insert(operatorAuditLogs).values({
+        id: crypto.randomUUID(),
+        operatorId,
+        action: 'account_unsanctioned',
+        targetType: 'user',
+        targetId: rows[0].userId,
+        reasonCode: 'sanction_revoked',
+        reasonText: reason || '',
+        beforeSummary: JSON.stringify({ sanctionId, status: 'active' }),
+        afterSummary: JSON.stringify({ sanctionId, status: 'revoked' }),
+        result: 'success',
+        createdAt: now,
+      });
+    });
   },
   async createGrant(data: Omit<typeof operatorGrants.$inferInsert, 'id' | 'createdAt'>) {
     if (data.grantType !== 'currency' || !['electricity', 'scrap'].includes(data.resourceCode)) {
@@ -168,7 +221,145 @@ export const postgresAdminRepo: AdminRepository = {
     const rows = await query.limit(limit || 50).offset(offset || 0);
     return rows;
   },
-  async listAuditLogs(limit = 50, action) { return getDb().select().from(operatorAuditLogs).where(action ? eq(operatorAuditLogs.action, action) : undefined).orderBy(desc(operatorAuditLogs.createdAt)).limit(limit); },
+  async listAuditLogs(filter: AuditLogFilter = {}) {
+    const db = getDb();
+    const limit = Math.max(1, Math.min(filter.limit ?? 50, 200));
+    const offset = Math.max(filter.offset ?? 0, 0);
+    const conditions: SQL[] = [];
+    if (filter.action) conditions.push(eq(operatorAuditLogs.action, filter.action));
+    if (filter.operatorId) conditions.push(eq(operatorAuditLogs.operatorId, filter.operatorId));
+    if (filter.targetId) conditions.push(eq(operatorAuditLogs.targetId, filter.targetId));
+    if (filter.startDate) conditions.push(gte(operatorAuditLogs.createdAt, filter.startDate));
+    if (filter.endDate) conditions.push(lte(operatorAuditLogs.createdAt, filter.endDate));
+    const base = db.select({
+      id: operatorAuditLogs.id,
+      operatorId: operatorAuditLogs.operatorId,
+      action: operatorAuditLogs.action,
+      targetType: operatorAuditLogs.targetType,
+      targetId: operatorAuditLogs.targetId,
+      reasonCode: operatorAuditLogs.reasonCode,
+      reasonText: operatorAuditLogs.reasonText,
+      result: operatorAuditLogs.result,
+      createdAt: operatorAuditLogs.createdAt,
+    }).from(operatorAuditLogs);
+    const rows = conditions.length > 0
+      ? await base.where(and(...conditions)).orderBy(desc(operatorAuditLogs.createdAt), desc(operatorAuditLogs.id)).limit(limit).offset(offset)
+      : await base.orderBy(desc(operatorAuditLogs.createdAt), desc(operatorAuditLogs.id)).limit(limit).offset(offset);
+    return rows.map((row) => ({ ...row, createdAt: postgresTimestampToIso(row.createdAt) }));
+  },
+  async listOperators() {
+    const db = getDb();
+    const rows = await db.select({
+      id: users.id,
+      email: users.email,
+      nickname: users.nickname,
+      role: users.role,
+      status: users.status,
+      createdAt: users.createdAt,
+    }).from(users).where(inArray(users.role, ['operator', 'admin', 'administrator']));
+    return rows.map((row) => ({ ...row, createdAt: postgresTimestampToIso(row.createdAt) }));
+  },
+  async createOperator(data) {
+    return withPostgresTransaction(async () => {
+      const db = getDb();
+      const now = new Date();
+      const existing = await db.select({ id: users.id }).from(users).where(eq(users.email, data.email)).limit(1);
+      if (existing.length > 0) {
+        throw new AppError('이미 사용 중인 이메일입니다.', 409, 'DUPLICATE_ACCOUNT');
+      }
+      const newUserId = crypto.randomUUID();
+      await db.insert(users).values({
+        id: newUserId, email: data.email, nickname: data.nickname, passwordHash: data.passwordHash,
+        role: data.role, status: 'active', createdAt: now, updatedAt: now,
+      });
+      await db.insert(operatorAccounts).values({
+        id: crypto.randomUUID(), userId: newUserId, roleId: data.role,
+        grantedBy: data.grantedBy, grantedAt: now, status: 'active', createdAt: now, updatedAt: now,
+      });
+      await db.insert(operatorAuditLogs).values({
+        id: crypto.randomUUID(),
+        operatorId: data.grantedBy,
+        action: 'operator_created',
+        targetType: 'user',
+        targetId: newUserId,
+        reasonCode: 'role_grant',
+        reasonText: `Created ${data.role}: ${data.email}`,
+        beforeSummary: '{}',
+        afterSummary: JSON.stringify({ role: data.role, email: data.email }),
+        result: 'success',
+        createdAt: now,
+      });
+      return { id: newUserId, email: data.email, role: data.role, status: 'active' };
+    });
+  },
+  async updateOperatorRole(targetId, role, operatorId, reason) {
+    return withPostgresTransaction(async () => {
+      const db = getDb();
+      const now = new Date();
+      const userRows = await db.select({ id: users.id, role: users.role }).from(users).where(eq(users.id, targetId)).limit(1);
+      if (userRows.length === 0) {
+        throw new AppError('사용자를 찾을 수 없습니다.', 404, 'NOT_FOUND');
+      }
+      const oldRole = userRows[0].role;
+      await db.update(users).set({ role, updatedAt: now }).where(eq(users.id, targetId));
+      await db.insert(operatorAuditLogs).values({
+        id: crypto.randomUUID(),
+        operatorId,
+        action: 'role_changed',
+        targetType: 'user',
+        targetId,
+        reasonCode: 'role_grant',
+        reasonText: reason,
+        beforeSummary: JSON.stringify({ role: oldRole }),
+        afterSummary: JSON.stringify({ role }),
+        result: 'success',
+        createdAt: now,
+      });
+      return { id: targetId, role, oldRole };
+    });
+  },
+  async listSecurityEvents(filter: SecurityEventFilter = {}) {
+    const db = getDb();
+    const limit = Math.max(1, Math.min(filter.limit ?? 50, 200));
+    const offset = Math.max(filter.offset ?? 0, 0);
+    const conditions: SQL[] = [];
+    if (filter.eventType) conditions.push(eq(securityEvents.eventType, filter.eventType));
+    if (filter.userId) conditions.push(eq(securityEvents.userId, filter.userId));
+    if (filter.severity) conditions.push(eq(securityEvents.severity, filter.severity));
+    if (filter.source) conditions.push(eq(securityEvents.source, filter.source));
+    if (filter.startDate) conditions.push(gte(securityEvents.occurredAt, filter.startDate));
+    if (filter.endDate) conditions.push(lte(securityEvents.occurredAt, filter.endDate));
+    const base = db.select().from(securityEvents);
+    const rows = conditions.length > 0
+      ? await base.where(and(...conditions)).orderBy(desc(securityEvents.occurredAt), desc(securityEvents.id)).limit(limit).offset(offset)
+      : await base.orderBy(desc(securityEvents.occurredAt), desc(securityEvents.id)).limit(limit).offset(offset);
+    return rows.map((e) => ({
+      id: e.id,
+      eventType: e.eventType,
+      userId: e.userId,
+      playerId: e.playerId,
+      sessionId: e.sessionId,
+      code: e.code,
+      severity: e.severity,
+      source: e.source,
+      safeDetails: parseSafeDetails(e.safeDetails),
+      referenceType: e.referenceType,
+      referenceId: e.referenceId,
+      occurredAt: postgresTimestampToIso(e.occurredAt),
+      reviewedAt: e.reviewedAt ? postgresTimestampToIso(e.reviewedAt) : null,
+      resolution: e.resolution,
+    }));
+  },
+  async reviewSecurityEvent(eventId, operatorId, resolution, resolutionNote) {
+    const now = new Date();
+    const rows = await getDb().update(securityEvents).set({
+      reviewedAt: now,
+      reviewedByOperatorId: operatorId,
+      resolution,
+      resolutionNote: resolutionNote || '',
+    }).where(eq(securityEvents.id, eventId)).returning({ id: securityEvents.id });
+    return rows.length > 0;
+  },
   async getUserSanctions(userId: string) {
     const db = getDb(); const { accountSanctions } = await import("./postgres-schema.js"); const { eq } = await import("drizzle-orm"); return db.select().from(accountSanctions).where(eq(accountSanctions.userId, userId));
   },
