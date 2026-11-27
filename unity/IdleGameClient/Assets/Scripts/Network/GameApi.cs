@@ -169,6 +169,8 @@ namespace IdleGame.Network
             Send("api/parts/upgrade", "POST", new { partCode }, idempotencyKey: idempotencyKey);
         public Task<JToken> MechaConfigs() => Send("api/mecha/configs");
         public Task<JToken> MechaParts() => Send("api/mecha/parts");
+        public Task<JToken> MechaStats() => Send("api/mecha/stats");
+        public Task<JToken> UpgradesCatalog() => Send("api/upgrades", authenticated: false);
         public Task<JToken> ResearchCatalog() => Send("api/research", authenticated: false);
         public Task<JToken> MyResearch() => Send("api/research/my");
         public Task<JToken> LevelUpResearch(string code, string idempotencyKey = null) =>
@@ -190,6 +192,11 @@ namespace IdleGame.Network
             Send("api/battles/" + Uri.EscapeDataString(sessionId) + "/abandon", "POST");
         public Task<JToken> ReportBattle(string sessionId, object report, string key) =>
             Send("api/battles/" + Uri.EscapeDataString(sessionId) + "/progress", "POST", report, idempotencyKey: key);
+        public Task<JToken> OfferBattleUpgrades(string sessionId, string idempotencyKey = null) =>
+            Send("api/battles/" + Uri.EscapeDataString(sessionId) + "/upgrades/offer", "POST", idempotencyKey: idempotencyKey);
+        public Task<JToken> SelectBattleUpgrade(string sessionId, string upgradeCode, string idempotencyKey = null) =>
+            Send("api/battles/" + Uri.EscapeDataString(sessionId) + "/upgrades/select", "POST",
+                new { selectedUpgradeCode = upgradeCode }, idempotencyKey: idempotencyKey);
         public Task<JToken> FinishBattle(string sessionId, object report, string key) =>
             Send("api/battles/" + Uri.EscapeDataString(sessionId) + "/finish", "POST", report, idempotencyKey: key);
 

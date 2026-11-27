@@ -34,10 +34,20 @@ namespace IdleGame
         public readonly List<Enemy> Enemies = new List<Enemy>();
         public readonly List<Bullet> Bullets = new List<Bullet>();
         public const float PlayerRadius = 9, MoveSpeed = 360;
+        private const float DefaultDashCooldown = .75f, BaseDashCooldownMs = 5000, MinDashCooldown = .2f, MinAttackInterval = .05f;
         public readonly List<string> BossesDefeated = new List<string>();
         public readonly string SessionId, StageName;
         public readonly int Duration, MaxKills, MaxCore;
-        public readonly float MaxHp, AttackPower, AttackInterval;
+        public float MaxHp { get; private set; }
+        public float AttackPower { get; private set; }
+        public float AttackInterval { get; private set; }
+        // Per-instance stats from the server snapshot and in-battle upgrades; MoveSpeed stays the 100% baseline.
+        public float CurrentMoveSpeed { get; private set; } = MoveSpeed;
+        public float DashCooldownDuration { get; private set; } = DefaultDashCooldown;
+        public float HpRegenPerSec { get; private set; }
+        public float ShieldHp { get; private set; }
+        public float HealOnKill { get; private set; }
+        public readonly List<string> AppliedUpgrades = new List<string>();
         public float Elapsed { get; private set; }
         public float Hp { get; private set; }
         public float PlayerX { get; private set; }
@@ -57,6 +67,7 @@ namespace IdleGame
         private readonly Random random;
         private readonly int corePerKill;
         private int nextBoss, spawned;
+        private float shieldCapacity;
         private float shotWait, spawnWait, dodgeWait, invincible, hitFlash, lastPlayerX, lastPlayerY;
 
         public BattleRun(JToken stage, JToken session)
@@ -72,6 +83,10 @@ namespace IdleGame
             MaxHp = (float?)stats?["maxHp"] ?? 0;
             AttackPower = (float?)stats?["attackPower"] ?? 0;
             AttackInterval = ((float?)stats?["attackSpeed"] ?? 0) / 1000f;
+            float moveSpeed = (float?)stats?["moveSpeed"] ?? 0;
+            if (moveSpeed > 0) CurrentMoveSpeed = MoveSpeed * moveSpeed / 100f;
+            float dashCooldown = (float?)stats?["dashCooldown"] ?? 0;
+            if (dashCooldown > 0) DashCooldownDuration = ScaleDashCooldown(dashCooldown);
             bossDefinitions = stage["bosses"] as JArray ?? new JArray();
             var times = stage["bossTimings"];
             bossTimes = times?.Type == JTokenType.String ? JArray.Parse((string)times) : times as JArray ?? new JArray();
@@ -87,11 +102,105 @@ namespace IdleGame
             Hp = MaxHp;
         }
 
+        private static float ScaleDashCooldown(float milliseconds) =>
+            Math.Max(MinDashCooldown, DefaultDashCooldown * (milliseconds / BaseDashCooldownMs));
+
+        /// <summary>
+        /// Applies the server's effectiveStats (attackSpeed/dashCooldown in ms, moveSpeed in % of 100) after an upgrade pick.
+        /// Max HP and shield gains also heal by the same amount; reductions only clamp the current value.
+        /// </summary>
+        public void ApplyEffectiveStats(JToken effectiveStats, JToken selectedUpgrade = null)
+        {
+            if (effectiveStats != null && effectiveStats.Type != JTokenType.Null)
+            {
+                float? attack = (float?)effectiveStats["attackPower"];
+                if (attack > 0) AttackPower = attack.Value;
+                float? attackSpeed = (float?)effectiveStats["attackSpeed"];
+                if (attackSpeed > 0) AttackInterval = Math.Max(MinAttackInterval, attackSpeed.Value / 1000f);
+                float? maxHp = (float?)effectiveStats["maxHp"];
+                if (maxHp > 0)
+                {
+                    float gained = Math.Max(0, maxHp.Value - MaxHp);
+                    MaxHp = maxHp.Value;
+                    if (Hp > 0) Hp = Math.Min(MaxHp, Hp + gained);
+                }
+                float? moveSpeed = (float?)effectiveStats["moveSpeed"];
+                if (moveSpeed > 0) CurrentMoveSpeed = MoveSpeed * (moveSpeed.Value / 100f);
+                float? dashCooldown = (float?)effectiveStats["dashCooldown"];
+                if (dashCooldown > 0) DashCooldownDuration = ScaleDashCooldown(dashCooldown.Value);
+                float? regen = (float?)effectiveStats["hpRegenPerSec"];
+                if (regen != null) HpRegenPerSec = Math.Max(0, regen.Value);
+                float? shield = (float?)effectiveStats["shieldHp"];
+                if (shield != null)
+                {
+                    float target = Math.Max(0, shield.Value);
+                    ShieldHp = Math.Max(0, ShieldHp + target - shieldCapacity);
+                    shieldCapacity = target;
+                }
+                float? healOnKill = (float?)effectiveStats["healOnKill"];
+                if (healOnKill != null) HealOnKill = Math.Max(0, healOnKill.Value);
+            }
+            string upgradeId = selectedUpgrade != null && selectedUpgrade.Type != JTokenType.Null ? (string)selectedUpgrade["id"] : null;
+            if (!string.IsNullOrEmpty(upgradeId)) AppliedUpgrades.Add(upgradeId);
+        }
+
+        // Local-only upgrade pool for the practice battle; mirrors the server offer/effect shape.
+        private static readonly JArray PracticeUpgrades = JArray.Parse(@"[
+            {""upgradeId"":""practice_rapid_fire"",""name"":""연사 강화"",""description"":""사격 간격이 짧아지고 공격력이 오른다."",""category"":""weapon"",""tier"":1,""group"":""practice_rapid"",""effects"":{""attackSpeed"":-40,""attackPower"":2}},
+            {""upgradeId"":""practice_armor_plate"",""name"":""장갑판"",""description"":""최대 체력이 늘고 같은 만큼 회복한다."",""category"":""armor"",""tier"":1,""group"":""practice_armor"",""effects"":{""maxHp"":40}},
+            {""upgradeId"":""practice_thruster"",""name"":""추진기"",""description"":""이동 속도가 빨라진다."",""category"":""utility"",""tier"":1,""group"":""practice_thruster"",""effects"":{""moveSpeed"":15}},
+            {""upgradeId"":""practice_dash_coil"",""name"":""대시 코일"",""description"":""대시 재사용 대기시간이 줄어든다."",""category"":""utility"",""tier"":1,""group"":""practice_dash"",""effects"":{""dashCooldown"":-1000}},
+            {""upgradeId"":""practice_nanite"",""name"":""수리 나노봇"",""description"":""초당 체력을 회복한다."",""category"":""armor"",""tier"":1,""group"":""practice_nanite"",""effects"":{""hpRegenPerSec"":1.5}},
+            {""upgradeId"":""practice_barrier"",""name"":""에너지 보호막"",""description"":""피해를 먼저 흡수하는 보호막을 얻는다."",""category"":""armor"",""tier"":1,""group"":""practice_barrier"",""effects"":{""shieldHp"":30}},
+            {""upgradeId"":""practice_salvage"",""name"":""잔해 회수"",""description"":""적을 처치할 때마다 체력을 회복한다."",""category"":""special"",""tier"":1,""group"":""practice_salvage"",""effects"":{""healAmount"":4}},
+            {""upgradeId"":""practice_overcharge"",""name"":""과충전 탄"",""description"":""공격력이 크게 오른다."",""category"":""weapon"",""tier"":1,""group"":""practice_overcharge"",""effects"":{""attackPower"":5}}
+        ]");
+
+        /// <summary>Builds a deterministic three-option offer for practice mode in the same shape as the server's offer.</summary>
+        public static JObject BuildPracticeOffer(int level)
+        {
+            var options = new JArray();
+            int first = (Math.Max(1, level) - 1) * 3;
+            for (int slot = 0; slot < 3; slot++)
+            {
+                var option = (JObject)PracticeUpgrades[(first + slot) % PracticeUpgrades.Count].DeepClone();
+                option["slot"] = slot;
+                options.Add(option);
+            }
+            return new JObject { ["level"] = level, ["options"] = options };
+        }
+
+        /// <summary>Practice-mode equivalent of the server's select response: current stats plus the chosen option's effects.</summary>
+        public JObject BuildPracticeSelection(JToken option)
+        {
+            var effects = option["effects"];
+            float Delta(string key) => (float?)effects?[key] ?? 0;
+            var stats = new JObject
+            {
+                ["attackPower"] = AttackPower + Delta("attackPower"),
+                ["attackSpeed"] = Math.Max(MinAttackInterval * 1000f, AttackInterval * 1000f + Delta("attackSpeed")),
+                ["moveSpeed"] = CurrentMoveSpeed / MoveSpeed * 100f + Delta("moveSpeed"),
+                ["dashCooldown"] = Math.Max(MinDashCooldown / DefaultDashCooldown * BaseDashCooldownMs,
+                    DashCooldownDuration / DefaultDashCooldown * BaseDashCooldownMs + Delta("dashCooldown")),
+                ["maxHp"] = MaxHp + Delta("maxHp"),
+                ["hpRegenPerSec"] = HpRegenPerSec + Delta("hpRegenPerSec"),
+                ["shieldHp"] = shieldCapacity + Delta("shieldHp"),
+                ["healOnKill"] = HealOnKill + Delta("healAmount")
+            };
+            return new JObject
+            {
+                ["effectiveStats"] = stats,
+                ["selectedUpgrade"] = new JObject { ["id"] = option["upgradeId"], ["name"] = option["name"],
+                    ["description"] = option["description"], ["category"] = option["category"],
+                    ["tier"] = option["tier"], ["effects"] = effects?.DeepClone() }
+            };
+        }
+
         public void Dodge(int direction)
         {
             if (Ended || dodgeWait > 0 || direction == 0) return;
             PlayerX = Math.Max(-160, Math.Min(160, PlayerX + Math.Sign(direction) * 100));
-            dodgeWait = .75f;
+            dodgeWait = DashCooldownDuration;
             invincible = .25f;
         }
 
@@ -103,7 +212,7 @@ namespace IdleGame
             float dy = Math.Max(-180, Math.Min(180, y)) - PlayerY;
             float distance = (float)Math.Sqrt(dx * dx + dy * dy);
             if (distance < .001f) return;
-            float step = Math.Min(distance, MoveSpeed * Math.Min(delta, .1f));
+            float step = Math.Min(distance, CurrentMoveSpeed * Math.Min(delta, .1f));
             PlayerX += dx / distance * step;
             PlayerY += dy / distance * step;
         }
@@ -119,6 +228,7 @@ namespace IdleGame
             hitFlash -= delta;
             spawnWait -= delta;
             shotWait -= delta;
+            if (HpRegenPerSec > 0 && Hp > 0) Hp = Math.Min(MaxHp, Hp + HpRegenPerSec * delta);
             while (nextBoss < bossTimes.Count && Elapsed >= Math.Max(Duration * .5f, (float)bossTimes[nextBoss]))
             {
                 var boss = bossDefinitions[nextBoss++];
@@ -281,7 +391,14 @@ namespace IdleGame
         private void TakeHit(float damage)
         {
             if (invincible > 0) return;
-            Hp = Math.Max(0, Hp - damage);
+            float remaining = damage;
+            if (ShieldHp > 0)
+            {
+                float absorbed = Math.Min(ShieldHp, remaining);
+                ShieldHp -= absorbed;
+                remaining -= absorbed;
+            }
+            Hp = Math.Max(0, Hp - remaining);
             HitsTaken++;
             invincible = .4f;
             hitFlash = .15f;
@@ -292,6 +409,7 @@ namespace IdleGame
             Enemies.Remove(enemy);
             Kills++;
             Core = Math.Min(MaxCore, Core + corePerKill);
+            if (HealOnKill > 0 && Hp > 0) Hp = Math.Min(MaxHp, Hp + HealOnKill);
             if (enemy.BossId != null) BossesDefeated.Add(enemy.BossId);
         }
 

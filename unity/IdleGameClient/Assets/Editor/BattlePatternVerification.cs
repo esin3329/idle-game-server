@@ -240,6 +240,66 @@ namespace IdleGame.Editor
             var clock = EmptyRun(); float before = clock.Elapsed;
             clock.Tick(10);
             Check("frame stall advances at most 100ms", Math.Abs(clock.Elapsed - before - .1f) < .0001f);
+            var upgraded = EmptyRun();
+            upgraded.ApplyEffectiveStats(null);
+            upgraded.ApplyEffectiveStats(JObject.Parse("{\"attackPower\":25,\"attackSpeed\":20,\"moveSpeed\":150,\"dashCooldown\":2500,\"maxHp\":130}"),
+                new JObject { ["id"] = "machine_gun_1" });
+            Check("effective stats raise attack power and clamp attack interval", upgraded.AttackPower == 25 &&
+                Math.Abs(upgraded.AttackInterval - .05f) < .0001f);
+            Check("effective stats scale move speed and dash cooldown", Math.Abs(upgraded.CurrentMoveSpeed - 540) < .01f &&
+                Math.Abs(upgraded.DashCooldownDuration - .375f) < .0001f);
+            Check("max hp gain heals the same amount", upgraded.MaxHp == 130 && upgraded.Hp == 130);
+            Check("applied upgrade ids are recorded", upgraded.AppliedUpgrades.Count == 1 && upgraded.AppliedUpgrades[0] == "machine_gun_1");
+            upgraded.MoveTo(500, 0, .1f);
+            Check("raised move speed moves farther per step", Math.Abs(upgraded.PlayerX - 54) < .01f);
+            upgraded.ApplyEffectiveStats(JObject.Parse("{\"dashCooldown\":100,\"maxHp\":90}"));
+            Check("dash cooldown never drops below its floor", Math.Abs(upgraded.DashCooldownDuration - .2f) < .0001f);
+            Check("lower max hp only clamps current hp", upgraded.MaxHp == 90 && upgraded.Hp == 90);
+            upgraded.Dodge(1);
+            for (int i = 0; i < 3; i++) upgraded.Tick(.1f);
+            upgraded.Dodge(-1);
+            Check("applied dash cooldown governs the next dash", Math.Abs(upgraded.PlayerX - 54) < .01f);
+
+            var shielded = EmptyRun();
+            shielded.ApplyEffectiveStats(JObject.Parse("{\"shieldHp\":10}"));
+            shielded.Bullets.Add(Shot(0, 100, -2000));
+            shielded.Tick(.1f);
+            Check("shield absorbs damage before hp", shielded.Hp == 100 && shielded.ShieldHp == 3 && shielded.HitsTaken == 1);
+            shielded.ApplyEffectiveStats(JObject.Parse("{\"shieldHp\":15}"));
+            Check("raising shield capacity adds only the increase", shielded.ShieldHp == 8);
+            for (int i = 0; i < 5; i++) shielded.Tick(.1f);
+            shielded.Bullets.Add(Shot(0, 100, -2000));
+            shielded.Tick(.1f);
+            Check("hits that exceed the shield spill into hp", shielded.ShieldHp == 1 && shielded.Hp == 100);
+            for (int i = 0; i < 5; i++) shielded.Tick(.1f);
+            shielded.Bullets.Add(Shot(0, 100, -2000));
+            shielded.Tick(.1f);
+            Check("remaining damage reaches hp once the shield breaks", shielded.ShieldHp == 0 && Math.Abs(shielded.Hp - 94) < .001f);
+
+            var regen = EmptyRun();
+            regen.Bullets.Add(Shot(0, 100, -2000));
+            regen.Tick(.1f);
+            regen.ApplyEffectiveStats(JObject.Parse("{\"hpRegenPerSec\":10}"));
+            for (int i = 0; i < 5; i++) regen.Tick(.1f);
+            Check("hp regenerates per second", Math.Abs(regen.Hp - 98) < .01f);
+            for (int i = 0; i < 10; i++) regen.Tick(.1f);
+            Check("hp regeneration stops at max hp", regen.Hp == 100);
+
+            var heal = NewRun();
+            heal.ApplyEffectiveStats(JObject.Parse("{\"healOnKill\":5}"));
+            heal.Bullets.Add(Shot(0, 100, -2000));
+            heal.Enemies.Add(new BattleRun.Enemy { X = 0, Y = 100, Hp = 1, MaxHp = 1, AttackWait = 10 });
+            for (int i = 0; i < 10; i++) heal.Tick(.1f);
+            Check("kills heal by the healOnKill amount", heal.Kills == 1 && Math.Abs(heal.Hp - 98) < .01f);
+
+            var practice = EmptyRun();
+            var offer = BattleRun.BuildPracticeOffer(1);
+            var selection = practice.BuildPracticeSelection(offer["options"][1]);
+            practice.ApplyEffectiveStats(selection["effectiveStats"], selection["selectedUpgrade"]);
+            Check("practice offer has three options with unchanged baseline stats", ((JArray)offer["options"]).Count == 3 &&
+                Math.Abs(practice.AttackInterval - 1) < .0001f && Math.Abs(practice.DashCooldownDuration - .75f) < .0001f);
+            Check("practice selection applies through effective stats", practice.MaxHp == 140 && practice.Hp == 140 &&
+                practice.AppliedUpgrades.Count == 1 && practice.AppliedUpgrades[0] == "practice_armor_plate");
             return "BULLET_TESTS_PASS: " + passed.Count + " checks\n" + string.Join("\n", passed);
         }
 

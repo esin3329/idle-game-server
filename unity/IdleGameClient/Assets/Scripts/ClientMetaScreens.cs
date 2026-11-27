@@ -20,9 +20,9 @@ namespace IdleGame
         private const string WorkshopTitle = "제작소 · 설계도";
         private const string ResearchTitle = "연구소";
         private const string ResearchNotice =
-            "실시간 적용 태그가 붙은 연구만 현재 전기 생산량에 즉시 반영되며, 나머지 연구는 서버에 저장되는 프리뷰 기능입니다.";
+            "[실시간 적용] 연구는 전기 생산, 방치 보상, 강화 비용, 전투 스탯, 스크랩·전투 보상에 서버가 즉시 반영합니다. 표시되지 않은 연구는 서버에 저장만 되는 프리뷰입니다.";
         private const string MetaPreviewNotice =
-            "파츠 장착 및 연구 강화는 서버에 저장됩니다. (현재 전투 세션 스탯 스냅샷에는 아직 자동 반영되지 않는 메타 관리 프리뷰 기능입니다.)";
+            "파츠 장착과 연구 강화는 서버에 저장됩니다. 연구 효과는 [실시간 적용] 표시가 붙은 항목만 전투 스탯과 보상에 반영됩니다.";
 
         // 서버에서 성공 처리됐는지 알 수 없는 요청을 재시도할 때 같은 Idempotency-Key를 재사용하기 위한 보관소.
         private readonly Dictionary<string, string> pendingActionKeys = new Dictionary<string, string>();
@@ -71,9 +71,43 @@ namespace IdleGame
             !(error is ApiException apiError && apiError.Status >= 400 && apiError.Status < 500 &&
               apiError.Status != 408 && apiError.Status != 429);
 
-        /// <summary>서버에 반영된 연구 중 현재 전기 생산/방치 보상 계산(routes.ts getResearchBonus)에 쓰이는 것만 true.</summary>
-        public static bool IsLiveResearchEffect(string code) =>
-            code == "prod_passive" || code == "prod_cap" || code == "util_idle_reward";
+        private static readonly HashSet<string> LiveResearchCodes = new HashSet<string>
+        {
+            "prod_eff_1", "prod_eff_2", "prod_passive", "prod_cap", "util_claim_bonus", "util_idle_reward",
+            "econ_upgrade_discount_1", "econ_upgrade_discount_2", "combat_atk_1", "combat_atk_2", "combat_hp_1",
+            "combat_hp_2", "combat_speed", "combat_ult", "econ_scrap", "econ_battle_reward"
+        };
+
+        /// <summary>서버가 전기 생산·방치 보상·강화 비용·전투 스탯·보상 계산에 실제로 반영하는 연구만 true.</summary>
+        public static bool IsLiveResearchEffect(string code) => code != null && LiveResearchCodes.Contains(code);
+
+        /// <summary>격납고 상단용 전투 스탯. 아직 이 엔드포인트가 없는 서버(404) 등 일시 오류는 격납고를 막지 않도록 null로 폴백한다.</summary>
+        private async Task<JToken> TryLoadCombatStats()
+        {
+            try
+            {
+                var result = await api.MechaStats();
+                var snapshot = result?["statSnapshot"];
+                if (snapshot?.Type == JTokenType.String) snapshot = JToken.Parse((string)snapshot);
+                return snapshot is JObject ? snapshot : null;
+            }
+            catch (ApiException error) when (error.Status != 401) { return null; }
+            catch (Newtonsoft.Json.JsonException) { return null; }
+        }
+
+        /// <summary>공격력 / 공속(발사 간격) / 최대 HP / 이동속도 / 대시 쿨다운을 한 줄 묶음으로 요약한다.</summary>
+        public static string CombatStatSummary(JToken snapshot)
+        {
+            string Value(string key, string format, double scale = 1)
+            {
+                var token = snapshot?[key];
+                return token == null || (token.Type != JTokenType.Integer && token.Type != JTokenType.Float) ? "-" :
+                    ((double)token * scale).ToString(format, CultureInfo.InvariantCulture);
+            }
+            return $"공격력 {Value("attackPower", "0.##")} · 공속 {Value("attackSpeed", "0.###", .001)}초\n" +
+                $"최대 HP {Value("maxHp", "0.##")} · 이동속도 {Value("moveSpeed", "0.##")}%\n" +
+                $"대시 쿨다운 {Value("dashCooldown", "0.##", .001)}초";
+        }
 
         private void ShowMetaRefreshError(string screenTitle, Func<string, Task> refreshScreen)
         {
@@ -97,9 +131,15 @@ namespace IdleGame
                 foreach (var detail in detailList)
                     if (detail["partCode"] != null) stats[(string)detail["partCode"]] = detail["stats"];
             var equipped = mine["equipped"] as JObject;
+            var combatStats = await TryLoadCombatStats();
 
             Clear(HangarTitle);
             notice.text = message ?? "보유 파츠를 장착하거나 강화하세요.";
+            if (combatStats != null)
+            {
+                Label("현재 전투 스탯", 22, Accent, 34);
+                Label(CombatStatSummary(combatStats), 17, Color.white, TextHeight(3, 17));
+            }
             Label(MetaPreviewNotice, 16, Muted, TextHeight(4, 16));
             WalletLines(wallet);
             Label("장착 중", 22, Accent, 34);
