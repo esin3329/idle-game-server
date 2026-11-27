@@ -3,6 +3,7 @@
  *
  * 실행: npm run db:battle-seed
  */
+import { pathToFileURL } from 'node:url';
 import { eq, and } from 'drizzle-orm';
 import { getDb, closePostgresPool } from './postgres-connection.js';
 import { stages, stageRewards } from './postgres-schema.js';
@@ -34,7 +35,7 @@ const REWARDS: RewardSeed[] = [
   { stageId: 'stage_04_core', clearType: 'first', scrapMin: 1500, scrapMax: 2200, blueprintDropRate: 100 },
 ];
 
-async function seed() {
+export async function seed() {
   const db = getDb();
   console.log('Seeding battle content to PostgreSQL...\n');
 
@@ -54,16 +55,17 @@ async function seed() {
       corePerLevel: s.corePerLevel,
       corePerKill: s.corePerKill,
       scrapPerKill: s.scrapPerKill,
-      unlocked: s.sequence === 1 ? 1 : 0,
-      enabled: 1,
       contentVersion: s.contentVersion,
     };
 
     if (existing.length > 0) {
+      // Operator-controlled flags (`unlocked`, `enabled`) are preserved on update.
       await db.update(stages).set(values).where(eq(stages.id, s.id));
       console.log(`  [UPDATED] Stage: ${s.id} (${s.name})`);
     } else {
-      await db.insert(stages).values({ id: s.id, ...values, createdAt: new Date() });
+      await db.insert(stages).values({
+        id: s.id, ...values, unlocked: s.sequence === 1 ? 1 : 0, enabled: 1, createdAt: new Date(),
+      });
       console.log(`  [CREATED] Stage: ${s.id} (${s.name})`);
     }
   }
@@ -82,6 +84,10 @@ async function seed() {
         blueprintDropRate: r.blueprintDropRate,
         createdAt: new Date(),
       });
+    } else {
+      await db.update(stageRewards)
+        .set({ scrapMin: r.scrapMin, scrapMax: r.scrapMax, blueprintDropRate: r.blueprintDropRate })
+        .where(eq(stageRewards.id, existing[0].id));
     }
   }
 
@@ -99,4 +105,4 @@ async function main() {
   }
 }
 
-void main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();
