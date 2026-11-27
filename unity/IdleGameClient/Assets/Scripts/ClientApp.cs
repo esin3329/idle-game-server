@@ -243,37 +243,6 @@ namespace IdleGame
             ActionButton("기지로 돌아가기", () => Run(ShowBase), true);
         }
 
-        private async Task StartStage(string stageId, string stageName)
-        {
-            var session = await api.StartBattle(stageId);
-            string sessionId = (string)session["sessionId"] ?? (string)session["id"];
-            if (string.IsNullOrWhiteSpace(sessionId))
-                throw new ApiException(0, "INVALID_BATTLE_RESPONSE", "전투 세션 응답이 올바르지 않습니다.");
-
-            await ShowBattleSession(stageName, sessionId);
-        }
-
-        private async Task ShowBattleSession(string stageName, string sessionId)
-        {
-            var state = await api.BattleState(sessionId);
-            string status = (string)state["status"] ?? "unknown";
-            int kills = (int?)state["killsReported"] ?? 0;
-            int coreEnergy = (int?)state["coreEnergy"] ?? 0;
-            int battleLevel = (int?)state["battleLevel"] ?? 1;
-
-            Clear("출격 완료");
-            notice.text = $"{stageName} 전투 세션 상태를 확인했습니다.";
-            Label(status == "active" ? "전투 진행 중" : $"전투 상태: {status}", 26, Accent, 42);
-            Label($"전투 레벨 {battleLevel}\n처치 {kills} · 코어 에너지 {coreEnergy}", 20, Color.white, 70);
-            Label($"세션 ID\n{sessionId}", 18, Color.white, 70);
-            Label("실제 전투 플레이와 보상 수령은 다음 클라이언트 단계에서 연결됩니다.", 17, Muted, 64);
-            ActionButton("상태 새로고침", () => Run(() => ShowBattleSession(stageName, sessionId)), true);
-            if (status == "active")
-                ActionButton("출격 포기", () => Run(async () => { await api.AbandonBattle(sessionId); await ShowStages(); }));
-            ActionButton("스테이지 목록", () => Run(ShowStages));
-            ActionButton("기지로 돌아가기", () => Run(ShowBase));
-        }
-
         private async void Run(Func<Task> action)
         {
             if (busy) return;

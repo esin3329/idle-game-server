@@ -240,6 +240,128 @@ namespace IdleGame.Editor
             var clock = EmptyRun(); float before = clock.Elapsed;
             clock.Tick(10);
             Check("frame stall advances at most 100ms", Math.Abs(clock.Elapsed - before - .1f) < .0001f);
+            var upgraded = EmptyRun();
+            upgraded.ApplyEffectiveStats(null);
+            upgraded.ApplyEffectiveStats(JObject.Parse("{\"attackPower\":25,\"attackSpeed\":20,\"moveSpeed\":150,\"dashCooldown\":2500,\"maxHp\":130}"),
+                new JObject { ["id"] = "machine_gun_1" });
+            Check("effective stats raise attack power and clamp attack interval", upgraded.AttackPower == 25 &&
+                Math.Abs(upgraded.AttackInterval - .05f) < .0001f);
+            Check("effective stats scale move speed and dash cooldown", Math.Abs(upgraded.CurrentMoveSpeed - 540) < .01f &&
+                Math.Abs(upgraded.DashCooldownDuration - .375f) < .0001f);
+            Check("max hp gain heals the same amount", upgraded.MaxHp == 130 && upgraded.Hp == 130);
+            Check("applied upgrade ids are recorded", upgraded.AppliedUpgrades.Count == 1 && upgraded.AppliedUpgrades[0] == "machine_gun_1");
+            upgraded.MoveTo(500, 0, .1f);
+            Check("raised move speed moves farther per step", Math.Abs(upgraded.PlayerX - 54) < .01f);
+            upgraded.ApplyEffectiveStats(JObject.Parse("{\"dashCooldown\":100,\"maxHp\":90}"));
+            Check("dash cooldown never drops below its floor", Math.Abs(upgraded.DashCooldownDuration - .2f) < .0001f);
+            Check("lower max hp only clamps current hp", upgraded.MaxHp == 90 && upgraded.Hp == 90);
+            upgraded.Dodge(1);
+            for (int i = 0; i < 3; i++) upgraded.Tick(.1f);
+            upgraded.Dodge(-1);
+            Check("applied dash cooldown governs the next dash", Math.Abs(upgraded.PlayerX - 54) < .01f);
+
+            var shielded = EmptyRun();
+            shielded.ApplyEffectiveStats(JObject.Parse("{\"shieldHp\":10}"));
+            shielded.Bullets.Add(Shot(0, 100, -2000));
+            shielded.Tick(.1f);
+            Check("shield absorbs damage before hp", shielded.Hp == 100 && shielded.ShieldHp == 3 && shielded.HitsTaken == 1);
+            shielded.ApplyEffectiveStats(JObject.Parse("{\"shieldHp\":15}"));
+            Check("raising shield capacity adds only the increase", shielded.ShieldHp == 8);
+            for (int i = 0; i < 5; i++) shielded.Tick(.1f);
+            shielded.Bullets.Add(Shot(0, 100, -2000));
+            shielded.Tick(.1f);
+            Check("hits that exceed the shield spill into hp", shielded.ShieldHp == 1 && shielded.Hp == 100);
+            for (int i = 0; i < 5; i++) shielded.Tick(.1f);
+            shielded.Bullets.Add(Shot(0, 100, -2000));
+            shielded.Tick(.1f);
+            Check("remaining damage reaches hp once the shield breaks", shielded.ShieldHp == 0 && Math.Abs(shielded.Hp - 94) < .001f);
+
+            var regen = EmptyRun();
+            regen.Bullets.Add(Shot(0, 100, -2000));
+            regen.Tick(.1f);
+            regen.ApplyEffectiveStats(JObject.Parse("{\"hpRegenPerSec\":10}"));
+            for (int i = 0; i < 5; i++) regen.Tick(.1f);
+            Check("hp regenerates per second", Math.Abs(regen.Hp - 98) < .01f);
+            for (int i = 0; i < 10; i++) regen.Tick(.1f);
+            Check("hp regeneration stops at max hp", regen.Hp == 100);
+
+            var heal = NewRun();
+            heal.ApplyEffectiveStats(JObject.Parse("{\"healOnKill\":5}"));
+            heal.Bullets.Add(Shot(0, 100, -2000));
+            heal.Enemies.Add(new BattleRun.Enemy { X = 0, Y = 100, Hp = 1, MaxHp = 1, AttackWait = 10 });
+            for (int i = 0; i < 10; i++) heal.Tick(.1f);
+            Check("kills heal by the healOnKill amount", heal.Kills == 1 && Math.Abs(heal.Hp - 98) < .01f);
+
+            var practice = EmptyRun();
+            var offer = BattleRun.BuildPracticeOffer(1);
+            var selection = practice.BuildPracticeSelection(offer["options"][1]);
+            practice.ApplyEffectiveStats(selection["effectiveStats"], selection["selectedUpgrade"]);
+            Check("practice offer has three options with unchanged baseline stats", ((JArray)offer["options"]).Count == 3 &&
+                Math.Abs(practice.AttackInterval - 1) < .0001f && Math.Abs(practice.DashCooldownDuration - .75f) < .0001f);
+            Check("practice selection applies through effective stats", practice.MaxHp == 140 && practice.Hp == 140 &&
+                practice.AppliedUpgrades.Count == 1 && practice.AppliedUpgrades[0] == "practice_armor_plate");
+            // Upgrade notification flow: a pick at level 2, stale replays, then the next level-up must still open an offer.
+            var levelTwoOffer = JObject.Parse("{\"accepted\":true,\"battleLevel\":2,\"upgradesAvailable\":true,\"pendingOffer\":{\"level\":2,\"options\":[]}}");
+            var levelOneOffer = JObject.Parse("{\"accepted\":true,\"battleLevel\":1,\"upgradesAvailable\":true,\"pendingOffer\":{\"level\":1,\"options\":[]}}");
+            var levelThreeOffer = JObject.Parse("{\"accepted\":true,\"battleLevel\":3,\"upgradesAvailable\":true,\"pendingOffer\":{\"level\":3,\"options\":[]}}");
+            var levelTwoBare = JObject.Parse("{\"accepted\":true,\"battleLevel\":2,\"upgradesAvailable\":true,\"pendingOffer\":null}");
+            var levelOneBare = JObject.Parse("{\"accepted\":true,\"battleLevel\":1,\"upgradesAvailable\":true,\"pendingOffer\":null}");
+            var quiet = JObject.Parse("{\"accepted\":true,\"battleLevel\":2,\"upgradesAvailable\":false,\"pendingOffer\":null}");
+            Check("first level-up offer opens the modal", ClientApp.DecideUpgradeProgress(levelTwoOffer, 0, false, false) == ClientApp.UpgradeProgressAction.OpenOffer);
+            Check("stale level 1 and level 2 offers are ignored after the level 2 pick",
+                ClientApp.DecideUpgradeProgress(levelOneOffer, 2, false, false) == ClientApp.UpgradeProgressAction.Ignore &&
+                ClientApp.DecideUpgradeProgress(levelTwoOffer, 2, false, false) == ClientApp.UpgradeProgressAction.Ignore);
+            Check("bare upgradesAvailable at the resolved level requests the next offer",
+                ClientApp.DecideUpgradeProgress(levelTwoBare, 2, false, false) == ClientApp.UpgradeProgressAction.RequestOffer);
+            Check("bare upgradesAvailable older than the resolved level is ignored",
+                ClientApp.DecideUpgradeProgress(levelOneBare, 2, false, false) == ClientApp.UpgradeProgressAction.Ignore);
+            Check("level 3 offer opens after the level 2 pick", ClientApp.DecideUpgradeProgress(levelThreeOffer, 2, false, false) == ClientApp.UpgradeProgressAction.OpenOffer);
+            Check("responses without upgrades are ignored", ClientApp.DecideUpgradeProgress(quiet, 2, false, false) == ClientApp.UpgradeProgressAction.Ignore &&
+                ClientApp.DecideUpgradeProgress(levelTwoBare, 2, false, true) == ClientApp.UpgradeProgressAction.Ignore);
+            Check("ended battle still opens an unresolved pending offer", ClientApp.DecideUpgradeProgress(levelThreeOffer, 2, true, false) == ClientApp.UpgradeProgressAction.OpenOffer);
+            Check("ended battle finishes on bare upgradesAvailable or a resolved offer",
+                ClientApp.DecideUpgradeProgress(levelTwoBare, 2, true, false) == ClientApp.UpgradeProgressAction.Ignore &&
+                ClientApp.DecideUpgradeProgress(levelTwoOffer, 2, true, false) == ClientApp.UpgradeProgressAction.Ignore);
+
+            // Module bonuses from loadoutSnapshot.bonuses apply at the start, and effective stats then raise them.
+            BattleRun WithLoadout(JToken loadout)
+            {
+                var loadoutStage = JObject.Parse("{\"name\":\"verification\",\"durationSeconds\":60,\"maxKills\":1}");
+                var loadoutSession = new JObject { ["id"] = "loadout", ["loadoutSnapshot"] = loadout,
+                    ["statSnapshot"] = new JObject { ["maxHp"] = 100, ["attackPower"] = 20, ["attackSpeed"] = 1000 } };
+                return new BattleRun(loadoutStage, loadoutSession);
+            }
+            var bonusObject = WithLoadout(JObject.Parse("{\"bonuses\":{\"shieldHp\":10,\"hpRegenPerSec\":1}}"));
+            var bonusString = WithLoadout("{\"bonuses\":{\"shieldHp\":10,\"hpRegenPerSec\":1}}");
+            Check("loadout module bonuses set the initial shield and regen",
+                bonusObject.ShieldHp == 10 && bonusObject.HpRegenPerSec == 1 && bonusString.ShieldHp == 10 && bonusString.HpRegenPerSec == 1);
+            bonusObject.ApplyEffectiveStats(JObject.Parse("{\"shieldHp\":25,\"hpRegenPerSec\":3}"));
+            Check("effective stats stack on top of module bonuses", bonusObject.ShieldHp == 25 && bonusObject.HpRegenPerSec == 3);
+            var noLoadout = WithLoadout(null);
+            Check("missing loadout bonuses leave defaults", noLoadout.ShieldHp == 0 && noLoadout.HpRegenPerSec == 0);
+
+            var plain = NewRun();
+            var plainTarget = new BattleRun.Enemy { X = 0, Y = 100, Hp = 100, MaxHp = 100, AttackWait = 10 };
+            plain.Enemies.Add(plainTarget);
+            for (int i = 0; i < 6; i++) plain.Tick(.1f);
+            var crit = NewRun();
+            crit.ApplyEffectiveStats(JObject.Parse("{\"critRate\":100,\"critDamage\":50}"));
+            var critTarget = new BattleRun.Enemy { X = 0, Y = 100, Hp = 100, MaxHp = 100, AttackWait = 10 };
+            crit.Enemies.Add(critTarget);
+            for (int i = 0; i < 6; i++) crit.Tick(.1f);
+            Check("hits without crit deal base damage", plainTarget.Hp == 80);
+            Check("guaranteed crit deals 1.5x plus critDamage", crit.CritRate == 100 && crit.CritDamage == 50 && critTarget.Hp == 60);
+
+            var fast = NewRun();
+            fast.ApplyEffectiveStats(new JObject(), JObject.Parse("{\"id\":\"rail\",\"effects\":{\"projectileSpeed\":50}}"));
+            fast.Enemies.Add(new BattleRun.Enemy { X = 0, Y = 100, Hp = 1000, MaxHp = 1000, AttackWait = 10 });
+            fast.Tick(.01f);
+            var fastShot = fast.Bullets.Find(shot => shot.Friendly);
+            Check("picked projectileSpeed raises friendly shot speed", fast.ProjectileSpeedMultiplier == 1.5f && fastShot != null &&
+                Math.Abs(Math.Sqrt(fastShot.VelocityX * fastShot.VelocityX + fastShot.VelocityY * fastShot.VelocityY) - 930) < 1);
+            var totals = NewRun();
+            totals.ApplyEffectiveStats(JObject.Parse("{\"projectileSpeed\":30}"), JObject.Parse("{\"id\":\"x\",\"effects\":{\"projectileSpeed\":30}}"));
+            Check("effectiveStats projectileSpeed is a total, not stacked with the card", Math.Abs(totals.ProjectileSpeedMultiplier - 1.3f) < .0001f);
             return "BULLET_TESTS_PASS: " + passed.Count + " checks\n" + string.Join("\n", passed);
         }
 

@@ -18,7 +18,8 @@ namespace IdleGame.Editor
         {
             "WalletSummary", "PartsCatalog", "EquipPart", "UpgradePart", "MechaConfigs", "MechaParts",
             "ResearchCatalog", "MyResearch", "LevelUpResearch", "Blueprints", "MyBlueprints", "CraftingQueue",
-            "StartCraft", "CompleteCraft", "Rankings"
+            "StartCraft", "CompleteCraft", "Rankings", "MechaStats", "UpgradesCatalog", "OfferBattleUpgrades",
+            "SelectBattleUpgrade"
         };
 
         private static readonly string[] Routes =
@@ -26,6 +27,7 @@ namespace IdleGame.Editor
             "api/wallet", "api/parts", "api/parts/equip", "api/parts/upgrade", "api/mecha/configs", "api/mecha/parts",
             "api/research", "api/research/my", "api/research/code/levelup", "api/crafting/blueprints",
             "api/crafting/my-blueprints", "api/crafting/queue", "api/crafting/bp/start", "api/crafting/id/complete",
+            "api/mecha/stats", "api/upgrades", "api/battles/id/upgrades/offer", "api/battles/id/upgrades/select",
             "api/rankings?limit=20"
         };
 
@@ -55,7 +57,8 @@ namespace IdleGame.Editor
                 typeof(GameApi).GetMethod("UpgradePart").GetParameters()[0].Name == "partCode");
             Check("rankings default limit is 20", typeof(GameApi).GetMethod("Rankings").GetParameters()[0].DefaultValue is int limit && limit == 20);
 
-            foreach (string name in new[] { "EquipPart", "UpgradePart", "LevelUpResearch", "StartCraft", "CompleteCraft" })
+            foreach (string name in new[] { "EquipPart", "UpgradePart", "LevelUpResearch", "StartCraft", "CompleteCraft",
+                "OfferBattleUpgrades", "SelectBattleUpgrade" })
             {
                 var parameters = typeof(GameApi).GetMethod(name).GetParameters();
                 var last = parameters[parameters.Length - 1];
@@ -76,10 +79,20 @@ namespace IdleGame.Editor
                 ClientApp.ShouldKeepPendingKey(new ApiException(429, "RATE", "x")) &&
                 ClientApp.ShouldKeepPendingKey(new ApiException(500, "SERVER", "x")) &&
                 ClientApp.ShouldKeepPendingKey(new InvalidOperationException()));
-            Check("only wired research is labeled live", ClientApp.IsLiveResearchEffect("prod_passive") &&
-                ClientApp.IsLiveResearchEffect("prod_cap") && ClientApp.IsLiveResearchEffect("util_idle_reward") &&
-                !ClientApp.IsLiveResearchEffect("prod_eff_1") && !ClientApp.IsLiveResearchEffect("combat_atk_1") &&
-                !ClientApp.IsLiveResearchEffect(null));
+            string[] liveResearch =
+            {
+                "prod_eff_1", "prod_eff_2", "prod_passive", "prod_cap", "util_claim_bonus", "util_idle_reward",
+                "econ_upgrade_discount_1", "econ_upgrade_discount_2", "combat_atk_1", "combat_atk_2", "combat_hp_1",
+                "combat_hp_2", "combat_speed", "combat_ult", "econ_scrap", "econ_battle_reward"
+            };
+            Check("every server-applied research is labeled live", Array.TrueForAll(liveResearch, ClientApp.IsLiveResearchEffect));
+            Check("unknown research is not labeled live", !ClientApp.IsLiveResearchEffect("prod_unknown") &&
+                !ClientApp.IsLiveResearchEffect("combat_unknown") && !ClientApp.IsLiveResearchEffect(null));
+            Check("upgrade card summarizes signed effects", ClientApp.UpgradeEffectSummary(
+                JObject.Parse("{\"attackSpeed\":-20,\"attackPower\":2,\"unknown\":9}")) == "공격력 +2 · 공격 간격 -20ms");
+            Check("hangar stat summary lists the five combat stats", ClientApp.CombatStatSummary(JObject.Parse(
+                "{\"attackPower\":10,\"attackSpeed\":150,\"maxHp\":100,\"moveSpeed\":100,\"dashCooldown\":5000}")) ==
+                "공격력 10 · 공속 0.15초\n최대 HP 100 · 이동속도 100%\n대시 쿨다운 5초");
             VerifyMutationKeys();
 
             foreach (string name in Screens)

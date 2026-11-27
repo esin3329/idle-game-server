@@ -28,6 +28,14 @@ namespace IdleGame
         private float muzzleUntil, dodgeUntil;
         private int dodgeDirection;
         private bool draggingPilot, battlePreview;
+        private const int PracticeUpgradeCoreStep = 50;
+        // In-battle upgrade selection: the simulation stays paused while the modal (or its offer request) is pending.
+        private bool battlePausedForUpgrade, upgradeSelecting, battleUpgradesUnsupported;
+        private JToken upgradeOffer;
+        private RectTransform upgradeModal;
+        private Text upgradeStatus;
+        private string pendingUpgradeOfferKey, pendingUpgradeSelectKey, pendingUpgradeSelectCode;
+        private int resolvedUpgradeLevel, nextPracticeUpgradeCore = PracticeUpgradeCoreStep, practiceUpgradeLevel = 1;
         private Vector2 pilotTarget;
         private RectTransform hitMarker;
 
@@ -62,6 +70,7 @@ namespace IdleGame
             nextReport = 5;
             finishKey = null; finishReport = null;
             visibleShots = 0; muzzleUntil = dodgeUntil = 0;
+            ResetUpgradeState();
             DrawBattle();
         }
 
@@ -184,7 +193,7 @@ namespace IdleGame
                 if (keyboard.sKey.isPressed || keyboard.downArrowKey.isPressed) direction.y--;
                 if (keyboard.spaceKey.wasPressedThisFrame) DodgePilot(direction.x < 0 ? -1 : 1);
             }
-            direction = direction.normalized * BattleRun.MoveSpeed * Mathf.Min(Time.unscaledDeltaTime, .1f);
+            direction = direction.normalized * battle.CurrentMoveSpeed * Mathf.Min(Time.unscaledDeltaTime, .1f);
             if (direction != Vector2.zero) battle.MoveTo(battle.PlayerX + direction.x,
                 battle.PlayerY + direction.y, Time.unscaledDeltaTime);
             else if (draggingPilot) battle.MoveTo(pilotTarget.x, pilotTarget.y, Time.unscaledDeltaTime);
@@ -192,7 +201,7 @@ namespace IdleGame
 
         private void DodgePilot(int direction)
         {
-            if (battle == null || battleNetworkFailed || battleFinishing) return;
+            if (battle == null || battleNetworkFailed || battleFinishing || battlePausedForUpgrade) return;
             float previous = battle.PlayerX;
             battle.Dodge(direction);
             if (battle.PlayerX == previous) return;
@@ -204,8 +213,11 @@ namespace IdleGame
         private void TickBattle()
         {
             if (battle == null || !arena || battleFinishing) return;
-            ReadBattleInput();
-            if (!battleNetworkFailed) battle.Tick(Time.unscaledDeltaTime);
+            if (!battlePausedForUpgrade)
+            {
+                ReadBattleInput();
+                if (!battleNetworkFailed) battle.Tick(Time.unscaledDeltaTime);
+            }
             pilot.anchoredPosition = BattlePosition(battle.PlayerX, battle.PlayerY);
             bool dodging = battle.Elapsed < dodgeUntil;
             MechaArt.Apply(pilotArt, dodging ? "dash" + (1 + (int)(battle.Elapsed * 12) % 3) : "back");
@@ -225,7 +237,7 @@ namespace IdleGame
                 battle.PlayerY + battle.AimY * 45);
             muzzleArt.rectTransform.localRotation = Quaternion.Euler(0, 0,
                 Mathf.Atan2(battle.AimY * arena.rect.height / 540, battle.AimX) * Mathf.Rad2Deg);
-            battleHud.text = $"{Mathf.FloorToInt(battle.Elapsed)} / {battle.Duration}초   HP {battle.Hp:0} / {battle.MaxHp:0}\n처치 {battle.Kills} · 코어 {battle.Core} · 대시 {(battle.DodgeCooldown > 0 ? battle.DodgeCooldown.ToString("0.0") + "초" : "준비")}";
+            battleHud.text = $"{Mathf.FloorToInt(battle.Elapsed)} / {battle.Duration}초   HP {battle.Hp:0} / {battle.MaxHp:0}{(battle.ShieldHp > 0 ? $" · 보호막 {battle.ShieldHp:0}" : "")}\n처치 {battle.Kills} · 코어 {battle.Core} · 대시 {(battle.DodgeCooldown > 0 ? battle.DodgeCooldown.ToString("0.0") + "초" : "준비")} · 강화 {battle.AppliedUpgrades.Count}";
             foreach (var enemy in battle.Enemies)
             {
                 if (!enemyViews.TryGetValue(enemy, out var view))
@@ -303,6 +315,8 @@ namespace IdleGame
             if (battlePreview)
             {
                 if (battle.Ended) EndBulletPreview();
+                else if (!battlePausedForUpgrade && nextPracticeUpgradeCore <= battle.MaxCore &&
+                    battle.Core >= nextPracticeUpgradeCore) OpenPracticeUpgrade();
                 return;
             }
             if (battle.Elapsed >= nextReport || battle.BossesDefeated.Count > sentBosses || battle.Ended)
@@ -348,6 +362,7 @@ namespace IdleGame
             battle = new BattleRun(stage, session);
             battlePreview = true; battleNetworkFailed = battleFinishing = false;
             draggingPilot = false; visibleShots = 0; muzzleUntil = dodgeUntil = 0;
+            ResetUpgradeState();
             enemyViews.Clear(); bulletViews.Clear(); battleEffects.Clear(); packets.Clear();
             DrawBattle();
         }
@@ -356,8 +371,252 @@ namespace IdleGame
         private void EndBulletPreview()
         {
             battle = null; battlePreview = false; draggingPilot = false;
+            ResetUpgradeState();
             enemyViews.Clear(); bulletViews.Clear(); battleEffects.Clear(); packets.Clear();
             ShowLogin();
+        }
+
+        private void ResetUpgradeState()
+        {
+            if (upgradeModal) { upgradeModal.gameObject.SetActive(false); Destroy(upgradeModal.gameObject); }
+            upgradeModal = null; upgradeStatus = null; upgradeOffer = null;
+            battlePausedForUpgrade = upgradeSelecting = battleUpgradesUnsupported = false;
+            pendingUpgradeOfferKey = pendingUpgradeSelectKey = pendingUpgradeSelectCode = null;
+            resolvedUpgradeLevel = 0; nextPracticeUpgradeCore = PracticeUpgradeCoreStep; practiceUpgradeLevel = 1;
+        }
+
+        private void CloseUpgradeModal()
+        {
+            if (upgradeModal) { upgradeModal.gameObject.SetActive(false); Destroy(upgradeModal.gameObject); }
+            upgradeModal = null; upgradeStatus = null; upgradeOffer = null;
+            battlePausedForUpgrade = false;
+            pendingUpgradeSelectKey = pendingUpgradeSelectCode = null;
+        }
+
+        private void OpenPracticeUpgrade()
+        {
+            int level = practiceUpgradeLevel++;
+            nextPracticeUpgradeCore += PracticeUpgradeCoreStep;
+            OpenUpgradeModal(BattleRun.BuildPracticeOffer(level));
+        }
+
+        public enum UpgradeProgressAction { Ignore, OpenOffer, RequestOffer }
+
+        /// <summary>
+        /// Decides what a progress response means for the upgrade flow. A pendingOffer at or below the resolved level is stale;
+        /// a bare upgradesAvailable only counts when it is not older than the resolved level (equal means a new level-up).
+        /// After the battle has ended only an unresolved pendingOffer may still open the modal.
+        /// </summary>
+        public static UpgradeProgressAction DecideUpgradeProgress(JToken response, int resolvedLevel, bool battleEnded, bool upgradesUnsupported)
+        {
+            if (response == null || response.Type != JTokenType.Object) return UpgradeProgressAction.Ignore;
+            var pending = response["pendingOffer"];
+            if (pending != null && pending.Type == JTokenType.Object)
+            {
+                int offerLevel = (int?)pending["level"] ?? 0;
+                if (offerLevel > 0 && offerLevel <= resolvedLevel) return UpgradeProgressAction.Ignore;
+                if (battleEnded && offerLevel <= resolvedLevel) return UpgradeProgressAction.Ignore;
+                return UpgradeProgressAction.OpenOffer;
+            }
+            if (battleEnded || upgradesUnsupported || (bool?)response["upgradesAvailable"] != true) return UpgradeProgressAction.Ignore;
+            int battleLevel = (int?)response["battleLevel"] ?? 0;
+            return battleLevel > 0 && battleLevel < resolvedLevel ? UpgradeProgressAction.Ignore : UpgradeProgressAction.RequestOffer;
+        }
+
+        /// <summary>Reads a progress response; a pending offer (or upgradesAvailable) pauses the battle until the player picks.</summary>
+        private void ApplyProgressResponse(JToken response)
+        {
+            if (battle == null || battlePreview || battlePausedForUpgrade) return;
+            switch (DecideUpgradeProgress(response, resolvedUpgradeLevel, battle.Ended, battleUpgradesUnsupported))
+            {
+                case UpgradeProgressAction.OpenOffer:
+                    if (!OpenUpgradeModal(response["pendingOffer"]) && !battle.Ended && !battleUpgradesUnsupported)
+                        battlePausedForUpgrade = true;
+                    break;
+                case UpgradeProgressAction.RequestOffer:
+                    battlePausedForUpgrade = true;
+                    break;
+            }
+        }
+
+        private async Task LoadUpgradeOffer()
+        {
+            var session = battle;
+            if (pendingUpgradeOfferKey == null) pendingUpgradeOfferKey = Guid.NewGuid().ToString();
+            JToken result;
+            try { result = await api.OfferBattleUpgrades(session.SessionId, pendingUpgradeOfferKey); }
+            catch (ApiException error) when (error.Status == 404 && (string.IsNullOrEmpty(error.Code) || error.Code == "ROUTE_NOT_FOUND"))
+            {
+                // Servers without the upgrade endpoints: keep fighting and skip the selection modal.
+                if (battle == session) { battleUpgradesUnsupported = true; battlePausedForUpgrade = false; pendingUpgradeOfferKey = null; }
+                return;
+            }
+            if (battle != session) return;
+            pendingUpgradeOfferKey = null;
+            var offer = result?["offer"];
+            if (offer != null && OpenUpgradeModal(offer)) return;
+            resolvedUpgradeLevel = Math.Max(resolvedUpgradeLevel, (int?)result?["battleLevel"] ?? 0);
+            battlePausedForUpgrade = false;
+        }
+
+        private static string UpgradeCode(JToken option) => (string)option?["upgradeId"] ?? (string)option?["id"];
+
+        private static readonly (string Key, string Label, string Unit)[] UpgradeEffectLabels =
+        {
+            ("attackPower", "공격력", ""), ("attackSpeed", "공격 간격", "ms"), ("moveSpeed", "이동속도", "%"),
+            ("maxHp", "최대 HP", ""), ("dashCooldown", "대시 쿨다운", "ms"), ("ultimatePower", "궁극기 위력", "%"),
+            ("ultimateCooldown", "궁극기 쿨다운", "ms"), ("projectileSpeed", "투사체 속도", "%"),
+            ("splashRadius", "폭발 범위", ""), ("critRate", "치명타 확률", "%"), ("critDamage", "치명타 피해", "%"),
+            ("hpRegenPerSec", "초당 회복", ""), ("shieldHp", "보호막", ""), ("duration", "지속시간", "%"),
+            ("chainTargets", "연쇄 대상", ""), ("bombRadius", "폭탄 범위", ""), ("healAmount", "회복량", "")
+        };
+
+        /// <summary>Up to four signed effect values for a card, e.g. "공격력 +2 · 공격 간격 -20ms".</summary>
+        public static string UpgradeEffectSummary(JToken effects)
+        {
+            var parts = new List<string>();
+            if (effects is JObject values)
+                foreach (var entry in UpgradeEffectLabels)
+                {
+                    if (parts.Count >= 4) break;
+                    var token = values[entry.Key];
+                    if (token == null || (token.Type != JTokenType.Integer && token.Type != JTokenType.Float)) continue;
+                    double value = (double)token;
+                    if (value == 0) continue;
+                    parts.Add($"{entry.Label} {value.ToString("+0.##;-0.##", System.Globalization.CultureInfo.InvariantCulture)}{entry.Unit}");
+                }
+            return string.Join(" · ", parts);
+        }
+
+        private static string UpgradeCategoryName(string category)
+        {
+            switch (category)
+            {
+                case "weapon": return "무기";
+                case "armor": return "방어";
+                case "drone": return "드론";
+                case "utility": return "보조";
+                case "special": return "특수";
+                default: return category ?? "강화";
+            }
+        }
+
+        private Text ModalText(Transform parent, string text, int size, Color color, float height)
+        {
+            var obj = new GameObject("Text", typeof(RectTransform), typeof(Text), typeof(LayoutElement));
+            obj.transform.SetParent(parent, false);
+            var label = obj.GetComponent<Text>();
+            label.font = font; label.text = text; label.fontSize = size; label.color = color;
+            label.alignment = TextAnchor.MiddleLeft; label.raycastTarget = false;
+            obj.GetComponent<LayoutElement>().preferredHeight = height;
+            return label;
+        }
+
+        private void SetUpgradeStatus(string message)
+        {
+            if (upgradeStatus) upgradeStatus.text = message;
+        }
+
+        /// <summary>Shows up to three upgrade cards inside the 540 x 960 portrait safe area. Returns false when the offer has no usable option.</summary>
+        private bool OpenUpgradeModal(JToken offer)
+        {
+            var options = new List<JToken>();
+            if (offer?["options"] is JArray list)
+                foreach (var option in list)
+                    if (options.Count < 3 && !string.IsNullOrEmpty(UpgradeCode(option))) options.Add(option);
+            if (options.Count == 0) return false;
+            if (upgradeModal) { upgradeModal.gameObject.SetActive(false); Destroy(upgradeModal.gameObject); }
+            upgradeOffer = offer;
+            battlePausedForUpgrade = true;
+            draggingPilot = false;
+            upgradeModal = Box(safeArea, "UpgradeModal", new Color(0, 0, 0, .85f));
+            Stretch(upgradeModal);
+            var panel = Box(upgradeModal, "UpgradePanel", Panel);
+            Stretch(panel);
+            panel.offsetMin = new Vector2(14, 14);
+            panel.offsetMax = new Vector2(-14, -14);
+            var layout = panel.gameObject.AddComponent<VerticalLayoutGroup>();
+            layout.padding = new RectOffset(16, 16, 16, 16);
+            layout.spacing = 8;
+            layout.childControlWidth = layout.childControlHeight = true;
+            layout.childForceExpandWidth = true; layout.childForceExpandHeight = false;
+            ModalText(panel, $"강화 선택 · Lv {(int?)offer["level"] ?? 1}", 28, Accent, 40);
+            ModalText(panel, "카드를 눌러 강화를 고르면 전투가 재개됩니다.", 16, Muted, 24);
+            float cardHeight = Mathf.Clamp((safeArea.rect.height - 28 - 32 - 40 - 24 - 56 - 52 - 8 * (options.Count + 3)) / options.Count, 120, 200);
+            foreach (var option in options)
+            {
+                var card = Box(panel, "UpgradeCard", Background);
+                card.gameObject.AddComponent<LayoutElement>().preferredHeight = cardHeight;
+                var button = card.gameObject.AddComponent<Button>();
+                var picked = option;
+                button.onClick.AddListener(() => { _ = SelectUpgrade(picked); });
+                string effects = UpgradeEffectSummary(option["effects"]);
+                var text = ModalText(card, $"<size=22><b>{(string)option["name"] ?? UpgradeCode(option)}</b></size>  <color=#5FEBB7>{(int?)option["tier"] ?? 1}단계 · {UpgradeCategoryName((string)option["category"])}</color>\n" +
+                    $"{(string)option["description"]}" + (effects.Length > 0 ? $"\n<color=#9BB4C4>{effects}</color>" : ""),
+                    19, Color.white, 0);
+                Destroy(text.GetComponent<LayoutElement>());
+                text.alignment = TextAnchor.UpperLeft;
+                text.horizontalOverflow = HorizontalWrapMode.Wrap;
+                text.verticalOverflow = VerticalWrapMode.Truncate;
+                Stretch(text.rectTransform);
+                text.rectTransform.offsetMin = new Vector2(14, 10);
+                text.rectTransform.offsetMax = new Vector2(-14, -10);
+            }
+            upgradeStatus = ModalText(panel, "", 16, Muted, 52);
+            if (!battlePreview)
+            {
+                BattleButton(panel, "강화 목록 다시 불러오기", ReloadUpgradeOffer);
+                panel.GetChild(panel.childCount - 1).gameObject.AddComponent<LayoutElement>().preferredHeight = 48;
+            }
+            return true;
+        }
+
+        private void ReloadUpgradeOffer()
+        {
+            if (upgradeSelecting || battle == null || battlePreview) return;
+            if (upgradeModal) { upgradeModal.gameObject.SetActive(false); Destroy(upgradeModal.gameObject); }
+            upgradeModal = null; upgradeStatus = null; upgradeOffer = null;
+            pendingUpgradeOfferKey = pendingUpgradeSelectKey = pendingUpgradeSelectCode = null;
+            battleNetworkFailed = false;
+            _ = PumpBattle();
+        }
+
+        private async Task SelectUpgrade(JToken option)
+        {
+            var offer = upgradeOffer;
+            if (upgradeSelecting || battle == null || offer == null) return;
+            string chosen = UpgradeCode(option);
+            // After an ambiguous failure the same pick (and Idempotency-Key) is resent so it cannot be applied twice.
+            string code = pendingUpgradeSelectCode ?? chosen;
+            if (pendingUpgradeSelectKey == null) pendingUpgradeSelectKey = Guid.NewGuid().ToString();
+            pendingUpgradeSelectCode = code;
+            upgradeSelecting = true;
+            SetUpgradeStatus(code == chosen ? "선택을 전송하는 중…" : "이전에 고른 강화를 다시 전송하는 중…");
+            try
+            {
+                JToken result;
+                if (battlePreview)
+                {
+                    JToken local = null;
+                    foreach (var candidate in (JArray)offer["options"]) if (UpgradeCode(candidate) == code) local = candidate;
+                    result = battle.BuildPracticeSelection(local);
+                }
+                else result = await api.SelectBattleUpgrade(battle.SessionId, code, pendingUpgradeSelectKey);
+                if (battle == null || upgradeOffer != offer) return;
+                if (result?["effectiveStats"] == null)
+                    throw new ApiException(0, "INVALID_RESPONSE", "강화 선택 응답이 올바르지 않습니다.");
+                battle.ApplyEffectiveStats(result["effectiveStats"], result["selectedUpgrade"]);
+                resolvedUpgradeLevel = Math.Max(resolvedUpgradeLevel, (int?)offer["level"] ?? 0);
+                CloseUpgradeModal();
+                if (battle != null && battle.Ended && !battlePreview) _ = PumpBattle();
+            }
+            catch (Exception error)
+            {
+                if (battle == null || upgradeOffer != offer) return;
+                if (!ShouldKeepPendingKey(error)) { pendingUpgradeSelectKey = null; pendingUpgradeSelectCode = null; }
+                SetUpgradeStatus(error is ApiException ? error.Message : "강화를 전송하지 못했습니다. 카드를 다시 눌러 재시도해 주세요.");
+            }
+            finally { upgradeSelecting = false; }
         }
 
         private void QueueProgress()
@@ -379,10 +638,12 @@ namespace IdleGame
                 while (packets.Count > 0)
                 {
                     var packet = packets.Peek();
-                    await api.ReportBattle(battle.SessionId, packet.Body, packet.Key);
+                    var response = await api.ReportBattle(battle.SessionId, packet.Body, packet.Key);
                     packets.Dequeue();
+                    ApplyProgressResponse(response);
                 }
-                if (battle.Ended) await FinishPlayableBattle();
+                if (battlePausedForUpgrade && upgradeOffer == null) await LoadUpgradeOffer();
+                if (battle.Ended && !battlePausedForUpgrade) await FinishPlayableBattle();
             }
             catch (Exception error)
             {
@@ -414,7 +675,21 @@ namespace IdleGame
                 finishReport = new { totalKills = battle.Kills, totalCoreEnergy = battle.Core,
                     bossDefeated = battle.BossesDefeated.ToArray(), elapsedSeconds = (int)battle.Elapsed };
             }
-            var result = await api.FinishBattle(battle.SessionId, finishReport, finishKey);
+            JToken result;
+            try { result = await api.FinishBattle(battle.SessionId, finishReport, finishKey); }
+            catch (ApiException error) when (error.Code == "PENDING_UPGRADES")
+            {
+                // The server still holds an unresolved offer: reopen it instead of failing the finish.
+                battleFinishing = false;
+                battlePausedForUpgrade = true;
+                await LoadUpgradeOffer();
+                if (!battlePausedForUpgrade)
+                {
+                    battleNetworkFailed = true;
+                    notice.text = "선택하지 않은 강화가 남아 있어 종료할 수 없습니다. 연결 재시도로 다시 시도해 주세요.";
+                }
+                return;
+            }
             ShowBattleResult(result["reward"] ?? result, "작전 완료", true);
         }
 
@@ -422,6 +697,7 @@ namespace IdleGame
         {
             int kills = battle.Kills;
             battle = null;
+            ResetUpgradeState();
             enemyViews.Clear(); packets.Clear();
             bulletViews.Clear(); battleEffects.Clear(); draggingPilot = false;
             Clear(title);
@@ -445,6 +721,7 @@ namespace IdleGame
             {
                 await api.AbandonBattle(battle.SessionId);
                 battle = null;
+                ResetUpgradeState();
                 enemyViews.Clear(); packets.Clear();
                 bulletViews.Clear(); battleEffects.Clear(); draggingPilot = false;
                 await ShowStages();
