@@ -1,7 +1,7 @@
 import type {
   User, UserDetail, WalletLedgerEntry, ItemLedgerEntry,
   Sanction, Grant, SecurityEvent, AuditLog, Battle,
-  AuthResult, PaginatedResponse,
+  AuthResult, PaginatedResponse, Operator, AdminHealth,
 } from './types';
 
 const BASE_URL = '/api';
@@ -173,6 +173,36 @@ export async function login(email: string, password: string): Promise<AuthResult
   });
   setTokens(data.tokens.accessToken, data.tokens.refreshToken);
   return data;
+}
+
+// ─── Admin / Operators ──────────────────────────────
+
+export async function getAdminHealth(): Promise<AdminHealth> {
+  return request('/admin/health');
+}
+
+export async function listOperators(): Promise<{ operators: Operator[] }> {
+  return request('/admin/operators');
+}
+
+export async function createOperator(input: {
+  email: string; password: string; nickname: string; role: 'operator' | 'admin';
+}): Promise<{ id: string; email: string; role: string; status: string }> {
+  return request('/admin/operators', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateOperatorRole(
+  id: string,
+  role: 'operator' | 'admin',
+  reason: string,
+): Promise<{ id: string; role: string }> {
+  return request(`/admin/operators/${id}/role`, {
+    method: 'PUT',
+    body: JSON.stringify({ role, reason }),
+  });
 }
 
 // ─── Users ──────────────────────────────────────────

@@ -116,3 +116,17 @@ export interface PaginatedResponse<T> {
 }
 
 
+
+export interface Operator {
+  id: string;
+  email: string;
+  nickname: string;
+  role: string;
+  status: string;
+  createdAt: string;
+}
+
+export interface AdminHealth {
+  status: string;
+  role: string;
+}

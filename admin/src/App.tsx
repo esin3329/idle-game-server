@@ -9,6 +9,7 @@ import Sanctions from './pages/Sanctions';
 import Grants from './pages/Grants';
 import SecurityEvents from './pages/SecurityEvents';
 import AuditLogs from './pages/AuditLogs';
+import Operators from './pages/Operators';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuth();
@@ -36,6 +37,7 @@ export default function App() {
         <Route path="grants" element={<Grants />} />
         <Route path="security" element={<SecurityEvents />} />
         <Route path="audit-logs" element={<AuditLogs />} />
+        <Route path="operators" element={<Operators />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

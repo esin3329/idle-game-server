@@ -8,10 +8,11 @@ const navItems = [
   { to: '/grants', label: '재화 지급', icon: '💰' },
   { to: '/security', label: '보안 이벤트', icon: '🔒' },
   { to: '/audit-logs', label: '감사 로그', icon: '📋' },
+  { to: '/operators', label: '운영자 관리', icon: '🛡️' },
 ];
 
 export default function Layout() {
-  const { logout } = useAuth();
+  const { logout, role } = useAuth();
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -20,6 +21,11 @@ export default function Layout() {
         <div className="p-5 border-b border-gray-700">
           <h1 className="text-lg font-bold">🎮 Admin</h1>
           <p className="text-sm text-gray-400 mt-1">idle-game-server</p>
+          {role && (
+            <span className="inline-block mt-2 px-2 py-0.5 bg-indigo-500/20 text-indigo-300 rounded text-xs font-medium">
+              {role}
+            </span>
+          )}
         </div>
         <nav className="flex-1 p-3 space-y-1">
           {navItems.map((item) => (

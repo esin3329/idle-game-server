@@ -7,8 +7,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  ApiError, clearTokens, createGrant, createSanction, getAccessToken,
-  listUsers, loadTokens, login, setTokens, suspendUser,
+  ApiError, clearTokens, createGrant, createOperator, createSanction, getAccessToken, getAdminHealth,
+  listOperators, listUsers, loadTokens, login, setTokens, suspendUser, updateOperatorRole,
 } from '../api';
 
 // ─── 브라우저 API 스텁 ────────────────────────────────
@@ -299,5 +299,97 @@ describe('엔드포인트 계약', () => {
     fetchMock.mockResolvedValueOnce(new Response('<html>bad gateway</html>', { status: 502, statusText: 'Bad Gateway' }));
 
     await expect(listUsers({})).rejects.toMatchObject({ status: 502, message: 'Bad Gateway', code: undefined });
+  });
+
+  it('getAdminHealth는 인증 헤더와 함께 GET /admin/health를 호출해 role을 반환한다', async () => {
+    setTokens('access-1', 'refresh-1');
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: 'ok', role: 'admin' }));
+
+    const result = await getAdminHealth();
+
+    const call = callAt(0);
+    expect(call.url).toBe('/api/admin/health');
+    expect(call.method).toBe('GET');
+    expect(call.headers['Authorization']).toBe('Bearer access-1');
+    expect(call.headers).not.toHaveProperty('Idempotency-Key');
+    expect(result).toEqual({ status: 'ok', role: 'admin' });
+  });
+
+  it('getAdminHealth는 401 시 refresh 후 재시도한다', async () => {
+    setTokens('expired', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401, { error: 'expired' }))
+      .mockResolvedValueOnce(jsonResponse(200, { accessToken: 'access-2', refreshToken: 'refresh-2' }))
+      .mockResolvedValueOnce(jsonResponse(200, { status: 'ok', role: 'operator' }));
+
+    await expect(getAdminHealth()).resolves.toEqual({ status: 'ok', role: 'operator' });
+    expect(callAt(1).url).toBe('/api/auth/refresh');
+    expect(callAt(2).headers['Authorization']).toBe('Bearer access-2');
+  });
+
+  it('listOperators는 GET /admin/operators 응답을 반환한다', async () => {
+    setTokens('access-1', 'refresh-1');
+    const operators = [{ id: 'o1', email: 'op@example.test', nickname: 'op', role: 'operator', status: 'active', createdAt: '2026-01-01T00:00:00.000Z' }];
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { operators }));
+
+    const result = await listOperators();
+
+    const call = callAt(0);
+    expect(call.url).toBe('/api/admin/operators');
+    expect(call.method).toBe('GET');
+    expect(call.headers['Authorization']).toBe('Bearer access-1');
+    expect(result.operators).toEqual(operators);
+  });
+
+  it('createOperator는 POST /admin/operators에 email/password/nickname/role과 Idempotency-Key를 보낸다', async () => {
+    setTokens('access-1', 'refresh-1');
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, { id: 'o2', email: 'new@example.test', role: 'admin', status: 'active' }));
+
+    const result = await createOperator({ email: 'new@example.test', password: 'pw-12345678', nickname: 'newop', role: 'admin' });
+
+    const call = callAt(0);
+    expect(call.url).toBe('/api/admin/operators');
+    expect(call.method).toBe('POST');
+    expect(call.body).toEqual({ email: 'new@example.test', password: 'pw-12345678', nickname: 'newop', role: 'admin' });
+    expect(call.headers['Idempotency-Key']).toMatch(/^post-/);
+    expect(result).toEqual({ id: 'o2', email: 'new@example.test', role: 'admin', status: 'active' });
+  });
+
+  it('createOperator 권한 오류(403)와 충돌(409)을 ApiError로 전달한다', async () => {
+    setTokens('access-1', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(403, { error: '권한이 없습니다.', code: 'FORBIDDEN' }))
+      .mockResolvedValueOnce(jsonResponse(409, { error: '이미 사용 중인 이메일입니다.', code: 'CONFLICT' }));
+    const input = { email: 'dup@example.test', password: 'pw-12345678', nickname: 'dup', role: 'operator' as const };
+
+    const forbidden = await createOperator(input).catch((e: unknown) => e);
+    expect(forbidden).toBeInstanceOf(ApiError);
+    expect(forbidden).toMatchObject({ status: 403, code: 'FORBIDDEN', message: '권한이 없습니다.' });
+    await expect(createOperator(input)).rejects.toMatchObject({ status: 409, code: 'CONFLICT' });
+    expect(getAccessToken()).toBe('access-1');
+  });
+
+  it('updateOperatorRole은 PUT /admin/operators/:id/role에 role/reason과 Idempotency-Key를 보낸다', async () => {
+    setTokens('access-1', 'refresh-1');
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: 'o2', role: 'operator' }));
+
+    const result = await updateOperatorRole('o2', 'operator', '권한 축소');
+
+    const call = callAt(0);
+    expect(call.url).toBe('/api/admin/operators/o2/role');
+    expect(call.method).toBe('PUT');
+    expect(call.body).toEqual({ role: 'operator', reason: '권한 축소' });
+    expect(call.headers['Idempotency-Key']).toMatch(/^put-/);
+    expect(result).toEqual({ id: 'o2', role: 'operator' });
+  });
+
+  it('updateOperatorRole 권한 오류(403)와 충돌(409)을 ApiError로 전달한다', async () => {
+    setTokens('access-1', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(403, { error: '권한이 없습니다.', code: 'FORBIDDEN' }))
+      .mockResolvedValueOnce(jsonResponse(409, { error: '마지막 admin은 강등할 수 없습니다.', code: 'CONFLICT' }));
+
+    await expect(updateOperatorRole('o1', 'operator', '사유')).rejects.toMatchObject({ status: 403, code: 'FORBIDDEN' });
+    await expect(updateOperatorRole('o1', 'operator', '사유')).rejects.toMatchObject({ status: 409, message: '마지막 admin은 강등할 수 없습니다.' });
   });
 });
