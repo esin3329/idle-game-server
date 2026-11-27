@@ -1,7 +1,7 @@
 /**
  * PostgreSQL 기반 Admin 저장소
  */
-import { getDb, withPostgresTransaction } from './postgres-connection.js';
+import { getDb, withPostgresTransaction, type PostgresDb } from './postgres-connection.js';
 import {
   users, operatorRoles, operatorRolePermissions, operatorPermissions, operatorAccounts,
   playerProfiles, walletBalances, currencyLedger, battleSessions, battleResults, securityEvents, operatorGrants, accountSanctions, operatorAuditLogs,
@@ -20,6 +20,21 @@ function parseSafeDetails(raw: string | null | undefined): Record<string, unknow
   } catch {
     return {};
   }
+}
+
+const ADMIN_ROLES: readonly string[] = ['admin', 'administrator'];
+
+/** operator_roles.code → id(UUID). 없으면 생성한다. operator_accounts.role_id는 이 UUID를 저장한다. */
+async function resolveOperatorRoleId(db: PostgresDb, roleCode: string, now: Date): Promise<string> {
+  const find = async () => (await db.select({ id: operatorRoles.id }).from(operatorRoles)
+    .where(eq(operatorRoles.code, roleCode)).limit(1))[0]?.id;
+  const found = await find();
+  if (found) return found;
+  await db.insert(operatorRoles).values({ id: crypto.randomUUID(), code: roleCode, name: roleCode, createdAt: now, updatedAt: now })
+    .onConflictDoNothing({ target: operatorRoles.code });
+  const created = await find();
+  if (!created) throw new AppError('운영자 역할을 확인할 수 없습니다.', 500, 'INTERNAL_ERROR');
+  return created;
 }
 
 export const postgresAdminRepo: AdminRepository = {
@@ -272,8 +287,9 @@ export const postgresAdminRepo: AdminRepository = {
         id: newUserId, email: data.email, nickname: data.nickname, passwordHash: data.passwordHash,
         role: data.role, status: 'active', createdAt: now, updatedAt: now,
       });
+      const roleId = await resolveOperatorRoleId(db, data.role, now);
       await db.insert(operatorAccounts).values({
-        id: crypto.randomUUID(), userId: newUserId, roleId: data.role,
+        id: crypto.randomUUID(), userId: newUserId, roleId,
         grantedBy: data.grantedBy, grantedAt: now, status: 'active', createdAt: now, updatedAt: now,
       });
       await db.insert(operatorAuditLogs).values({
@@ -296,16 +312,27 @@ export const postgresAdminRepo: AdminRepository = {
     return withPostgresTransaction(async () => {
       const db = getDb();
       const now = new Date();
-      const userRows = await db.select({ id: users.id, role: users.role }).from(users).where(eq(users.id, targetId)).limit(1);
+      // 항상 [활성 관리자 집합(id 순) → 대상 행] 순서로 잠가 동시 강등이 직렬화되고 교착되지 않게 한다.
+      const activeAdmins = await db.select({ id: users.id }).from(users)
+        .where(and(eq(users.status, 'active'), inArray(users.role, [...ADMIN_ROLES])))
+        .orderBy(users.id).for('update');
+      const userRows = await db.select({ id: users.id, role: users.role, status: users.status }).from(users)
+        .where(eq(users.id, targetId)).limit(1).for('update');
       if (userRows.length === 0) {
         throw new AppError('사용자를 찾을 수 없습니다.', 404, 'NOT_FOUND');
       }
       const oldRole = userRows[0].role;
+      const demotesActiveAdmin = userRows[0].status === 'active'
+        && ADMIN_ROLES.includes(oldRole) && !ADMIN_ROLES.includes(role);
+      if (demotesActiveAdmin && activeAdmins.length <= 1) {
+        throw new AppError('마지막 활성 관리자의 권한은 강등할 수 없습니다.', 409, 'LAST_ADMIN_PROTECTED');
+      }
       await db.update(users).set({ role, updatedAt: now }).where(eq(users.id, targetId));
+      const roleId = await resolveOperatorRoleId(db, role, now);
       await db.insert(operatorAccounts).values({
-        id: crypto.randomUUID(), userId: targetId, roleId: role,
+        id: crypto.randomUUID(), userId: targetId, roleId,
         grantedBy: operatorId, grantedAt: now, status: 'active', createdAt: now, updatedAt: now,
-      }).onConflictDoUpdate({ target: operatorAccounts.userId, set: { roleId: role, updatedAt: now } });
+      }).onConflictDoUpdate({ target: operatorAccounts.userId, set: { roleId, updatedAt: now } });
       await db.insert(operatorAuditLogs).values({
         id: crypto.randomUUID(),
         operatorId,

@@ -144,21 +144,11 @@ describe('applyBattleUpgrades', () => {
     expect(stats).toMatchObject({ attackPower: 12, attackSpeed: 80, moveSpeed: 100, maxHp: 100, shieldHp: 0, critRate: 0, healOnKill: 0 });
   });
 
-  it('projectileSpeed·splashRadius·duration·chainTargets·bombRadius를 합산한다', () => {
-    // machine_gun_2/3 projectileSpeed, shotgun_1/2 splashRadius, laser_1/2 duration, bomb_1 bombRadius, chain_1 chainTargets
-    const ids = ['machine_gun_2', 'machine_gun_3', 'shotgun_1', 'shotgun_2', 'laser_1', 'laser_2', 'bomb_1', 'chain_1'];
-    const expected = { projectileSpeed: 0, splashRadius: 0, duration: 0, chainTargets: 0, bombRadius: 0 };
-    for (const id of ids) {
-      const effects = ALL_UPGRADES.find((u) => u.id === id)?.effects;
-      for (const key of Object.keys(expected) as (keyof typeof expected)[]) expected[key] += effects?.[key] ?? 0;
-    }
-    const stats = applyBattleUpgrades(BASE, ids);
-    expect(stats).toMatchObject(expected);
-    expect(expected.projectileSpeed).toBeGreaterThan(0);
-    expect(expected.splashRadius).toBeGreaterThan(0);
-    expect(expected.duration).toBeGreaterThan(0);
-    expect(expected.chainTargets).toBeGreaterThan(0);
-    expect(expected.bombRadius).toBeGreaterThan(0);
+  it('projectileSpeed·splashRadius·duration·chainTargets·bombRadius를 여러 강화에서 합산한다', () => {
+    // projectileSpeed: machine_gun_2(+15) + sniper_1(+20), splashRadius: shotgun_1(+1) + shotgun_2(+2) + laser_1(+1),
+    // duration: laser_1(+15) + laser_2(+20), bombRadius: bomb_1(+3), chainTargets: chain_1(+2)
+    const stats = applyBattleUpgrades(BASE, ['machine_gun_2', 'sniper_1', 'shotgun_1', 'shotgun_2', 'laser_1', 'laser_2', 'bomb_1', 'chain_1']);
+    expect(stats).toMatchObject({ projectileSpeed: 35, splashRadius: 4, duration: 35, chainTargets: 2, bombRadius: 3 });
   });
 
   it('해당 효과 강화가 없으면 5개 필드는 0이다', () => {

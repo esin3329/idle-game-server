@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { compare } from 'bcryptjs';
 import { mkdtemp, mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import EmbeddedPostgres from 'embedded-postgres';
@@ -9,6 +10,8 @@ import { withPostgresConnection, withPostgresTransaction, closePostgresPool } fr
 import { registerUserTransaction } from './postgres-auth.repository.js';
 import { postgresWalletRepo } from './postgres-wallet.repository.js';
 import { postgresAdminRepo } from './postgres-admin.repository.js';
+import { resetOperatorPassword } from './reset-operator-password.js';
+import { AppError } from '../shared/errors.js';
 import { seed as seedBattleContent } from './battle-seed.js';
 
 await mkdir('.tools', { recursive: true });
@@ -143,25 +146,70 @@ try {
   await client.query("UPDATE game.users SET role='user' WHERE id=$1", [registered.userId]);
   const revoked = await request('/api/admin/users', 'GET', undefined, adminToken);
   assert.equal(revoked.status, 403);
-  // updateOperatorRole: users.role 과 operator_accounts.role_id 동기화 (기존 행 갱신 + 행 없을 때 생성)
-  const operatorKey = randomUUID();
-  const createdOperator = await withPostgresConnection(connectionString, () => postgresAdminRepo.createOperator({
-    email: 'operator-' + operatorKey + '@example.test', passwordHash: 'test-only-hash', nickname: 'op' + operatorKey.slice(0, 8),
-    role: 'operator', grantedBy: registered.userId,
-  }));
+  // updateOperatorRole: users.role(코드) 과 operator_accounts.role_id(operator_roles.id UUID) 동기화 (기존 행 갱신 + 행 없을 때 생성)
+  const newOperator = (role: string) => {
+    const key = randomUUID();
+    return withPostgresConnection(connectionString, () => postgresAdminRepo.createOperator({
+      email: 'operator-' + key + '@example.test', passwordHash: 'test-only-hash', nickname: 'op' + key.slice(0, 8),
+      role, grantedBy: registered.userId,
+    }));
+  };
+  const roleSync = (userId: string) => client!.query<{ user_role: string; role_id: string; code: string; accounts: string }>(
+    'SELECT u.role AS user_role, oa.role_id, r.code, (SELECT count(*) FROM game.operator_accounts WHERE user_id=u.id) AS accounts FROM game.users u JOIN game.operator_accounts oa ON oa.user_id=u.id JOIN game.operator_roles r ON r.id=oa.role_id WHERE u.id=$1', [userId]);
+  const createdOperator = await newOperator('operator');
+  const createdSync = await roleSync(createdOperator.id);
+  assert.equal(createdSync.rows.length, 1);
+  assert.equal(createdSync.rows[0].code, 'operator');
+  assert.notEqual(createdSync.rows[0].role_id, 'operator');
   const roleChange = await withPostgresConnection(connectionString, () => postgresAdminRepo.updateOperatorRole(createdOperator.id, 'admin', registered.userId, 'integration role sync'));
   assert.equal(roleChange.oldRole, 'operator');
-  const syncedRoles = await client.query<{ user_role: string; role_id: string; accounts: string }>(
-    'SELECT u.role AS user_role, oa.role_id, (SELECT count(*) FROM game.operator_accounts WHERE user_id=u.id) AS accounts FROM game.users u JOIN game.operator_accounts oa ON oa.user_id=u.id WHERE u.id=$1', [createdOperator.id]);
+  const syncedRoles = await roleSync(createdOperator.id);
   assert.equal(syncedRoles.rows.length, 1);
   assert.equal(syncedRoles.rows[0].user_role, 'admin');
-  assert.equal(syncedRoles.rows[0].role_id, 'admin');
+  assert.equal(syncedRoles.rows[0].code, 'admin');
+  assert.notEqual(syncedRoles.rows[0].role_id, 'admin');
   assert.equal(Number(syncedRoles.rows[0].accounts), 1);
   await withPostgresConnection(connectionString, () => postgresAdminRepo.updateOperatorRole(registered.userId, 'operator', createdOperator.id, 'integration role upsert'));
-  const upserted = await client.query<{ user_role: string; role_id: string }>(
-    'SELECT u.role AS user_role, oa.role_id FROM game.users u JOIN game.operator_accounts oa ON oa.user_id=u.id WHERE u.id=$1', [registered.userId]);
-  assert.deepEqual(upserted.rows, [{ user_role: 'operator', role_id: 'operator' }]);
-  console.log('PostgreSQL check passed: schema/RLS, duplicate credit, rollback, API signup/login, concurrent claim/grant replay, ownership, operator role sync and revoked admin access.');
+  const upserted = await roleSync(registered.userId);
+  assert.equal(upserted.rows.length, 1);
+  assert.equal(upserted.rows[0].user_role, 'operator');
+  assert.equal(upserted.rows[0].code, 'operator');
+  assert.notEqual(upserted.rows[0].role_id, 'operator');
+
+  // 마지막 활성 관리자 보호: 활성 admin 2명을 동시에 강등하면 정확히 1건만 성공한다
+  const secondAdmin = await newOperator('admin');
+  const activeAdminCount = async () => Number((await client!.query<{ count: string }>("SELECT count(*) FROM game.users WHERE status='active' AND role IN ('admin','administrator')")).rows[0].count);
+  assert.equal(await activeAdminCount(), 2);
+  const demotions = await Promise.allSettled([createdOperator.id, secondAdmin.id].map((targetId) =>
+    withPostgresConnection(connectionString, () => postgresAdminRepo.updateOperatorRole(targetId, 'operator', registered.userId, 'integration concurrent demotion'))));
+  assert.equal(demotions.filter((outcome) => outcome.status === 'fulfilled').length, 1);
+  const rejectedDemotions = demotions.filter((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+  assert.equal(rejectedDemotions.length, 1);
+  const rejection = rejectedDemotions[0].reason;
+  assert.ok(rejection instanceof AppError);
+  assert.deepEqual({ status: rejection.status, code: rejection.code }, { status: 409, code: 'LAST_ADMIN_PROTECTED' });
+  assert.equal(await activeAdminCount(), 1);
+
+  // 비밀번호 재설정 CLI: 역할·상태 보존, 해시만 변경, 짧은/빈 비밀번호와 비운영자 거부
+  const resetTarget = await newOperator('operator');
+  const newPassword = 'reset-password-' + randomUUID();
+  const before = await client.query<{ password_hash: string }>('SELECT password_hash FROM game.users WHERE id=$1', [resetTarget.id]);
+  await assert.rejects(withPostgresConnection(connectionString, () => resetOperatorPassword('operator-reset@example.test', 'short')), /8자 이상/);
+  await assert.rejects(withPostgresConnection(connectionString, () => resetOperatorPassword('operator-reset@example.test', '')), /8자 이상/);
+  await assert.rejects(withPostgresConnection(connectionString, () => resetOperatorPassword('  ', newPassword)), /이메일/);
+  await assert.rejects(withPostgresConnection(connectionString, () => resetOperatorPassword('check@example.test', newPassword)), /운영자 계정이 아닙니다/);
+  const resetEmail = (await client.query<{ email: string }>('SELECT email FROM game.users WHERE id=$1', [resetTarget.id])).rows[0].email;
+  await assert.rejects(withPostgresConnection(connectionString, () => resetOperatorPassword(resetEmail, 'short')), /8자 이상/);
+  const untouched = await client.query<{ password_hash: string }>('SELECT password_hash FROM game.users WHERE id=$1', [resetTarget.id]);
+  assert.equal(untouched.rows[0].password_hash, before.rows[0].password_hash);
+  await withPostgresConnection(connectionString, () => resetOperatorPassword(resetEmail, newPassword));
+  const after = await client.query<{ password_hash: string; role: string; status: string }>('SELECT password_hash, role, status FROM game.users WHERE id=$1', [resetTarget.id]);
+  assert.equal(after.rows[0].role, 'operator');
+  assert.equal(after.rows[0].status, 'active');
+  assert.equal(await compare(newPassword, after.rows[0].password_hash), true);
+  const resetAudit = await client.query<{ count: string }>("SELECT count(*) FROM game.operator_audit_logs WHERE action='operator_password_reset' AND target_id=$1", [resetTarget.id]);
+  assert.equal(Number(resetAudit.rows[0].count), 1);
+  console.log('PostgreSQL check passed: schema/RLS, duplicate credit, rollback, API signup/login, concurrent claim/grant replay, ownership, operator role sync, last-admin protection, operator password reset and revoked admin access.');
 } finally {
   await closePostgresPool();
   await client?.end();
