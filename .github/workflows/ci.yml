@@ -70,6 +70,9 @@ jobs:
       - name: Install admin dependencies
         run: npm ci --prefix admin
 
+      - name: Test admin SPA
+        run: npm --prefix admin test
+
       - name: Build Worker assets
         run: npm run build:admin
 

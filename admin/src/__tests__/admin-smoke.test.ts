@@ -1,3 +1,10 @@
+/**
+ * Admin SPA API 클라이언트(`api.ts`) 계약 스모크 테스트.
+ *
+ * 실제 서버 없이 `fetch`/`localStorage`를 스텁해 토큰 저장, 요청 헤더(Authorization/Idempotency-Key),
+ * 401 → refresh → 재시도, 엔드포인트 경로/메서드/본문, 서버 오류(ApiError) 전파를 검증한다.
+ * 서버와의 실제 통신은 검증하지 않는다 (서버 쪽 계약은 루트 `src/__tests__`가 담당).
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError, clearTokens, createGrant, createSanction, getAccessToken,

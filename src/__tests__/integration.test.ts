@@ -4,25 +4,34 @@
  * 라우트 → 미들웨어(JWT/멱등성/레이트리밋) → 서비스 → 저장소까지 한 번에 통과시킨다.
  * 모든 데이터 파일은 임시 디렉터리로 격리하며, Date만 고정해 시간 의존 검증을 결정론적으로 만든다.
  */
-process.env.DB_DRIVER = 'json';
-process.env.JWT_ACCESS_SECRET ||= 'dev-secret-change-in-production';
-process.env.JWT_REFRESH_SECRET ||= 'dev-secret-change-in-production';
-
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import jwt from 'jsonwebtoken';
 
-// ─── 데이터 파일 격리 (store 모듈은 import 시점에 경로를 읽는다) ───────────
-// 아래 동적 import는 위의 env 설정 이후에 모듈을 평가해야 하므로 정적 import로 대체할 수 없다.
+// ─── 환경 격리 (store 모듈은 import 시점에 env/경로를 읽는다) ───────────
+// 셸/CI에서 상속된 AUTH_PROVIDER=supabase 등이 로컬 JSON 인증 흐름을 깨지 않도록 명시적으로 고정하고,
+// 파일 종료 시 원래 값을 복원한다.
 
-const tmpDir = mkdtempSync(join(tmpdir(), 'idle-game-integration-'));
 const STORE_ENV = [
   'USERS', 'SESSIONS', 'SANCTIONS', 'PROFILES', 'WALLETS', 'LEDGER', 'ITEM_LEDGER',
   'ADMIN_GRANTS', 'BATTLES', 'BEVENTS', 'RESULTS', 'PARTS', 'EQUIP', 'CONFIGS',
   'BLUEPRINTS', 'CRAFTS', 'RESEARCH',
 ] as const;
+const ISOLATED_ENV = [
+  'DB_DRIVER', 'AUTH_PROVIDER', 'JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET',
+  ...STORE_ENV.map((name) => `DATA_FILE_${name}`),
+];
+const savedEnv = new Map(ISOLATED_ENV.map((name) => [name, process.env[name]]));
+
+process.env.DB_DRIVER = 'json';
+process.env.AUTH_PROVIDER = 'local';
+process.env.JWT_ACCESS_SECRET ||= 'dev-secret-change-in-production';
+process.env.JWT_REFRESH_SECRET ||= 'dev-secret-change-in-production';
+
+// 아래 동적 import는 위의 env 설정 이후에 모듈을 평가해야 하므로 정적 import로 대체할 수 없다.
+const tmpDir = mkdtempSync(join(tmpdir(), 'idle-game-integration-'));
 for (const name of STORE_ENV) {
   process.env[`DATA_FILE_${name}`] = join(tmpDir, `${name.toLowerCase()}.json`);
 }
@@ -77,6 +86,10 @@ afterEach(() => {
 afterAll(() => {
   resetAllRepos();
   rmSync(tmpDir, { recursive: true, force: true });
+  for (const [name, value] of savedEnv) {
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  }
 });
 
 // ─── 헬퍼 ───────────────────────────────────────────
