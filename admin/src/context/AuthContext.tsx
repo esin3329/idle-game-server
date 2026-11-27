@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useRef, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { loadTokens, clearTokens, login as apiLogin, getAdminHealth } from '../api';
+import { loadTokens, clearTokens, setTokens, login as apiLogin, getAdminHealth } from '../api';
+import { runLoginFlow } from './loginFlow';
 import type { AdminHealth } from '../types';
 
 type AuthProviderName = NonNullable<AdminHealth['authProvider']>;
@@ -74,21 +75,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string) => {
     const gen = ++authGenRef.current;
     resetCache();
-    await apiLogin(email, password);
-    let res: AdminHealth;
-    try {
-      res = await getAdminHealth();
-    } catch (err) {
-      if (authGenRef.current === gen) {
+    await runLoginFlow({
+      isCurrent: () => authGenRef.current === gen,
+      requestLogin: () => apiLogin(email, password),
+      setTokens,
+      fetchHealth: getAdminHealth,
+      onSuccess: (health) => {
+        resetCache();
+        applyHealth(health);
+      },
+      onFailure: () => {
         clearTokens();
         resetCache();
         applySignedOut();
-      }
-      throw err;
-    }
-    if (authGenRef.current !== gen) throw new Error('로그인이 다른 인증 작업으로 대체되었습니다.');
-    resetCache();
-    applyHealth(res);
+      },
+    });
   };
 
   const logout = () => {

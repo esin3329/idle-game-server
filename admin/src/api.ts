@@ -10,7 +10,7 @@ let accessToken: string | null = null;
 let refreshToken: string | null = null;
 // 로그인/로그아웃(setTokens/clearTokens)마다 증가하는 세션 세대. refresh에 의한 토큰 회전은 올리지 않는다.
 let tokenEpoch = 0;
-let refreshInFlight: Promise<boolean> | null = null;
+let refreshInFlight: { epoch: number; promise: Promise<boolean> } | null = null;
 
 export function setTokens(access: string, refresh: string) {
   tokenEpoch++;
@@ -180,12 +180,14 @@ async function refreshTokens(startEpoch: number): Promise<boolean> {
   }
 }
 
-/** 동시에 발생한 401들이 하나의 refresh 요청을 공유한다(refresh 토큰 회전 중복 방지). */
+/** 같은 세션(tokenEpoch)에서 동시에 발생한 401들만 하나의 refresh 요청을 공유한다(refresh 토큰 회전 중복 방지). */
 function tryRefresh(startEpoch: number): Promise<boolean> {
-  if (!refreshInFlight) {
-    refreshInFlight = refreshTokens(startEpoch).finally(() => { refreshInFlight = null; });
-  }
-  return refreshInFlight;
+  if (refreshInFlight?.epoch === startEpoch) return refreshInFlight.promise;
+  const promise: Promise<boolean> = refreshTokens(startEpoch).finally(() => {
+    if (refreshInFlight?.promise === promise) refreshInFlight = null;
+  });
+  refreshInFlight = { epoch: startEpoch, promise };
+  return promise;
 }
 
 export class ApiError extends Error {
@@ -197,13 +199,12 @@ export class ApiError extends Error {
 
 // ─── Auth ───────────────────────────────────────────
 
+/** 서버 응답만 반환한다. 토큰 저장은 호출자가 세대 검증 후 setTokens()로 직접 수행한다. */
 export async function login(email: string, password: string): Promise<AuthResult> {
-  const data = await request<AuthResult>('/auth/login', {
+  return request<AuthResult>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
   });
-  setTokens(data.tokens.accessToken, data.tokens.refreshToken);
-  return data;
 }
 
 // ─── Admin / Operators ──────────────────────────────
