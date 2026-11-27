@@ -38,10 +38,39 @@ $env:PYTHONIOENCODING = 'utf-8'
 
 Login, registration, server connectivity check, electricity collection, production upgrade, authenticated stage listing (`GameApi.Stages()`), battle session start/progress/abandon/finish, bullet/survivor combat (`BattleRun.cs`, `ClientBattle.cs`; see [IdleGameClient/BATTLE.md](./IdleGameClient/BATTLE.md)), reward display, and portrait safe-area UI are implemented. No demo balance or fake rewards are shown. A missing game API is reported instead of falling back to a mock server.
 
+PR #15 added four meta screens on the base, implemented in [IdleGameClient/Assets/Scripts/ClientMetaScreens.cs](./IdleGameClient/Assets/Scripts/ClientMetaScreens.cs) and opened from `ClientApp` action buttons:
+
+| Screen | Method | What it calls |
+|---|---|---|
+| 격납고 · 파츠 | `ShowHangar` | Wallet summary, owned parts, parts catalog, mecha part stats. Equip and upgrade each use a stable `Idempotency-Key` per action. |
+| 제작소 · 설계도 | `ShowWorkshop` | Blueprint workshop list, craft start, claim. In-progress crafts show a local timer. |
+| 연구소 | `ShowResearch` | Research nodes and level-up. `LiveResearchCodes` (16 codes below) are labeled `[실시간 적용]`. Any other code is preview-only: stored on the server, not applied to production, idle rewards, upgrade cost, battle stats, or scrap rewards. |
+| 랭킹 | `ShowRankings` | Total-wealth ranking (`nickname`, `totalWealth`, `electricityPerSecond`). |
+
+`ClientMetaScreens.IsLiveResearchEffect` is true only for these 16 codes, matching the server (`getResearchBonus` in `src/routes.ts`, `computeBattleLoadoutStats` and `calcBattleScrapReward` in `src/shared/mecha-stats.ts`):
+
+| Applied to | Codes |
+|---|---|
+| Electricity production | `prod_eff_1`, `prod_eff_2`, `prod_passive` |
+| Idle reward (cap, reward, claim bonus) | `prod_cap`, `util_idle_reward`, `util_claim_bonus` |
+| Production-upgrade cost discount | `econ_upgrade_discount_1`, `econ_upgrade_discount_2` |
+| Battle stats | `combat_atk_1`, `combat_atk_2`, `combat_hp_1`, `combat_hp_2`, `combat_speed`, `combat_ult` |
+| Battle scrap reward | `econ_scrap`, `econ_battle_reward` |
+
+Equipped parts and those research effects are copied when a battle session starts (`startBattleSession` in `src/shared/battle-session.ts`) into that session's `statSnapshot`, `loadoutSnapshot`, and `researchSnapshot`. A session already in progress keeps those snapshots. Changing hangar loadout or research does not rewrite them.
+
+In-battle level-up is a three-card choice. Progress may return `pendingOffer` or `upgradesAvailable`. The client then calls `POST /api/battles/:sessionId/upgrades/offer` and submits the pick with `POST /api/battles/:sessionId/upgrades/select`. If `upgrades/offer` returns HTTP 404 with an empty code or `ROUTE_NOT_FOUND`, the client marks upgrades unsupported, leaves the battle running, and does not open the modal (`ClientBattle.LoadUpgradeOffer`). See [IdleGameClient/BATTLE.md](./IdleGameClient/BATTLE.md).
+
+A refresh failure after a successful meta mutation locks the screen and offers reload only, so a stale action button is not shown again. The hangar reads `GET /api/mecha/stats` for the current `statSnapshot` and still opens if that call fails with a non-401 error.
+
+## Historical verification (2026-10-04)
+
+The notes in this section are a past verification record. They are not the current server contract and not the current default API origin (see Environment above). Port 3007 was a Tailscale endpoint used that day; it is not a current default port.
+
 On 2026-10-04, the user-provided port 3007 responded through Tailscale: `/health`, `/stages`, and `/api/stages` returned HTTP 200 with game JSON. `/stages` returned four stages. The earlier HTTPS `/api` address returned 404.
 
-The 2026-10-04 paths above describe the then-deployed server, not the current source contract. The current server serves application endpoints only under `/api`; root aliases such as `/stages` and `/auth/login` were removed. Deploy the server route change together with this client update before switching a live client.
+Those paths describe the server deployed on that date. The current server serves application endpoints only under `/api`. Root aliases such as `/stages` and `/auth/login` are not part of the current contract.
 
-Verified in Unity on 2026-10-04: MCP editor connection and commands, saved `Assets/Scenes/Bootstrap.unity`, Play Mode entry, Korean login UI rendering, successful server connectivity through the actual UI button handler, and empty-login validation. After user login, UI handlers verified collection (7,842 to 8,196 E), one production upgrade (100 E consumed, production 2 to 3 E/s), stage listing, first-stage session creation/status, abandonment, and return to base. Console checks returned no errors or warnings. Screenshots: `IdleGameClient/Captures/login-overlay.png`, `base-verified.png`, and `battle-session.png`.
+Also verified in the Unity Editor on 2026-10-04: MCP editor connection and commands, saved `Assets/Scenes/Bootstrap.unity`, Play Mode entry, Korean login UI rendering, successful server connectivity through the actual UI button handler, and empty-login validation. After user login, UI handlers verified collection (7,842 to 8,196 E), one production upgrade (100 E consumed, production 2 to 3 E/s), stage listing, first-stage session creation/status, abandonment, and return to base. Console checks returned no errors or warnings. Screenshots: `IdleGameClient/Captures/login-overlay.png`, `base-verified.png`, and `battle-session.png`.
 
-Deployed-server contract differences: `/wallet` returned a stale zero balance while `/api/players/:id` reflected collection and upgrades, so the client reads the player endpoint for base balances. Stage availability uses `canEnter` when provided, otherwise the deployed server's `unlocked` field; explicit `canEnter: false` remains authoritative. The server's wallet inconsistency is not repaired by this client change. Registration, live-server full combat completion, Android builds, and device execution remain unverified.
+Deployed-server contract differences observed that day: `/wallet` returned a stale zero balance while `/api/players/:id` reflected collection and upgrades, so the client reads the player endpoint for base balances. Stage availability uses `canEnter` when provided, otherwise the deployed server's `unlocked` field; explicit `canEnter: false` remains authoritative. The server's wallet inconsistency is not repaired by this client change. Registration, live-server full combat completion, Android builds, and device execution remain unverified.
