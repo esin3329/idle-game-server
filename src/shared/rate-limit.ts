@@ -8,9 +8,22 @@ const store = new Map<string, { count: number; resetAt: number }>();
 let lastCleanup = 0;
 export function clearRateLimits(): void { store.clear(); }
 
-export function rateLimit(maxRequests: number, windowMs: number) {
+export type RateLimitScope = 'auto' | 'ip' | 'user';
+
+function clientIp(c: Context): string {
+  const cf = c.req.header('CF-Connecting-IP')?.trim();
+  if (cf) return cf;
+  const forwarded = c.req.header('X-Forwarded-For')?.split(',')[0]?.trim();
+  if (forwarded) return forwarded;
+  return c.req.header('X-Real-IP')?.trim() || 'anonymous';
+}
+
+export function rateLimit(maxRequests: number, windowMs: number, options?: { scope?: RateLimitScope }) {
+  const scope = options?.scope ?? 'auto';
   return async (c: Context, next: Next): Promise<void> => {
-    const key = `${c.req.path}:${c.req.param('id') || c.get('userId') || ''}`;
+    const ip = clientIp(c);
+    const subject = scope === 'ip' ? ip : (c.req.param('id') || c.get('userId') || ip);
+    const key = `${c.req.path}:${subject}`;
     const now = Date.now();
     if (process.env.DB_DRIVER === 'postgres') {
       const scope = createHash('sha256').update(key).digest('hex');

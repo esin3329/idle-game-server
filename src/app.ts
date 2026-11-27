@@ -16,6 +16,7 @@ import upgradesRoutes from './upgrades.routes.js';
 import adminRoutes from './admin.routes.js';
 import { AppError } from './shared/errors.js';
 import { logger } from './shared/logger.js';
+import { operatorAuth } from './shared/jwt-auth.js';
 import { recordRequest, getMetrics } from './shared/metrics.js';
 
 export const app = new Hono<{ Variables: { requestId: string; userId: string; role: string } }>();
@@ -151,7 +152,7 @@ app.get('/ready', async (c) => {
 
 // ─── 메트릭 ──────────────────────────────────────────
 
-app.get('/metrics', (c) => c.json(getMetrics()));
+app.get('/metrics', operatorAuth, (c) => c.json(getMetrics()));
 
 const api = new Hono();
 api.route('/', routes);
