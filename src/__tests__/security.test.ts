@@ -16,6 +16,7 @@ import { resetResearchStores } from '../store-research.js';
 import { resetItemLedger } from '../store-item-ledger.js';
 import { resetBattleStores } from '../store-battle.js';
 import { resetWalletStores } from '../store-wallet.js';
+import { resetAdminStores } from '../store-admin.js';
 import { resetAuthStores } from '../store-auth.js';
 import { jsonAuthRepo } from '../store-auth.js';
 import { jsonPartsRepo, jsonMechaConfigRepo } from '../store-parts.js';
@@ -84,7 +85,7 @@ function createApp() {
 
 beforeEach(async () => {
   process.env.DB_DRIVER = 'json';
-  for (const file of ['data-wallets.json', 'data-ledger.json', 'data-parts.json', 'data-equip.json', 'data-configs.json', 'data-research.json', 'data-item-ledger.json', 'data-blueprints.json', 'data-crafts.json', 'data-battles.json', 'data-battle-events.json', 'data-battle-results.json', 'data-users.json', 'data-sessions.json', 'data-sanctions.json', 'data-profiles.json']) {
+  for (const file of ['data-wallets.json', 'data-ledger.json', 'data-parts.json', 'data-equip.json', 'data-configs.json', 'data-research.json', 'data-item-ledger.json', 'data-blueprints.json', 'data-crafts.json', 'data-battles.json', 'data-battle-events.json', 'data-battle-results.json', 'data-users.json', 'data-sessions.json', 'data-sanctions.json', 'data-profiles.json', 'data-admin-grants.json']) {
     try { require('fs').unlinkSync(require('path').join(process.cwd(), file)); } catch {}
   }
   resetAuthStores();
@@ -95,6 +96,7 @@ beforeEach(async () => {
   resetItemLedger();
   resetBattleStores();
   resetWalletStores();
+  resetAdminStores();
   const now = new Date().toISOString();
   for (const [id, role] of [['admin-user', 'admin'], ['normal-user', 'user'], ['user1', 'user'], ['user2', 'user']]) {
     await jsonAuthRepo.createUser({ id, email: `${id}@example.test`, nickname: id, passwordHash: '', status: 'active', role, createdAt: now, updatedAt: now });

@@ -70,6 +70,20 @@ describe('스테이지', () => {
     expect(body).toHaveLength(2);
   });
 
+  it('GET /stages/:id/bosses → 레거시 DB 스테이지 ID도 bossTimings와 동일한 보스 수를 반환한다', async () => {
+    const app = createApp();
+    const expected = [
+      ['stage_02_canyon', 2],
+      ['stage_03_furnace', 3],
+      ['stage_04_fortress', 3],
+    ] as const;
+    for (const [stageId, count] of expected) {
+      const res = await app.request(`/stages/${stageId}/bosses`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toHaveLength(count);
+    }
+  });
+
   it('GET /stages/:id/requirements → 출격 조건', async () => {
     const app = createApp();
     const res = await app.request('/stages/stage_02_factory/requirements');
@@ -88,6 +102,27 @@ describe('스테이지', () => {
     const body = await res.json() as any[];
     const s1 = body.find((s: any) => s.id === 'stage_01_ruins');
     expect(s1.unlocked).toBe(true);
+    expect(s1.canEnter).toBe(true);
+  });
+
+  it('모든 스테이지의 bossTimings와 bosses 수가 일치하고 전투 후반에 배치된다', async () => {
+    const app = createApp();
+    const res = await app.request('/stages');
+    expect(res.status).toBe(200);
+    const body = await res.json() as any[];
+    for (const stage of body) {
+      expect(Array.isArray(stage.bossTimings)).toBe(true);
+      expect(Array.isArray(stage.bosses)).toBe(true);
+      expect(stage.bossTimings).toHaveLength(stage.bosses.length);
+      expect(typeof stage.canEnter).toBe('boolean');
+      expect(typeof stage.enabled).toBe('boolean');
+      expect(stage.maxCoreEnergy).toBeGreaterThan(0);
+      expect(stage.corePerKill).toBeGreaterThan(0);
+      for (const timing of stage.bossTimings) {
+        expect(timing).toBeGreaterThanOrEqual(stage.durationSeconds * 0.5);
+        expect(timing).toBeLessThanOrEqual(stage.durationSeconds);
+      }
+    }
   });
 });
 

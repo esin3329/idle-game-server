@@ -181,6 +181,19 @@ describe('GET /api/players', () => {
     const body = await res.json();
     expect(body).toEqual([]);
   });
+
+  it('limit/offset 쿼리로 페이지네이션할 수 있어야 한다', async () => {
+    const app = createApp();
+    createPlayer(makePlayer({ nickname: '첫번째' }));
+    createPlayer(makePlayer({ nickname: '두번째' }));
+    createPlayer(makePlayer({ nickname: '세번째' }));
+
+    const res = await app.request('/api/players?limit=1&offset=1', { method: 'GET' });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any[];
+    expect(body).toHaveLength(1);
+    expect(body[0].nickname).toBe('두번째');
+  });
 });
 
 describe('GET /api/players/:id', () => {
@@ -321,6 +334,19 @@ describe('GET /api/rankings', () => {
     expect(body[0].id).toBe('p1'); // p1이 더 부자
     expect(body[1].id).toBe('p2');
     expect(body[0].totalWealth).toBeGreaterThan(body[1].totalWealth);
+  });
+
+  it('limit/offset 쿼리로 랭킹을 페이지네이션할 수 있어야 한다', async () => {
+    const app = createApp();
+    const pastTime = new Date(Date.now() - 10000).toISOString();
+    createPlayer(makePlayer({ id: 'p1', nickname: '부자', electricity: 1000, electricityPerSecond: 10, lastClaimedAt: pastTime }));
+    createPlayer(makePlayer({ id: 'p2', nickname: '거지', electricity: 10, electricityPerSecond: 1, lastClaimedAt: pastTime }));
+
+    const res = await app.request('/api/rankings?limit=1&offset=1', { method: 'GET' });
+    expect(res.status).toBe(200);
+    const body = await res.json() as any[];
+    expect(body).toHaveLength(1);
+    expect(body[0].id).toBe('p2');
   });
 });
 

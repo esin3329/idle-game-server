@@ -1,19 +1,26 @@
 process.env.DB_DRIVER = 'json';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import jwt from 'jsonwebtoken';
 import { getBattleRepo, resetAllRepos } from '../provider.js';
 import { resetAuthStores, jsonAuthRepo } from '../store-auth.js';
 import { resetBattleStores } from '../store-battle.js';
 import { resetWalletStores } from '../store-wallet.js';
+import { resetCraftingStores } from '../store-crafting.js';
+import { resetItemLedger } from '../store-item-ledger.js';
 
 beforeEach(async () => {
-  for (const file of ['data-users.json', 'data-sessions.json', 'data-sanctions.json', 'data-profiles.json', 'data-wallets.json', 'data-battles.json', 'data-battle-events.json', 'data-battle-results.json']) {
-    try { require('fs').unlinkSync(require('path').join(process.cwd(), file)); } catch {}
+  for (const file of ['data-users.json', 'data-sessions.json', 'data-sanctions.json', 'data-profiles.json', 'data-wallets.json', 'data-ledger.json', 'data-blueprints.json', 'data-item-ledger.json', 'data-battles.json', 'data-battle-events.json', 'data-battle-results.json']) {
+    for (const suffix of ['', '.bak']) {
+      try { require('fs').unlinkSync(require('path').join(process.cwd(), file + suffix)); } catch {}
+    }
   }
   resetAuthStores();
   resetAllRepos();
   resetBattleStores();
   resetWalletStores();
+  resetCraftingStores();
+  resetItemLedger();
   const now = new Date().toISOString();
   await jsonAuthRepo.createUser({ id: 'battle-user', email: 'battle-user@example.test', nickname: 'battle-user', passwordHash: '', status: 'active', role: 'user', createdAt: now, updatedAt: now });
 });
@@ -159,5 +166,145 @@ describe('서버 검증 전투 보상 확정', () => {
     await expect(startBattleSession('battle-user', 'stage_01_ruins'))
       .rejects.toMatchObject({ code: 'BATTLE_RESTRICTED' });
     expect(await (await getBattleRepo()).getActiveSessions('battle-user')).toHaveLength(0);
+  });
+
+  it('스테이지 클리어 시 다음 스테이지를 해금하고 GET /api/stages에 반영한다', async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date('2026-01-01T00:00:00.000Z');
+    vi.setSystemTime(startedAt);
+
+    const playerId = 'battle-player-profile-id';
+    const now = startedAt.toISOString();
+    await jsonAuthRepo.createProfile({
+      id: crypto.randomUUID(), playerId, userId: 'battle-user',
+      nickname: 'battle-user', highestStage: 1, createdAt: now, updatedAt: now,
+    });
+    await jsonAuthRepo.createWallet({
+      id: crypto.randomUUID(), playerId, userId: 'battle-user',
+      electricity: 0, electricityPerSecond: 1, scrap: 0, balance: 0,
+      lastClaimedAt: now, createdAt: now, updatedAt: now,
+    });
+
+    const { app } = await import('../app.js');
+    const { startBattleSession, reportBattleEvent, endBattleSession } = await import('../shared/battle-session.js');
+    const repo = await getBattleRepo();
+
+    await expect(startBattleSession('battle-user', 'stage_02_factory'))
+      .rejects.toMatchObject({ code: 'STAGE_LOCKED' });
+
+    const session = await startBattleSession('battle-user', 'stage_01_ruins');
+    expect(session.playerId).toBe(playerId);
+
+    vi.setSystemTime(new Date(startedAt.getTime() + 120_000));
+    await reportBattleEvent(session.id, 'battle-user', {
+      sequence: 1, killsDelta: 10, coreEnergyDelta: 50,
+      bossId: 'boss_ruins_guardian', elapsedSeconds: 120,
+    });
+
+    vi.setSystemTime(new Date(startedAt.getTime() + 180_000));
+    const finished = await endBattleSession(session.id, 'battle-user', {
+      totalKills: 10, totalCoreEnergy: 50,
+      bossDefeated: ['boss_ruins_guardian'], elapsedSeconds: 180,
+    });
+    expect(finished.reward.scrap).toBe(10);
+
+    const stage1Progress = await repo.getPlayerStageProgress(playerId, 'stage_01_ruins');
+    const stage2Progress = await repo.getPlayerStageProgress(playerId, 'stage_02_factory');
+    expect(stage1Progress?.firstClearedAt).toBeTruthy();
+    expect(stage1Progress?.clearCount).toBe(1);
+    expect(stage2Progress?.unlockedAt).toBeTruthy();
+
+    const stage2Session = await startBattleSession('battle-user', 'stage_02_factory');
+    expect(stage2Session.stageId).toBe('stage_02_factory');
+
+    const token = jwt.sign(
+      { sub: 'battle-user', type: 'access', role: 'user' },
+      process.env.JWT_ACCESS_SECRET || 'dev-secret-change-in-production',
+      { expiresIn: 900 },
+    );
+    const authedStagesRes = await app.request('/api/stages', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(authedStagesRes.status).toBe(200);
+    const authedStages = await authedStagesRes.json() as any[];
+    expect(authedStages.find((s) => s.id === 'stage_01_ruins')).toMatchObject({ unlocked: true, canEnter: true });
+    expect(authedStages.find((s) => s.id === 'stage_02_factory')).toMatchObject({ unlocked: true, canEnter: true });
+    expect(authedStages.find((s) => s.id === 'stage_03_lab')).toMatchObject({ unlocked: false, canEnter: false });
+
+    const anonStagesRes = await app.request('/api/stages');
+    expect(anonStagesRes.status).toBe(200);
+    const anonStages = await anonStagesRes.json() as any[];
+    expect(anonStages.find((s) => s.id === 'stage_01_ruins')).toMatchObject({ unlocked: true, canEnter: true });
+    expect(anonStages.find((s) => s.id === 'stage_02_factory')).toMatchObject({ unlocked: false, canEnter: false });
+  });
+
+  it('stage_03_lab과 stage_04_core의 모든 보스 처치 후 클리어가 정상 확정된다', async () => {
+    vi.useFakeTimers();
+    const baseTime = new Date('2026-01-01T00:00:00.000Z');
+    vi.setSystemTime(baseTime);
+
+    const playerId = 'battle-player-late-stages';
+    const now = baseTime.toISOString();
+    await jsonAuthRepo.createProfile({
+      id: crypto.randomUUID(), playerId, userId: 'battle-user',
+      nickname: 'battle-user', highestStage: 4, createdAt: now, updatedAt: now,
+    });
+    await jsonAuthRepo.createWallet({
+      id: crypto.randomUUID(), playerId, userId: 'battle-user',
+      electricity: 0, electricityPerSecond: 1, scrap: 0, balance: 0,
+      lastClaimedAt: now, createdAt: now, updatedAt: now,
+    });
+
+    const repo = await getBattleRepo();
+    await repo.upsertPlayerStageProgress({
+      id: crypto.randomUUID(), playerId, userId: 'battle-user',
+      stageId: 'stage_02_factory', unlockedAt: baseTime, firstClearedAt: baseTime,
+      clearCount: 1, createdAt: baseTime, updatedAt: baseTime,
+    });
+
+    const { startBattleSession, reportBattleEvent, endBattleSession } = await import('../shared/battle-session.js');
+
+    const s3 = await startBattleSession('battle-user', 'stage_03_lab');
+    vi.setSystemTime(new Date(baseTime.getTime() + 240_000));
+    await reportBattleEvent(s3.id, 'battle-user', {
+      sequence: 1, killsDelta: 10, coreEnergyDelta: 70,
+      bossId: 'boss_lab_mutant', elapsedSeconds: 240,
+    });
+    vi.setSystemTime(new Date(baseTime.getTime() + 300_000));
+    await reportBattleEvent(s3.id, 'battle-user', {
+      sequence: 2, killsDelta: 10, coreEnergyDelta: 70,
+      bossId: 'boss_lab_defender', elapsedSeconds: 300,
+    });
+    vi.setSystemTime(new Date(baseTime.getTime() + 360_000));
+    const s3End = await endBattleSession(s3.id, 'battle-user', {
+      totalKills: 20, totalCoreEnergy: 140,
+      bossDefeated: ['boss_lab_mutant', 'boss_lab_defender'], elapsedSeconds: 360,
+    });
+    expect(s3End.reward.scrap).toBe(60);
+
+    const s4Start = new Date('2026-01-01T01:00:00.000Z');
+    vi.setSystemTime(s4Start);
+    const s4 = await startBattleSession('battle-user', 'stage_04_core');
+    vi.setSystemTime(new Date(s4Start.getTime() + 180_000));
+    await reportBattleEvent(s4.id, 'battle-user', {
+      sequence: 1, killsDelta: 5, coreEnergyDelta: 40,
+      bossId: 'boss_core_sentinel', elapsedSeconds: 180,
+    });
+    vi.setSystemTime(new Date(s4Start.getTime() + 270_000));
+    await reportBattleEvent(s4.id, 'battle-user', {
+      sequence: 2, killsDelta: 5, coreEnergyDelta: 40,
+      bossId: 'boss_core_overlord', elapsedSeconds: 270,
+    });
+    vi.setSystemTime(new Date(s4Start.getTime() + 330_000));
+    await reportBattleEvent(s4.id, 'battle-user', {
+      sequence: 3, killsDelta: 5, coreEnergyDelta: 40,
+      bossId: 'boss_final_overmind', elapsedSeconds: 330,
+    });
+    vi.setSystemTime(new Date(s4Start.getTime() + 360_000));
+    const s4End = await endBattleSession(s4.id, 'battle-user', {
+      totalKills: 15, totalCoreEnergy: 120,
+      bossDefeated: ['boss_core_sentinel', 'boss_core_overlord', 'boss_final_overmind'], elapsedSeconds: 360,
+    });
+    expect(s4End.reward.scrap).toBe(60);
   });
 });

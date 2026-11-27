@@ -89,13 +89,6 @@ export async function registerUser(email: string, password: string, nickname: st
     const result = await registerUserTransaction(email, nickname, await hash(password, SALT_ROUNDS));
     userId = result.userId;
     playerId = result.playerId;
-  } else if (mode === 'mysql') {
-    // MySQL: 트랜잭션 최적화
-    const { registerUserTransaction } = await import('../db/mysql-auth.repository.js');
-    const passwordHash = await hash(password, SALT_ROUNDS);
-    const result = await registerUserTransaction(email, nickname, passwordHash);
-    userId = result.userId;
-    playerId = result.playerId;
   } else {
     // JSON: 순차 저장 (중복 검사 포함)
     const repo = await getAuthRepo();

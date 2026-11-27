@@ -96,10 +96,20 @@ routes.get('/players/:id', validatePlayerId, async (c) => {
   return c.json(toPublicPlayerDto(player));
 });
 
+function applyOptionalPagination<T>(items: T[], limitParam?: string, offsetParam?: string): T[] {
+  if (limitParam === undefined && offsetParam === undefined) return items;
+  const parsedLimit = limitParam !== undefined ? Number.parseInt(limitParam, 10) : 50;
+  const parsedOffset = offsetParam !== undefined ? Number.parseInt(offsetParam, 10) : 0;
+  const limit = Number.isFinite(parsedLimit) ? Math.max(1, Math.min(parsedLimit, 200)) : 50;
+  const offset = Number.isFinite(parsedOffset) ? Math.max(0, parsedOffset) : 0;
+  return items.slice(offset, offset + limit);
+}
+
 routes.get('/players', async (c) => {
   const repo = await getRepo();
   const players = await playersWithWallet(await repo.getAllPlayers());
-  return c.json(players.map(toPublicPlayerDto));
+  const paged = applyOptionalPagination(players, c.req.query('limit'), c.req.query('offset'));
+  return c.json(paged.map(toPublicPlayerDto));
 });
 
 // ─── Claim ─────────────────────────────────────────
@@ -281,7 +291,8 @@ routes.get('/rankings', async (c) => {
     })
     .sort((a, b) => b.totalWealth - a.totalWealth);
 
-  return c.json(rankings);
+  const paged = applyOptionalPagination(rankings, c.req.query('limit'), c.req.query('offset'));
+  return c.json(paged);
 });
 
 export default routes;

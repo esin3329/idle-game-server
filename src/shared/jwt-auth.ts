@@ -98,40 +98,9 @@ export function requirePermission(permission: string) {
       return next();
     }
 
-    if (process.env.DB_DRIVER === 'postgres') {
-      const { getDb } = await import('../db/postgres-connection.js');
-      const { operatorRoles, operatorRolePermissions, operatorPermissions } = await import('../db/postgres-schema.js');
-      const { eq, and } = await import('drizzle-orm');
-      const rows = await getDb().select({ id: operatorRolePermissions.id })
-        .from(operatorRolePermissions)
-        .innerJoin(operatorRoles, eq(operatorRolePermissions.roleId, operatorRoles.id))
-        .innerJoin(operatorPermissions, eq(operatorRolePermissions.permissionId, operatorPermissions.id))
-        .where(and(eq(operatorRoles.code, role), eq(operatorPermissions.code, permission))).limit(1);
-      if (!rows.length) throw new AppError('권한이 없습니다.', 403, 'FORBIDDEN');
-      return next();
-    }
-
-    const { getDb } = await import('../db/connection.js');
-    const { operatorRoles, operatorRolePermissions, operatorPermissions } = await import('../db/schema.js');
-    const { eq, and: dAnd } = await import('drizzle-orm');
-    const db = getDb();
-
-    const roleRows = await db.select().from(operatorRoles).where(eq(operatorRoles.code, role)).limit(1);
-    if (roleRows.length === 0) {
-      throw new AppError('권한 정보를 찾을 수 없습니다.', 403, 'FORBIDDEN');
-    }
-
-    const permRows = await db.select().from(operatorPermissions)
-      .where(eq(operatorPermissions.code, permission)).limit(1);
-    if (permRows.length === 0) {
-      throw new AppError('권한이 없습니다.', 403, 'FORBIDDEN');
-    }
-
-    const mapping = await db.select().from(operatorRolePermissions)
-      .where(dAnd(eq(operatorRolePermissions.roleId, roleRows[0].id), eq(operatorRolePermissions.permissionId, permRows[0].id)))
-      .limit(1);
-
-    if (mapping.length === 0) {
+    const { getAdminRepo } = await import('../provider.js');
+    const repo = await getAdminRepo();
+    if (!(await repo.checkPermission(role, permission))) {
       throw new AppError('권한이 없습니다.', 403, 'FORBIDDEN');
     }
 

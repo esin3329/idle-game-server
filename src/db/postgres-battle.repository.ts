@@ -223,7 +223,8 @@ export const postgresBattleRepo: BattleRepository = {
     const existing = await db.select().from(playerStageProgress)
       .where(and(eq(playerStageProgress.playerId, progress.playerId), eq(playerStageProgress.stageId, progress.stageId))).limit(1);
     if (existing.length > 0) {
-      await db.update(playerStageProgress).set(normalized).where(eq(playerStageProgress.id, existing[0].id));
+      const { id: _id, createdAt: _createdAt, ...updateFields } = normalized;
+      await db.update(playerStageProgress).set(updateFields).where(eq(playerStageProgress.id, existing[0].id));
     } else {
       await db.insert(playerStageProgress).values(normalized);
     }
