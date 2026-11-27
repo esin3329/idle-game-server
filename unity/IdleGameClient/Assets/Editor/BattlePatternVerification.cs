@@ -547,7 +547,7 @@ namespace IdleGame.Editor
                 noEffects.BombRadius == 0 && noEffects.DurationBonus == 0);
 
             var practiceFx = EmptyRun();
-            for (int level = 3; level <= 5; level++)
+            for (int level = 1; level <= 5; level++)
                 foreach (var option in BattleRun.BuildPracticeOffer(level)["options"])
                 {
                     var pick = practiceFx.BuildPracticeSelection(option);
@@ -579,6 +579,53 @@ namespace IdleGame.Editor
             bool sameTrail = plainTrail.Count > 0 && plainTrail.Count == armedTrail.Count;
             for (int i = 0; sameTrail && i < plainTrail.Count; i++) sameTrail = plainTrail[i] == armedTrail[i];
             Check("combat effects leave enemy spawn positions unchanged", sameTrail);
+
+            // ── Dash and ultimate invulnerability never shorten each other ──
+            var ultDash = EmptyRun();
+            ultDash.TriggerUltimate();
+            ultDash.Dodge(1);
+            ultDash.Tick(.1f); ultDash.Tick(.1f);
+            ultDash.Bullets.Add(Shot(100, 100, -2000));
+            ultDash.Tick(.1f);
+            Check("dash right after the ultimate keeps the longer invulnerability", ultDash.PlayerX == 100 && ultDash.IsInvulnerable &&
+                ultDash.Hp == 100 && ultDash.HitsTaken == 0);
+            var dashUlt = EmptyRun();
+            dashUlt.Dodge(1);
+            dashUlt.TriggerUltimate();
+            dashUlt.Tick(.1f); dashUlt.Tick(.1f);
+            dashUlt.Bullets.Add(Shot(100, 100, -2000));
+            dashUlt.Tick(.1f);
+            Check("ultimate right after a dash extends invulnerability to 0.35 seconds", dashUlt.IsInvulnerable &&
+                dashUlt.Hp == 100 && dashUlt.HitsTaken == 0);
+
+            // ── Practice battle: every new effect is reachable through real progress within 60 seconds ──
+            var practiceBattle = new BattleRun(BattleRun.BuildPracticeStage(), BattleRun.BuildPracticeSession());
+            int offersOpened = 0, nextOfferCore = BattleRun.PracticeUpgradeCoreStep;
+            var wantedEffects = new[] { "ultimatePower", "splashRadius", "chainTargets", "bombRadius", "duration" };
+            var gotEffects = new HashSet<string>();
+            int effectsByLevelFive = 0;
+            for (int i = 0; i < 650 && !practiceBattle.Ended; i++)
+            {
+                practiceBattle.Tick(.1f);
+                while (nextOfferCore <= practiceBattle.MaxCore && practiceBattle.Core >= nextOfferCore)
+                {
+                    var practiceOffer = BattleRun.BuildPracticeOffer(++offersOpened);
+                    nextOfferCore += BattleRun.PracticeUpgradeCoreStep;
+                    JToken chosen = practiceOffer["options"][0];
+                    foreach (var candidate in practiceOffer["options"])
+                        foreach (var key in wantedEffects)
+                            if (candidate["effects"]?[key] != null && !gotEffects.Contains(key)) chosen = candidate;
+                    foreach (var key in wantedEffects)
+                        if (chosen["effects"]?[key] != null) gotEffects.Add(key);
+                    var practiceChoice = practiceBattle.BuildPracticeSelection(chosen);
+                    practiceBattle.ApplyEffectiveStats(practiceChoice["effectiveStats"], practiceChoice["selectedUpgrade"]);
+                    if (offersOpened == 5) effectsByLevelFive = gotEffects.Count;
+                }
+            }
+            Check("practice battle reaches the fifth upgrade offer through play", offersOpened >= 5 && practiceBattle.Core >= 250);
+            Check("practice offers 1-5 deliver ultimate splash chain bomb and duration during play", effectsByLevelFive == 5 &&
+                practiceBattle.UltimatePower > 30 && practiceBattle.UltimateCooldownDuration < 30 && practiceBattle.SplashRadius > 0 &&
+                practiceBattle.ChainTargets > 0 && practiceBattle.BombRadius > 0 && practiceBattle.DurationBonus > 0);
             return "BULLET_TESTS_PASS: " + passed.Count + " checks\n" + string.Join("\n", passed);
         }
 

@@ -31,7 +31,7 @@ namespace IdleGame
         private Button ultimateButton;
         private Text ultimateCaption;
         private int visibleUltimates;
-        private const int PracticeUpgradeCoreStep = 50;
+        private const int PracticeUpgradeCoreStep = BattleRun.PracticeUpgradeCoreStep;
         // In-battle upgrade selection: the simulation stays paused while the modal (or its offer request) is pending.
         private bool battlePausedForUpgrade, upgradeSelecting, battleUpgradesUnsupported;
         private JToken upgradeOffer;
@@ -260,7 +260,8 @@ namespace IdleGame
             battleHud.text = $"{Mathf.FloorToInt(battle.Elapsed)} / {battle.Duration}초   HP {battle.Hp:0} / {battle.MaxHp:0}{(battle.ShieldHp > 0 ? $" · 보호막 {battle.ShieldHp:0}" : "")}\n처치 {battle.Kills} · 코어 {battle.Core} · 대시 {(battle.DodgeCooldown > 0 ? battle.DodgeCooldown.ToString("0.0") + "초" : "준비")} · 궁극기 {ultimateStatus} · 강화 {battle.AppliedUpgrades.Count}";
             if (ultimateButton)
             {
-                ultimateButton.interactable = !battle.Ended && !battlePausedForUpgrade && battle.UltimateCooldown <= 0;
+                ultimateButton.interactable = !battleNetworkFailed && !battleFinishing && !battlePausedForUpgrade &&
+                    !battle.Ended && battle.UltimateCooldown <= 0;
                 if (ultimateCaption) ultimateCaption.text = battle.UltimateCooldown > 0 ? $"궁극기 {battle.UltimateCooldown:0.0}초" : "궁극기 준비";
             }
             if (battle.UltimatesUsed != visibleUltimates)
@@ -393,9 +394,7 @@ namespace IdleGame
         public void BeginBulletPreview()
         {
             if (battle != null || busy) return;
-            var stage = JObject.Parse("{\"name\":\"생존 연습 · 보상 없음\",\"durationSeconds\":60,\"maxKills\":40,\"bossTimings\":[30],\"bosses\":[{\"code\":\"practice\",\"name\":\"연습 보스\",\"hp\":1200,\"attackPower\":8}]}");
-            var session = JObject.Parse("{\"id\":\"local-bullet-practice\",\"statSnapshot\":{\"maxHp\":200,\"attackPower\":8,\"attackSpeed\":240}}");
-            battle = new BattleRun(stage, session);
+            battle = new BattleRun(BattleRun.BuildPracticeStage(), BattleRun.BuildPracticeSession());
             battlePreview = true; battleNetworkFailed = battleFinishing = false;
             draggingPilot = false; visibleShots = 0; muzzleUntil = dodgeUntil = 0;
             ResetUltimateUi();

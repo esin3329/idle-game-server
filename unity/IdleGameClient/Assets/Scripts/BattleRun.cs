@@ -239,18 +239,26 @@ namespace IdleGame
         private static readonly JArray PracticeUpgrades = JArray.Parse(@"[
             {""upgradeId"":""practice_rapid_fire"",""name"":""연사 강화"",""description"":""사격 간격이 짧아지고 공격력이 오른다."",""category"":""weapon"",""tier"":1,""group"":""practice_rapid"",""effects"":{""attackSpeed"":-40,""attackPower"":2}},
             {""upgradeId"":""practice_armor_plate"",""name"":""장갑판"",""description"":""최대 체력이 늘고 같은 만큼 회복한다."",""category"":""armor"",""tier"":1,""group"":""practice_armor"",""effects"":{""maxHp"":40}},
-            {""upgradeId"":""practice_thruster"",""name"":""추진기"",""description"":""이동 속도가 빨라진다."",""category"":""utility"",""tier"":1,""group"":""practice_thruster"",""effects"":{""moveSpeed"":15}},
-            {""upgradeId"":""practice_dash_coil"",""name"":""대시 코일"",""description"":""대시 재사용 대기시간이 줄어든다."",""category"":""utility"",""tier"":1,""group"":""practice_dash"",""effects"":{""dashCooldown"":-1000}},
-            {""upgradeId"":""practice_nanite"",""name"":""수리 나노봇"",""description"":""초당 체력을 회복한다."",""category"":""armor"",""tier"":1,""group"":""practice_nanite"",""effects"":{""hpRegenPerSec"":1.5}},
-            {""upgradeId"":""practice_barrier"",""name"":""에너지 보호막"",""description"":""피해를 먼저 흡수하는 보호막을 얻는다."",""category"":""armor"",""tier"":1,""group"":""practice_barrier"",""effects"":{""shieldHp"":30}},
-            {""upgradeId"":""practice_salvage"",""name"":""잔해 회수"",""description"":""적을 처치할 때마다 체력을 회복한다."",""category"":""special"",""tier"":1,""group"":""practice_salvage"",""effects"":{""healAmount"":4}},
-            {""upgradeId"":""practice_overcharge"",""name"":""과충전 탄"",""description"":""공격력이 크게 오른다."",""category"":""weapon"",""tier"":1,""group"":""practice_overcharge"",""effects"":{""attackPower"":5}},
             {""upgradeId"":""practice_ultimate_core"",""name"":""궁극기 코어"",""description"":""궁극기 위력이 오르고 재사용 대기시간이 줄어든다."",""category"":""special"",""tier"":1,""group"":""practice_ultimate"",""effects"":{""ultimatePower"":20,""ultimateCooldown"":-5000}},
             {""upgradeId"":""practice_splash"",""name"":""확산탄"",""description"":""직격 주변의 적에게 광역 피해를 준다."",""category"":""weapon"",""tier"":1,""group"":""practice_splash"",""effects"":{""splashRadius"":2,""attackPower"":2}},
+            {""upgradeId"":""practice_thruster"",""name"":""추진기"",""description"":""이동 속도가 빨라진다."",""category"":""utility"",""tier"":1,""group"":""practice_thruster"",""effects"":{""moveSpeed"":15}},
+            {""upgradeId"":""practice_dash_coil"",""name"":""대시 코일"",""description"":""대시 재사용 대기시간이 줄어든다."",""category"":""utility"",""tier"":1,""group"":""practice_dash"",""effects"":{""dashCooldown"":-1000}},
             {""upgradeId"":""practice_chain"",""name"":""연쇄 번개"",""description"":""직격 후 가까운 적에게 번개가 이어진다."",""category"":""weapon"",""tier"":1,""group"":""practice_chain"",""effects"":{""chainTargets"":2,""attackPower"":2}},
+            {""upgradeId"":""practice_nanite"",""name"":""수리 나노봇"",""description"":""초당 체력을 회복한다."",""category"":""armor"",""tier"":1,""group"":""practice_nanite"",""effects"":{""hpRegenPerSec"":1.5}},
+            {""upgradeId"":""practice_barrier"",""name"":""에너지 보호막"",""description"":""피해를 먼저 흡수하는 보호막을 얻는다."",""category"":""armor"",""tier"":1,""group"":""practice_barrier"",""effects"":{""shieldHp"":30}},
             {""upgradeId"":""practice_bomb"",""name"":""처치 폭발"",""description"":""적을 처치하면 주변에 폭발이 일어난다."",""category"":""special"",""tier"":1,""group"":""practice_bomb"",""effects"":{""bombRadius"":3,""attackPower"":2}},
+            {""upgradeId"":""practice_salvage"",""name"":""잔해 회수"",""description"":""적을 처치할 때마다 체력을 회복한다."",""category"":""special"",""tier"":1,""group"":""practice_salvage"",""effects"":{""healAmount"":4}},
+            {""upgradeId"":""practice_overcharge"",""name"":""과충전 탄"",""description"":""공격력이 크게 오른다."",""category"":""weapon"",""tier"":1,""group"":""practice_overcharge"",""effects"":{""attackPower"":5}},
             {""upgradeId"":""practice_duration"",""name"":""지속 화염"",""description"":""직격한 적이 불타고 대시 무적이 길어진다."",""category"":""utility"",""tier"":1,""group"":""practice_duration"",""effects"":{""duration"":20,""attackPower"":2}}
         ]");
+
+        /// <summary>Core energy between practice upgrade offers (levels 1-5 arrive at 50, 100, 150, 200, 250).</summary>
+        public const int PracticeUpgradeCoreStep = 50;
+
+        /// <summary>Stage used by the Editor practice battle; 15 core per kill reaches the fifth offer within 60 seconds.</summary>
+        public static JObject BuildPracticeStage() => JObject.Parse("{\"name\":\"생존 연습 · 보상 없음\",\"durationSeconds\":60,\"maxKills\":40,\"corePerKill\":15,\"maxCoreEnergy\":300,\"bossTimings\":[30],\"bosses\":[{\"code\":\"practice\",\"name\":\"연습 보스\",\"hp\":1200,\"attackPower\":8}]}");
+
+        public static JObject BuildPracticeSession() => JObject.Parse("{\"id\":\"local-bullet-practice\",\"statSnapshot\":{\"maxHp\":200,\"attackPower\":8,\"attackSpeed\":240}}");
 
         /// <summary>Builds a deterministic three-option offer for practice mode in the same shape as the server's offer.</summary>
         public static JObject BuildPracticeOffer(int level)
@@ -303,7 +311,7 @@ namespace IdleGame
             if (Ended || dodgeWait > 0 || direction == 0) return;
             PlayerX = Math.Max(-160, Math.Min(160, PlayerX + Math.Sign(direction) * 100));
             dodgeWait = DashCooldownDuration;
-            invincible = DodgeInvincibleSeconds * (1f + DurationBonus / 100f);
+            invincible = Math.Max(invincible, DodgeInvincibleSeconds * (1f + DurationBonus / 100f));
         }
 
         public void MoveTo(float x, float y, float delta)

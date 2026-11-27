@@ -33,6 +33,6 @@ On success `BattleRun.ApplyEffectiveStats(effectiveStats, selectedUpgrade)` appl
 
 Like `projectileSpeed`, `splashRadius`, `chainTargets`, `bombRadius`, and `duration` use effectiveStats totals when the server reports the key, and only fall back to adding the picked card's `effects` deltas for servers that omit it. The practice battle's local pool includes ultimate, splash, chain, kill-explosion, and duration cards so each effect can be tried in **Preview Bullet Battle**.
 
-The Editor practice battle (**Idle Game > Preview Bullet Battle**) offers a local three-card choice each time core energy reaches 50, 100, 150, and so on. It builds the effective stats locally and never contacts the server.
+The Editor practice battle (**Idle Game > Preview Bullet Battle**) grants 15 core per kill and offers a local three-card choice each time core energy reaches 50, 100, 150, and so on, so the ultimate, splash, chain, kill-explosion, and duration cards are all offered by the fifth level (250 core) within the 60-second run. It builds the effective stats locally and never contacts the server.
 
 The hangar shows the current combat stats from `GET api/mecha/stats` when the server provides them, and falls back silently otherwise. Research labeled live is limited to the codes the server applies (`prod_eff_1`, `prod_eff_2`, `prod_passive`, `prod_cap`, `util_claim_bonus`, `util_idle_reward`, `econ_upgrade_discount_1`, `econ_upgrade_discount_2`, `combat_atk_1`, `combat_atk_2`, `combat_hp_1`, `combat_hp_2`, `combat_speed`, `combat_ult`, `econ_scrap`, `econ_battle_reward`).
