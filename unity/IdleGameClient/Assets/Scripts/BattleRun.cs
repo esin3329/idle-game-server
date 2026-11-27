@@ -17,6 +17,7 @@ namespace IdleGame
             public float AttackWait, BurstAim;
             public int ShotWave, BurstLeft;
             public float LastShotAt = -10, LastHitAt = -10;
+            public float BurnRemaining, BurnDps;
             public bool Moving;
             public bool IsRanged => BossId != null || Kind == EnemyKind.Rifle || Kind == EnemyKind.MachineGun;
             public float Radius => BossId != null ? 32 : Kind == EnemyKind.Armored ? 26 : 18;
@@ -36,6 +37,14 @@ namespace IdleGame
         public const float PlayerRadius = 9, MoveSpeed = 360;
         private const float DefaultDashCooldown = .75f, BaseDashCooldownMs = 5000, MinDashCooldown = .2f, MinAttackInterval = .05f;
         private const float ProjectileBaseSpeed = 620f, CritBaseMultiplier = 1.5f;
+        // Combat-effect tuning: area radii are scaled from the server's per-upgrade units to arena units.
+        private const float DefaultUltimatePower = 30f, DefaultUltimateCooldownMs = 30000f, MinUltimateCooldown = 3f;
+        private const float UltimateInvincibleSeconds = .35f, DodgeInvincibleSeconds = .25f;
+        private const float SplashUnitRadius = 24f, SplashDamageRatio = .5f;
+        private const float ChainRange = 140f, ChainDamageRatio = .6f;
+        private const float BombUnitRadius = 28f, BombDamageRatio = .8f;
+        private const int MaxExplosionDepth = 3;
+        private const float BurnBaseSeconds = 1.5f, BurnDpsRatio = .25f;
         public readonly List<string> BossesDefeated = new List<string>();
         public readonly string SessionId, StageName;
         public readonly int Duration, MaxKills, MaxCore;
@@ -52,6 +61,16 @@ namespace IdleGame
         public float CritRate { get; private set; }
         public float CritDamage { get; private set; }
         public float ProjectileSpeedMultiplier { get; private set; } = 1f;
+        // Ultimate: power is the damage dealt to every enemy; the cooldown is in seconds (server ms / 1000, at least 3 s).
+        public float UltimatePower { get; private set; } = DefaultUltimatePower;
+        public float UltimateCooldownDuration { get; private set; } = DefaultUltimateCooldownMs / 1000f;
+        public float UltimateCooldown => Math.Max(0, ultimateWait);
+        public int UltimatesUsed { get; private set; }
+        // Combat effects from upgrades: splash/bomb radii and chain count are units; DurationBonus is a percentage.
+        public float SplashRadius { get; private set; }
+        public int ChainTargets { get; private set; }
+        public float BombRadius { get; private set; }
+        public float DurationBonus { get; private set; }
         public readonly List<string> AppliedUpgrades = new List<string>();
         public float Elapsed { get; private set; }
         public float Hp { get; private set; }
@@ -74,7 +93,7 @@ namespace IdleGame
         private int nextBoss, spawned;
         private float shieldCapacity;
         private readonly Random critRandom;
-        private float shotWait, spawnWait, dodgeWait, invincible, hitFlash, lastPlayerX, lastPlayerY;
+        private float shotWait, spawnWait, dodgeWait, invincible, hitFlash, lastPlayerX, lastPlayerY, ultimateWait;
 
         public BattleRun(JToken stage, JToken session)
         {
@@ -93,6 +112,10 @@ namespace IdleGame
             if (moveSpeed > 0) CurrentMoveSpeed = MoveSpeed * moveSpeed / 100f;
             float dashCooldown = (float?)stats?["dashCooldown"] ?? 0;
             if (dashCooldown > 0) DashCooldownDuration = ScaleDashCooldown(dashCooldown);
+            float ultimatePower = (float?)stats?["ultimatePower"] ?? 0;
+            if (ultimatePower > 0) UltimatePower = ultimatePower;
+            float ultimateCooldown = (float?)stats?["ultimateCooldown"] ?? 0;
+            if (ultimateCooldown > 0) UltimateCooldownDuration = ScaleUltimateCooldown(ultimateCooldown);
             bossDefinitions = stage["bosses"] as JArray ?? new JArray();
             var times = stage["bossTimings"];
             bossTimes = times?.Type == JTokenType.String ? JArray.Parse((string)times) : times as JArray ?? new JArray();
@@ -128,13 +151,15 @@ namespace IdleGame
         private static float ScaleDashCooldown(float milliseconds) =>
             Math.Max(MinDashCooldown, DefaultDashCooldown * (milliseconds / BaseDashCooldownMs));
 
+        private static float ScaleUltimateCooldown(float milliseconds) => Math.Max(MinUltimateCooldown, milliseconds / 1000f);
+
         /// <summary>
         /// Applies the server's effectiveStats (attackSpeed/dashCooldown in ms, moveSpeed in % of 100) after an upgrade pick.
         /// Max HP and shield gains also heal by the same amount; reductions only clamp the current value.
         /// </summary>
         public void ApplyEffectiveStats(JToken effectiveStats, JToken selectedUpgrade = null)
         {
-            bool projectileFromStats = false;
+            bool projectileFromStats = false, splashFromStats = false, chainFromStats = false, bombFromStats = false, durationFromStats = false;
             if (effectiveStats != null && effectiveStats.Type != JTokenType.Null)
             {
                 float? attack = (float?)effectiveStats["attackPower"];
@@ -152,6 +177,10 @@ namespace IdleGame
                 if (moveSpeed > 0) CurrentMoveSpeed = MoveSpeed * (moveSpeed.Value / 100f);
                 float? dashCooldown = (float?)effectiveStats["dashCooldown"];
                 if (dashCooldown > 0) DashCooldownDuration = ScaleDashCooldown(dashCooldown.Value);
+                float? ultimatePower = (float?)effectiveStats["ultimatePower"];
+                if (ultimatePower > 0) UltimatePower = ultimatePower.Value;
+                float? ultimateCooldown = (float?)effectiveStats["ultimateCooldown"];
+                if (ultimateCooldown > 0) UltimateCooldownDuration = ScaleUltimateCooldown(ultimateCooldown.Value);
                 float? regen = (float?)effectiveStats["hpRegenPerSec"];
                 if (regen != null) HpRegenPerSec = Math.Max(0, regen.Value);
                 float? shield = (float?)effectiveStats["shieldHp"];
@@ -174,11 +203,33 @@ namespace IdleGame
                     ProjectileSpeedMultiplier = Math.Max(.1f, 1f + projectileSpeed.Value / 100f);
                     projectileFromStats = true;
                 }
+                // Combat effects: effectiveStats carries totals when the server reports them.
+                float? splash = (float?)effectiveStats["splashRadius"];
+                if (splash != null) { SplashRadius = Math.Max(0, splash.Value); splashFromStats = true; }
+                float? chain = (float?)effectiveStats["chainTargets"];
+                if (chain != null) { ChainTargets = Math.Max(0, (int)Math.Round(chain.Value)); chainFromStats = true; }
+                float? bomb = (float?)effectiveStats["bombRadius"];
+                if (bomb != null) { BombRadius = Math.Max(0, bomb.Value); bombFromStats = true; }
+                float? duration = (float?)effectiveStats["duration"];
+                if (duration != null) { DurationBonus = Math.Max(0, duration.Value); durationFromStats = true; }
             }
             if (!projectileFromStats)
             {
                 float? pickedProjectile = (float?)((selectedUpgrade as JObject)?["effects"] as JObject)?["projectileSpeed"];
                 if (pickedProjectile != null) ProjectileSpeedMultiplier = Math.Max(.1f, ProjectileSpeedMultiplier + pickedProjectile.Value / 100f);
+            }
+            // Older servers send only the card's deltas: accumulate them for keys effectiveStats did not report.
+            var pickedEffects = (selectedUpgrade as JObject)?["effects"] as JObject;
+            if (pickedEffects != null)
+            {
+                float? pickedSplash = (float?)pickedEffects["splashRadius"];
+                if (!splashFromStats && pickedSplash != null) SplashRadius = Math.Max(0, SplashRadius + pickedSplash.Value);
+                float? pickedChain = (float?)pickedEffects["chainTargets"];
+                if (!chainFromStats && pickedChain != null) ChainTargets = Math.Max(0, ChainTargets + (int)Math.Round(pickedChain.Value));
+                float? pickedBomb = (float?)pickedEffects["bombRadius"];
+                if (!bombFromStats && pickedBomb != null) BombRadius = Math.Max(0, BombRadius + pickedBomb.Value);
+                float? pickedDuration = (float?)pickedEffects["duration"];
+                if (!durationFromStats && pickedDuration != null) DurationBonus = Math.Max(0, DurationBonus + pickedDuration.Value);
             }
             string upgradeId = selectedUpgrade != null && selectedUpgrade.Type != JTokenType.Null ? (string)selectedUpgrade["id"] : null;
             if (!string.IsNullOrEmpty(upgradeId)) AppliedUpgrades.Add(upgradeId);
@@ -193,7 +244,12 @@ namespace IdleGame
             {""upgradeId"":""practice_nanite"",""name"":""수리 나노봇"",""description"":""초당 체력을 회복한다."",""category"":""armor"",""tier"":1,""group"":""practice_nanite"",""effects"":{""hpRegenPerSec"":1.5}},
             {""upgradeId"":""practice_barrier"",""name"":""에너지 보호막"",""description"":""피해를 먼저 흡수하는 보호막을 얻는다."",""category"":""armor"",""tier"":1,""group"":""practice_barrier"",""effects"":{""shieldHp"":30}},
             {""upgradeId"":""practice_salvage"",""name"":""잔해 회수"",""description"":""적을 처치할 때마다 체력을 회복한다."",""category"":""special"",""tier"":1,""group"":""practice_salvage"",""effects"":{""healAmount"":4}},
-            {""upgradeId"":""practice_overcharge"",""name"":""과충전 탄"",""description"":""공격력이 크게 오른다."",""category"":""weapon"",""tier"":1,""group"":""practice_overcharge"",""effects"":{""attackPower"":5}}
+            {""upgradeId"":""practice_overcharge"",""name"":""과충전 탄"",""description"":""공격력이 크게 오른다."",""category"":""weapon"",""tier"":1,""group"":""practice_overcharge"",""effects"":{""attackPower"":5}},
+            {""upgradeId"":""practice_ultimate_core"",""name"":""궁극기 코어"",""description"":""궁극기 위력이 오르고 재사용 대기시간이 줄어든다."",""category"":""special"",""tier"":1,""group"":""practice_ultimate"",""effects"":{""ultimatePower"":20,""ultimateCooldown"":-5000}},
+            {""upgradeId"":""practice_splash"",""name"":""확산탄"",""description"":""직격 주변의 적에게 광역 피해를 준다."",""category"":""weapon"",""tier"":1,""group"":""practice_splash"",""effects"":{""splashRadius"":2,""attackPower"":2}},
+            {""upgradeId"":""practice_chain"",""name"":""연쇄 번개"",""description"":""직격 후 가까운 적에게 번개가 이어진다."",""category"":""weapon"",""tier"":1,""group"":""practice_chain"",""effects"":{""chainTargets"":2,""attackPower"":2}},
+            {""upgradeId"":""practice_bomb"",""name"":""처치 폭발"",""description"":""적을 처치하면 주변에 폭발이 일어난다."",""category"":""special"",""tier"":1,""group"":""practice_bomb"",""effects"":{""bombRadius"":3,""attackPower"":2}},
+            {""upgradeId"":""practice_duration"",""name"":""지속 화염"",""description"":""직격한 적이 불타고 대시 무적이 길어진다."",""category"":""utility"",""tier"":1,""group"":""practice_duration"",""effects"":{""duration"":20,""attackPower"":2}}
         ]");
 
         /// <summary>Builds a deterministic three-option offer for practice mode in the same shape as the server's offer.</summary>
@@ -225,7 +281,13 @@ namespace IdleGame
                 ["maxHp"] = MaxHp + Delta("maxHp"),
                 ["hpRegenPerSec"] = HpRegenPerSec + Delta("hpRegenPerSec"),
                 ["shieldHp"] = shieldCapacity + Delta("shieldHp"),
-                ["healOnKill"] = HealOnKill + Delta("healAmount")
+                ["healOnKill"] = HealOnKill + Delta("healAmount"),
+                ["ultimatePower"] = UltimatePower * (1f + Delta("ultimatePower") / 100f),
+                ["ultimateCooldown"] = Math.Max(MinUltimateCooldown * 1000f, UltimateCooldownDuration * 1000f + Delta("ultimateCooldown")),
+                ["splashRadius"] = SplashRadius + Delta("splashRadius"),
+                ["chainTargets"] = ChainTargets + Delta("chainTargets"),
+                ["bombRadius"] = BombRadius + Delta("bombRadius"),
+                ["duration"] = DurationBonus + Delta("duration")
             };
             return new JObject
             {
@@ -241,7 +303,7 @@ namespace IdleGame
             if (Ended || dodgeWait > 0 || direction == 0) return;
             PlayerX = Math.Max(-160, Math.Min(160, PlayerX + Math.Sign(direction) * 100));
             dodgeWait = DashCooldownDuration;
-            invincible = .25f;
+            invincible = DodgeInvincibleSeconds * (1f + DurationBonus / 100f);
         }
 
         public void MoveTo(float x, float y, float delta)
@@ -264,6 +326,7 @@ namespace IdleGame
             delta = Math.Min(delta, .1f);
             Elapsed = Math.Min(Duration, Elapsed + delta);
             dodgeWait -= delta;
+            ultimateWait -= delta;
             invincible -= delta;
             hitFlash -= delta;
             spawnWait -= delta;
@@ -336,6 +399,7 @@ namespace IdleGame
                 }
             }
             TickBullets(delta);
+            TickBurn(delta);
             lastPlayerX = PlayerX;
             lastPlayerY = PlayerY;
         }
@@ -420,9 +484,18 @@ namespace IdleGame
                 {
                     float damage = bullet.Damage;
                     if (CritRate > 0 && critRandom.NextDouble() * 100 < CritRate) damage *= CritBaseMultiplier + CritDamage / 100f;
-                    bullet.Target.Hp -= damage;
-                    bullet.Target.LastHitAt = Elapsed;
-                    if (bullet.Target.Hp <= 0) DefeatEnemy(bullet.Target);
+                    var target = bullet.Target;
+                    target.Hp -= damage;
+                    target.LastHitAt = Elapsed;
+                    if (target.Hp <= 0) DefeatEnemy(target);
+                    // Splash and chain are one level deep: their damage never triggers another splash/chain.
+                    if (SplashRadius > 0) ApplySplash(target, bullet.Damage);
+                    if (ChainTargets > 0) ApplyChain(target, bullet.Damage);
+                    if (DurationBonus > 0 && target.Hp > 0)
+                    {
+                        target.BurnRemaining = BurnBaseSeconds * (1f + DurationBonus / 100f);
+                        target.BurnDps = AttackPower * BurnDpsRatio;
+                    }
                     Bullets.RemoveAt(i);
                 }
                 else if (!bullet.Friendly && SegmentHits(oldX - lastPlayerX, oldY - lastPlayerY, bullet.X - PlayerX,
@@ -452,13 +525,100 @@ namespace IdleGame
             hitFlash = .15f;
         }
 
-        private void DefeatEnemy(Enemy enemy)
+        // Kill bookkeeping, then an optional bomb blast; explosionDepth caps bomb chain reactions.
+        private void DefeatEnemy(Enemy enemy, int explosionDepth = 0)
         {
             Enemies.Remove(enemy);
             Kills++;
             Core = Math.Min(MaxCore, Core + corePerKill);
             if (HealOnKill > 0 && Hp > 0) Hp = Math.Min(MaxHp, Hp + HealOnKill);
             if (enemy.BossId != null) BossesDefeated.Add(enemy.BossId);
+            if (BombRadius <= 0 || explosionDepth >= MaxExplosionDepth) return;
+            float radius = BombRadius * BombUnitRadius;
+            foreach (var other in Enemies.ToArray())
+            {
+                if (other.Hp <= 0 || !Enemies.Contains(other) || DistanceSquared(other, enemy.X, enemy.Y) > radius * radius) continue;
+                other.Hp -= AttackPower * BombDamageRatio;
+                other.LastHitAt = Elapsed;
+                if (other.Hp <= 0) DefeatEnemy(other, explosionDepth + 1);
+            }
+        }
+
+        private void ApplySplash(Enemy center, float baseDamage)
+        {
+            float x = center.X, y = center.Y, radius = SplashRadius * SplashUnitRadius;
+            foreach (var other in Enemies.ToArray())
+            {
+                if (other == center || other.Hp <= 0 || !Enemies.Contains(other) || DistanceSquared(other, x, y) > radius * radius) continue;
+                other.Hp -= baseDamage * SplashDamageRatio;
+                other.LastHitAt = Elapsed;
+                if (other.Hp <= 0) DefeatEnemy(other);
+            }
+        }
+
+        // Picks the nearest ChainTargets living enemies within range first, then damages them.
+        private void ApplyChain(Enemy origin, float baseDamage)
+        {
+            var picked = new List<Enemy>(ChainTargets);
+            for (int n = 0; n < ChainTargets; n++)
+            {
+                Enemy best = null;
+                float bestDistance = ChainRange * ChainRange;
+                foreach (var other in Enemies)
+                {
+                    if (other == origin || other.Hp <= 0 || picked.Contains(other)) continue;
+                    float distance = DistanceSquared(other, origin.X, origin.Y);
+                    if (distance <= bestDistance) { best = other; bestDistance = distance; }
+                }
+                if (best == null) break;
+                picked.Add(best);
+            }
+            foreach (var other in picked)
+            {
+                if (other.Hp <= 0 || !Enemies.Contains(other)) continue;
+                other.Hp -= baseDamage * ChainDamageRatio;
+                other.LastHitAt = Elapsed;
+                if (other.Hp <= 0) DefeatEnemy(other);
+            }
+        }
+
+        private void TickBurn(float delta)
+        {
+            bool burning = false;
+            foreach (var enemy in Enemies)
+                if (enemy.BurnRemaining > 0) { burning = true; break; }
+            if (!burning) return;
+            foreach (var enemy in Enemies.ToArray())
+            {
+                if (enemy.BurnRemaining <= 0 || enemy.Hp <= 0 || !Enemies.Contains(enemy)) continue;
+                float burnStep = Math.Min(delta, enemy.BurnRemaining);
+                enemy.BurnRemaining = Math.Max(0, enemy.BurnRemaining - delta);
+                enemy.Hp -= enemy.BurnDps * burnStep;
+                if (enemy.Hp <= 0) DefeatEnemy(enemy);
+            }
+        }
+
+        /// <summary>Fires the active ultimate: damages every living enemy, grants brief invulnerability, then starts the cooldown.</summary>
+        public bool TriggerUltimate()
+        {
+            if (Ended || ultimateWait > 0) return false;
+            ultimateWait = UltimateCooldownDuration;
+            invincible = Math.Max(invincible, UltimateInvincibleSeconds * (1f + DurationBonus / 100f));
+            UltimatesUsed++;
+            foreach (var enemy in Enemies.ToArray())
+            {
+                if (enemy.Hp <= 0 || !Enemies.Contains(enemy)) continue;
+                enemy.Hp -= UltimatePower;
+                enemy.LastHitAt = Elapsed;
+                if (enemy.Hp <= 0) DefeatEnemy(enemy);
+            }
+            return true;
+        }
+
+        private static float DistanceSquared(Enemy enemy, float x, float y)
+        {
+            float dx = enemy.X - x, dy = enemy.Y - y;
+            return dx * dx + dy * dy;
         }
 
         private static bool SegmentHits(float x0, float y0, float x1, float y1, float x, float y, float radius)
