@@ -25,22 +25,21 @@ const url = (database: string) =>
 /** Ask the OS for a free ephemeral port (never collides with `npm run test:postgres`). */
 async function freePort(): Promise<number> {
   const server = createServer();
-  const listening = Promise.withResolvers<void>();
-  server.once('error', listening.reject);
-  server.listen(0, '127.0.0.1', listening.resolve);
-  await listening.promise;
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
   const address = server.address();
-  const closed = Promise.withResolvers<void>();
-  server.close(() => closed.resolve());
-  await closed.promise;
+  await new Promise<void>((resolve) => server.close(() => resolve()));
   if (!address || typeof address === 'string') throw new Error('Could not allocate a free port');
   return address.port;
 }
 
 async function withClient<T>(database: string, fn: (client: Client) => Promise<T>): Promise<T> {
   const client = new Client({ connectionString: url(database) });
+  client.on('error', () => {});
   await client.connect();
-  try { return await fn(client); } finally { await client.end(); }
+  try { return await fn(client); } finally { await client.end().catch(() => {}); }
 }
 
 const iso = (value: Date | null) => (value ? value.toISOString() : null);
