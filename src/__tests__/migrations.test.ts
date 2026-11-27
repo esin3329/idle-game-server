@@ -6,6 +6,7 @@ const EXPECTED_MIGRATIONS = [
   '20261005083456_game_postgres.sql',
   '20261005083457_crafting_idempotency.sql',
   '20261005083458_battle_upgrade_option_constraints.sql',
+  '20261127000001_normalize_stage_ids.sql',
 ];
 
 describe('PostgreSQL (Supabase) migrations', () => {
