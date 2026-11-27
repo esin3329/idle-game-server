@@ -116,3 +116,19 @@ export interface PaginatedResponse<T> {
 }
 
 
+
+export interface Operator {
+  id: string;
+  email: string;
+  nickname: string;
+  role: string;
+  status: string;
+  createdAt: string;
+}
+
+export interface AdminHealth {
+  userId?: string;
+  authProvider?: 'local' | 'supabase';
+  status: string;
+  role: string;
+}

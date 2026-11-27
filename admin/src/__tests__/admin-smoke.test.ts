@@ -7,9 +7,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  ApiError, clearTokens, createGrant, createSanction, getAccessToken,
-  listUsers, loadTokens, login, setTokens, suspendUser,
+  ApiError, clearTokens, createGrant, createOperator, createSanction, getAccessToken, getAdminHealth,
+  listOperators, listUsers, loadTokens, login, requestLogin, setTokens, suspendUser, updateOperatorRole,
 } from '../api';
+import { runLoginFlow } from '../context/loginFlow';
 
 // ─── 브라우저 API 스텁 ────────────────────────────────
 
@@ -209,12 +210,93 @@ describe('401 토큰 갱신', () => {
     await expect(listUsers({})).rejects.toMatchObject({ status: 403, code: 'FORBIDDEN', message: '운영자 권한이 필요합니다.' });
     expect(getAccessToken()).toBe('access-new');
   });
+
+  it('동시에 401을 받은 요청들은 /auth/refresh를 1회만 호출하고 모두 새 토큰으로 재시도해 성공한다', async () => {
+    setTokens('expired-access', 'refresh-old');
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === '/api/auth/refresh') {
+        return jsonResponse(200, { accessToken: 'access-new', refreshToken: 'refresh-new' });
+      }
+      const auth = (init?.headers as Record<string, string>)['Authorization'];
+      return auth === 'Bearer access-new'
+        ? jsonResponse(200, { users: [], limit: 20, offset: 0, total: 0 })
+        : jsonResponse(401, { error: 'expired' });
+    });
+
+    const results = await Promise.all([listUsers({}), listUsers({ search: 'abc' }), getAdminHealth().catch((e: unknown) => e)]);
+
+    const refreshCalls = recorded.filter((c) => c.url === '/api/auth/refresh');
+    expect(refreshCalls).toHaveLength(1);
+    expect(refreshCalls[0].body).toEqual({ refreshToken: 'refresh-old' });
+    expect(results[0]).toMatchObject({ users: [] });
+    expect(results[1]).toMatchObject({ users: [] });
+    // 세 번째 요청은 목 응답 형태와 무관하게 새 토큰으로 재시도되었어야 한다
+    const retried = recorded.filter((c) => c.headers['Authorization'] === 'Bearer access-new');
+    expect(retried).toHaveLength(3);
+    expect(getAccessToken()).toBe('access-new');
+    expect(storage.getItem(REFRESH_KEY)).toBe('refresh-new');
+  });
+
+  it('요청 도중 세션이 바뀐 뒤 도착한 이전 요청의 401은 새 세션 토큰을 지우거나 refresh를 시도하지 않는다', async () => {
+    setTokens('old-access', 'old-refresh');
+    let release!: (res: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { release = resolve; }));
+
+    const pending = listUsers({}).catch((e: unknown) => e);
+    setTokens('new-a', 'new-r');
+    release(jsonResponse(401, { error: 'expired' }));
+
+    const error = await pending;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 401, code: 'UNAUTHORIZED' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(getAccessToken()).toBe('new-a');
+    expect(storage.getItem(ACCESS_KEY)).toBe('new-a');
+    expect(storage.getItem(REFRESH_KEY)).toBe('new-r');
+  });
+
+  it('refresh 진행 중 로그인으로 세션이 바뀌면 refresh 결과를 버리고 새 토큰을 유지한다', async () => {
+    setTokens('expired-access', 'refresh-old');
+    let releaseRefresh!: (res: Response) => void;
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401, {}))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { releaseRefresh = resolve; }));
+
+    const pending = listUsers({}).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    setTokens('new-a', 'new-r');
+    releaseRefresh(jsonResponse(200, { accessToken: 'stale-access', refreshToken: 'stale-refresh' }));
+
+    await expect(pending).resolves.toMatchObject({ status: 401, code: 'UNAUTHORIZED' });
+    expect(getAccessToken()).toBe('new-a');
+    expect(storage.getItem(REFRESH_KEY)).toBe('new-r');
+  });
 });
 
 // ─── 엔드포인트 계약 ──────────────────────────────────
 
 describe('엔드포인트 계약', () => {
-  it('login은 인증 헤더 없이 자격 증명을 POST하고 응답 토큰을 저장한다', async () => {
+  it('requestLogin은 인증 헤더 없이 자격 증명을 POST하고 응답만 반환하며 전역 토큰은 바꾸지 않는다', async () => {
+    setTokens('stale-access', 'stale-refresh');
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {
+      userId: 'op-1', playerId: 'player-1', tokens: { accessToken: 'access-login', refreshToken: 'refresh-login' },
+    }));
+
+    const result = await requestLogin('op@example.test', 'pw-12345678');
+
+    const call = callAt(0);
+    expect(call.url).toBe('/api/auth/login');
+    expect(call.method).toBe('POST');
+    expect(call.body).toEqual({ email: 'op@example.test', password: 'pw-12345678' });
+    expect(call.headers).not.toHaveProperty('Authorization');
+    expect(call.headers['Idempotency-Key']).toMatch(/^post-/);
+    expect(result.userId).toBe('op-1');
+    expect(result.tokens).toEqual({ accessToken: 'access-login', refreshToken: 'refresh-login' });
+    expect(getAccessToken()).toBe('stale-access');
+    expect(storage.getItem(REFRESH_KEY)).toBe('stale-refresh');
+  });
+
+  it('login은 requestLogin 응답의 토큰을 저장하고 응답을 반환한다(하위 호환)', async () => {
     setTokens('stale-access', 'stale-refresh');
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {
       userId: 'op-1', playerId: 'player-1', tokens: { accessToken: 'access-login', refreshToken: 'refresh-login' },
@@ -224,23 +306,22 @@ describe('엔드포인트 계약', () => {
 
     const call = callAt(0);
     expect(call.url).toBe('/api/auth/login');
-    expect(call.method).toBe('POST');
-    expect(call.body).toEqual({ email: 'op@example.test', password: 'pw-12345678' });
     expect(call.headers).not.toHaveProperty('Authorization');
-    expect(call.headers['Idempotency-Key']).toMatch(/^post-/);
     expect(result.userId).toBe('op-1');
     expect(getAccessToken()).toBe('access-login');
     expect(storage.getItem(REFRESH_KEY)).toBe('refresh-login');
   });
 
-  it('login 실패(401)는 갱신을 시도하지 않고 서버 오류를 ApiError로 전달하며 기존 토큰을 건드리지 않는다', async () => {
+  it('requestLogin/login 실패(401)는 갱신을 시도하지 않고 서버 오류를 ApiError로 전달하며 기존 토큰을 건드리지 않는다', async () => {
     setTokens('keep-access', 'keep-refresh');
-    fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: '이메일 또는 비밀번호가 일치하지 않습니다.', code: 'INVALID_CREDENTIALS' }));
+    fetchMock.mockImplementation(async () => jsonResponse(401, { error: '이메일 또는 비밀번호가 일치하지 않습니다.', code: 'INVALID_CREDENTIALS' }));
 
-    const error = await login('op@example.test', 'wrong').catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(ApiError);
-    expect(error).toMatchObject({ status: 401, code: 'INVALID_CREDENTIALS', message: '이메일 또는 비밀번호가 일치하지 않습니다.' });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    for (const attempt of [requestLogin, login]) {
+      const error = await attempt('op@example.test', 'wrong').catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({ status: 401, code: 'INVALID_CREDENTIALS', message: '이메일 또는 비밀번호가 일치하지 않습니다.' });
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(getAccessToken()).toBe('keep-access');
   });
 
@@ -299,5 +380,247 @@ describe('엔드포인트 계약', () => {
     fetchMock.mockResolvedValueOnce(new Response('<html>bad gateway</html>', { status: 502, statusText: 'Bad Gateway' }));
 
     await expect(listUsers({})).rejects.toMatchObject({ status: 502, message: 'Bad Gateway', code: undefined });
+  });
+
+  it('getAdminHealth는 인증 헤더와 함께 GET /admin/health를 호출해 role을 반환한다', async () => {
+    setTokens('access-1', 'refresh-1');
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: 'ok', role: 'admin' }));
+
+    const result = await getAdminHealth();
+
+    const call = callAt(0);
+    expect(call.url).toBe('/api/admin/health');
+    expect(call.method).toBe('GET');
+    expect(call.headers['Authorization']).toBe('Bearer access-1');
+    expect(call.headers).not.toHaveProperty('Idempotency-Key');
+    expect(result).toEqual({ status: 'ok', role: 'admin' });
+  });
+
+  it('getAdminHealth는 401 시 refresh 후 재시도한다', async () => {
+    setTokens('expired', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401, { error: 'expired' }))
+      .mockResolvedValueOnce(jsonResponse(200, { accessToken: 'access-2', refreshToken: 'refresh-2' }))
+      .mockResolvedValueOnce(jsonResponse(200, { status: 'ok', role: 'operator' }));
+
+    await expect(getAdminHealth()).resolves.toEqual({ status: 'ok', role: 'operator' });
+    expect(callAt(1).url).toBe('/api/auth/refresh');
+    expect(callAt(2).headers['Authorization']).toBe('Bearer access-2');
+  });
+
+  it('listOperators는 GET /admin/operators 응답을 반환한다', async () => {
+    setTokens('access-1', 'refresh-1');
+    const operators = [{ id: 'o1', email: 'op@example.test', nickname: 'op', role: 'operator', status: 'active', createdAt: '2026-01-01T00:00:00.000Z' }];
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { operators }));
+
+    const result = await listOperators();
+
+    const call = callAt(0);
+    expect(call.url).toBe('/api/admin/operators');
+    expect(call.method).toBe('GET');
+    expect(call.headers['Authorization']).toBe('Bearer access-1');
+    expect(result.operators).toEqual(operators);
+  });
+
+  it('createOperator는 POST /admin/operators에 email/password/nickname/role과 Idempotency-Key를 보낸다', async () => {
+    setTokens('access-1', 'refresh-1');
+    fetchMock.mockResolvedValueOnce(jsonResponse(201, { id: 'o2', email: 'new@example.test', role: 'admin', status: 'active' }));
+
+    const result = await createOperator({ email: 'new@example.test', password: 'pw-12345678', nickname: 'newop', role: 'admin' });
+
+    const call = callAt(0);
+    expect(call.url).toBe('/api/admin/operators');
+    expect(call.method).toBe('POST');
+    expect(call.body).toEqual({ email: 'new@example.test', password: 'pw-12345678', nickname: 'newop', role: 'admin' });
+    expect(call.headers['Idempotency-Key']).toMatch(/^post-/);
+    expect(result).toEqual({ id: 'o2', email: 'new@example.test', role: 'admin', status: 'active' });
+  });
+
+  it('createOperator 권한 오류(403)와 충돌(409)을 ApiError로 전달한다', async () => {
+    setTokens('access-1', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(403, { error: '권한이 없습니다.', code: 'FORBIDDEN' }))
+      .mockResolvedValueOnce(jsonResponse(409, { error: '이미 사용 중인 이메일입니다.', code: 'CONFLICT' }));
+    const input = { email: 'dup@example.test', password: 'pw-12345678', nickname: 'dup', role: 'operator' as const };
+
+    const forbidden = await createOperator(input).catch((e: unknown) => e);
+    expect(forbidden).toBeInstanceOf(ApiError);
+    expect(forbidden).toMatchObject({ status: 403, code: 'FORBIDDEN', message: '권한이 없습니다.' });
+    await expect(createOperator(input)).rejects.toMatchObject({ status: 409, code: 'CONFLICT' });
+    expect(getAccessToken()).toBe('access-1');
+  });
+
+  it('updateOperatorRole은 PUT /admin/operators/:id/role에 role/reason과 Idempotency-Key를 보낸다', async () => {
+    setTokens('access-1', 'refresh-1');
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: 'o2', role: 'operator' }));
+
+    const result = await updateOperatorRole('o2', 'operator', '권한 축소');
+
+    const call = callAt(0);
+    expect(call.url).toBe('/api/admin/operators/o2/role');
+    expect(call.method).toBe('PUT');
+    expect(call.body).toEqual({ role: 'operator', reason: '권한 축소' });
+    expect(call.headers['Idempotency-Key']).toMatch(/^put-/);
+    expect(result).toEqual({ id: 'o2', role: 'operator' });
+  });
+
+  it('updateOperatorRole 권한 오류(403)와 충돌(409)을 ApiError로 전달한다', async () => {
+    setTokens('access-1', 'refresh-1');
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(403, { error: '권한이 없습니다.', code: 'FORBIDDEN' }))
+      .mockResolvedValueOnce(jsonResponse(409, { error: '마지막 admin은 강등할 수 없습니다.', code: 'CONFLICT' }));
+
+    await expect(updateOperatorRole('o1', 'operator', '사유')).rejects.toMatchObject({ status: 403, code: 'FORBIDDEN' });
+    await expect(updateOperatorRole('o1', 'operator', '사유')).rejects.toMatchObject({ status: 409, message: '마지막 admin은 강등할 수 없습니다.' });
+  });
+});
+
+// ─── 로그인 세대 가드 ─────────────────────────────────
+
+describe('로그인 흐름 세대 가드', () => {
+  const LOGIN_URL = '/api/auth/login';
+
+  interface Session { bump: () => number; current: () => number }
+
+  function makeSession(): Session {
+    let gen = 0;
+    return { bump: () => ++gen, current: () => gen };
+  }
+
+  function gate() {
+    let open!: () => void;
+    const promise = new Promise<void>((resolve) => { open = resolve; });
+    return { promise, open };
+  }
+
+  function startLogin(session: Session, email: string, signedInRoles: string[]) {
+    const gen = session.bump();
+    return runLoginFlow({
+      isCurrent: () => session.current() === gen,
+      requestLogin: () => requestLogin(email, 'pw-12345678'),
+      setTokens,
+      fetchHealth: getAdminHealth,
+      onSuccess: (health) => { signedInRoles.push(health.role); },
+      onFailure: () => clearTokens(),
+    });
+  }
+
+  function installServer(loginGates: Record<string, Promise<void>>) {
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === LOGIN_URL) {
+        const email = JSON.parse(init?.body as string).email as string;
+        await loginGates[email];
+        return jsonResponse(200, {
+          userId: email, playerId: `p-${email}`,
+          tokens: { accessToken: `access-${email}`, refreshToken: `refresh-${email}` },
+        });
+      }
+      const auth = (init?.headers as Record<string, string>)['Authorization'];
+      return jsonResponse(200, { status: 'ok', role: auth === 'Bearer access-a' ? 'operator' : 'admin' });
+    });
+  }
+
+  it('로그인 A의 응답이 B보다 늦게 도착해도 B의 토큰과 상태가 유지된다', async () => {
+    const gateA = gate();
+    installServer({ a: gateA.promise });
+    const session = makeSession();
+    const signedIn: string[] = [];
+
+    const loginA = startLogin(session, 'a', signedIn);
+    await startLogin(session, 'b', signedIn);
+    expect(getAccessToken()).toBe('access-b');
+
+    gateA.open();
+    await loginA;
+
+    expect(getAccessToken()).toBe('access-b');
+    expect(storage.getItem(REFRESH_KEY)).toBe('refresh-b');
+    expect(signedIn).toEqual(['admin']);
+    expect(recorded.filter((c) => c.url === '/api/admin/health')).toHaveLength(1);
+  });
+
+  it('로그인 응답 대기 중 로그아웃하면 늦게 온 응답이 토큰을 저장하지 않는다', async () => {
+    const gateA = gate();
+    installServer({ a: gateA.promise });
+    const session = makeSession();
+    const signedIn: string[] = [];
+
+    const loginA = startLogin(session, 'a', signedIn);
+    // logout
+    session.bump();
+    clearTokens();
+
+    gateA.open();
+    await loginA;
+
+    expect(getAccessToken()).toBeNull();
+    expect(storage.size).toBe(0);
+    expect(signedIn).toEqual([]);
+    expect(recorded.filter((c) => c.url === '/api/admin/health')).toHaveLength(0);
+  });
+
+  it('오래된 로그인의 health 조회가 실패해도 새 세션 토큰을 지우지 않고, 최신 로그인이면 토큰을 지운다', async () => {
+    const healthGate = gate();
+    let failHealth = true;
+    fetchMock.mockImplementation(async (input) => {
+      if (String(input) === LOGIN_URL) {
+        return jsonResponse(200, { userId: 'a', playerId: 'p', tokens: { accessToken: 'access-a', refreshToken: 'refresh-a' } });
+      }
+      if (failHealth) await healthGate.promise;
+      // health는 항상 500으로 실패한다
+      return jsonResponse(500, { error: 'boom' });
+    });
+    const session = makeSession();
+    const signedIn: string[] = [];
+
+    const stale = startLogin(session, 'a', signedIn).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(recorded.some((c) => c.url === '/api/admin/health')).toBe(true));
+    session.bump();
+    setTokens('keep-access', 'keep-refresh');
+    healthGate.open();
+    expect(await stale).toMatchObject({ status: 500 });
+    expect(getAccessToken()).toBe('keep-access');
+    expect(signedIn).toEqual([]);
+
+    failHealth = false;
+    clearTokens();
+    await expect(startLogin(session, 'a', signedIn)).rejects.toMatchObject({ status: 500 });
+    expect(getAccessToken()).toBeNull();
+  });
+});
+
+describe('refresh single-flight 세션 격리', () => {
+  it('이전 세션의 refresh가 진행 중이어도 새 세션의 401은 자체 refresh를 1회 실행하고 토큰이 보존된다', async () => {
+    setTokens('a1', 'r1');
+    let releaseOld!: (res: Response) => void;
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === '/api/auth/refresh') {
+        const { refreshToken } = JSON.parse(init?.body as string) as { refreshToken: string };
+        if (refreshToken === 'r1') return new Promise<Response>((resolve) => { releaseOld = resolve; });
+        return jsonResponse(200, { accessToken: 'b2', refreshToken: 'r3' });
+      }
+      const auth = (init?.headers as Record<string, string>)['Authorization'];
+      return auth === 'Bearer b2'
+        ? jsonResponse(200, { users: [], limit: 20, offset: 0, total: 0 })
+        : jsonResponse(401, { error: 'expired' });
+    });
+
+    // 세션 1: 401 → refresh(r1) 진행 중(보류)
+    const oldRequest = listUsers({}).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(recorded.some((c) => c.url === '/api/auth/refresh')).toBe(true));
+
+    // 세션 2: 로그인 후 401
+    setTokens('b1', 'r2');
+    await expect(listUsers({})).resolves.toMatchObject({ users: [] });
+    const refreshCalls = recorded.filter((c) => c.url === '/api/auth/refresh');
+    expect(refreshCalls.map((c) => c.body)).toEqual([{ refreshToken: 'r1' }, { refreshToken: 'r2' }]);
+    expect(getAccessToken()).toBe('b2');
+
+    // 이전 세션의 refresh가 뒤늦게 실패해도 새 세션 토큰은 그대로
+    releaseOld(jsonResponse(401, { error: 'revoked' }));
+    expect(await oldRequest).toMatchObject({ status: 401, code: 'UNAUTHORIZED' });
+    expect(getAccessToken()).toBe('b2');
+    expect(storage.getItem(ACCESS_KEY)).toBe('b2');
+    expect(storage.getItem(REFRESH_KEY)).toBe('r3');
   });
 });
