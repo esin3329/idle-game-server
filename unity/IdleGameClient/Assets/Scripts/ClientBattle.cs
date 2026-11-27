@@ -28,7 +28,10 @@ namespace IdleGame
         private float muzzleUntil, dodgeUntil;
         private int dodgeDirection;
         private bool draggingPilot, battlePreview;
-        private const int PracticeUpgradeCoreStep = 50;
+        private Button ultimateButton;
+        private Text ultimateCaption;
+        private int visibleUltimates;
+        private const int PracticeUpgradeCoreStep = BattleRun.PracticeUpgradeCoreStep;
         // In-battle upgrade selection: the simulation stays paused while the modal (or its offer request) is pending.
         private bool battlePausedForUpgrade, upgradeSelecting, battleUpgradesUnsupported;
         private JToken upgradeOffer;
@@ -71,6 +74,7 @@ namespace IdleGame
             finishKey = null; finishReport = null;
             visibleShots = 0; muzzleUntil = dodgeUntil = 0;
             ResetUpgradeState();
+            ResetUltimateUi();
             DrawBattle();
         }
 
@@ -85,7 +89,7 @@ namespace IdleGame
             content.GetChild(1).GetComponent<Text>().fontSize = 28;
             notice.GetComponent<LayoutElement>().preferredHeight = 36;
             notice.fontSize = 15;
-            notice.text = "자동 사격 · 드래그 / WASD / 방향키 이동\n경비 → 소총 → 중갑·기관총 · 후반으로 갈수록 체력 증가";
+            notice.text = "자동 사격 · 드래그 / WASD / 방향키 이동 · Q/E 궁극기\n경비 → 소총 → 중갑·기관총 · 후반으로 갈수록 체력 증가";
             battleHud = Label("", 17, Accent, 50);
             arena = Box(content, "BattleArena", Panel);
             arena.gameObject.AddComponent<LayoutElement>().preferredHeight = Mathf.Clamp(safeArea.rect.height - 426, 300, 540);
@@ -113,6 +117,8 @@ namespace IdleGame
             muzzleArt.enabled = false;
             var dashes = BattleButtonRow(50);
             BattleButton(dashes, "왼쪽 대시", () => DodgePilot(-1), true);
+            ultimateButton = BattleButton(dashes, "궁극기 준비", ActivateUltimate, true);
+            ultimateCaption = ultimateButton.GetComponentInChildren<Text>();
             BattleButton(dashes, "오른쪽 대시", () => DodgePilot(1), true);
             var actions = BattleButtonRow(44);
             if (battlePreview) BattleButton(actions, "연습 종료 · 보상 없음", EndBulletPreview);
@@ -161,7 +167,7 @@ namespace IdleGame
             return row;
         }
 
-        private void BattleButton(Transform parent, string caption, Action action, bool primary = false)
+        private Button BattleButton(Transform parent, string caption, Action action, bool primary = false)
         {
             var root = Box(parent, caption, primary ? Accent : Background);
             var button = root.gameObject.AddComponent<Button>();
@@ -173,6 +179,7 @@ namespace IdleGame
             label.color = primary ? Background : Color.white;
             label.alignment = TextAnchor.MiddleCenter; label.raycastTarget = false;
             Stretch(label.rectTransform);
+            return button;
         }
 
         private Vector2 BattlePosition(float x, float y)
@@ -192,6 +199,7 @@ namespace IdleGame
                 if (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed) direction.y++;
                 if (keyboard.sKey.isPressed || keyboard.downArrowKey.isPressed) direction.y--;
                 if (keyboard.spaceKey.wasPressedThisFrame) DodgePilot(direction.x < 0 ? -1 : 1);
+                if (keyboard.qKey.wasPressedThisFrame || keyboard.eKey.wasPressedThisFrame) ActivateUltimate();
             }
             direction = direction.normalized * battle.CurrentMoveSpeed * Mathf.Min(Time.unscaledDeltaTime, .1f);
             if (direction != Vector2.zero) battle.MoveTo(battle.PlayerX + direction.x,
@@ -208,6 +216,17 @@ namespace IdleGame
             dodgeDirection = direction;
             dodgeUntil = battle.Elapsed + .25f;
             pilotTarget = new Vector2(battle.PlayerX, battle.PlayerY);
+        }
+
+        private void ActivateUltimate()
+        {
+            if (battle == null || battleNetworkFailed || battleFinishing || battlePausedForUpgrade) return;
+            battle.TriggerUltimate();
+        }
+
+        private void ResetUltimateUi()
+        {
+            ultimateButton = null; ultimateCaption = null; visibleUltimates = 0;
         }
 
         private void TickBattle()
@@ -237,7 +256,24 @@ namespace IdleGame
                 battle.PlayerY + battle.AimY * 45);
             muzzleArt.rectTransform.localRotation = Quaternion.Euler(0, 0,
                 Mathf.Atan2(battle.AimY * arena.rect.height / 540, battle.AimX) * Mathf.Rad2Deg);
-            battleHud.text = $"{Mathf.FloorToInt(battle.Elapsed)} / {battle.Duration}초   HP {battle.Hp:0} / {battle.MaxHp:0}{(battle.ShieldHp > 0 ? $" · 보호막 {battle.ShieldHp:0}" : "")}\n처치 {battle.Kills} · 코어 {battle.Core} · 대시 {(battle.DodgeCooldown > 0 ? battle.DodgeCooldown.ToString("0.0") + "초" : "준비")} · 강화 {battle.AppliedUpgrades.Count}";
+            string ultimateStatus = battle.UltimateCooldown > 0 ? $"{battle.UltimateCooldown:0.0}초" : "준비";
+            battleHud.text = $"{Mathf.FloorToInt(battle.Elapsed)} / {battle.Duration}초   HP {battle.Hp:0} / {battle.MaxHp:0}{(battle.ShieldHp > 0 ? $" · 보호막 {battle.ShieldHp:0}" : "")}\n처치 {battle.Kills} · 코어 {battle.Core} · 대시 {(battle.DodgeCooldown > 0 ? battle.DodgeCooldown.ToString("0.0") + "초" : "준비")} · 궁극기 {ultimateStatus} · 강화 {battle.AppliedUpgrades.Count}";
+            if (ultimateButton)
+            {
+                ultimateButton.interactable = !battleNetworkFailed && !battleFinishing && !battlePausedForUpgrade &&
+                    !battle.Ended && battle.UltimateCooldown <= 0;
+                if (ultimateCaption) ultimateCaption.text = battle.UltimateCooldown > 0 ? $"궁극기 {battle.UltimateCooldown:0.0}초" : "궁극기 준비";
+            }
+            if (battle.UltimatesUsed != visibleUltimates)
+            {
+                visibleUltimates = battle.UltimatesUsed;
+                var blast = Box(arena, "UltimateExplosion", Color.white);
+                MechaArt.Apply(blast.GetComponent<Image>(), "explosion");
+                blast.anchorMin = blast.anchorMax = new Vector2(.5f, .5f);
+                blast.anchoredPosition = pilot.anchoredPosition;
+                blast.sizeDelta = new Vector2(180, 180);
+                battleEffects.Add(new BattleEffect { View = blast, Started = battle.Elapsed, Until = battle.Elapsed + .45f });
+            }
             foreach (var enemy in battle.Enemies)
             {
                 if (!enemyViews.TryGetValue(enemy, out var view))
@@ -281,7 +317,8 @@ namespace IdleGame
                 float sinceHit = battle.Elapsed - enemy.LastHitAt;
                 hitArt.enabled = sinceHit < .2f;
                 if (hitArt.enabled) MechaArt.Apply(hitArt, "fx-metal-" + Mathf.Clamp((int)(sinceHit * 20), 0, 3));
-                view.GetComponent<Image>().color = enemy.IsRanged && enemy.AttackWait < .35f ? new Color32(255, 190, 130, 255) : Color.white;
+                view.GetComponent<Image>().color = enemy.IsRanged && enemy.AttackWait < .35f ? new Color32(255, 190, 130, 255) :
+                    enemy.BurnRemaining > 0 ? new Color32(255, 150, 90, 255) : Color.white;
                 view.GetComponentInChildren<Text>().text = enemy.BossId != null ? $"{enemy.Hp:0}" :
                     $"{(enemy.Kind == BattleRun.EnemyKind.Armored ? "중갑" : enemy.Kind == BattleRun.EnemyKind.MachineGun ? "기관총" : enemy.Kind == BattleRun.EnemyKind.Rifle ? "소총" : "경비")} {enemy.Hp:0}";
             }
@@ -357,11 +394,10 @@ namespace IdleGame
         public void BeginBulletPreview()
         {
             if (battle != null || busy) return;
-            var stage = JObject.Parse("{\"name\":\"생존 연습 · 보상 없음\",\"durationSeconds\":60,\"maxKills\":40,\"bossTimings\":[30],\"bosses\":[{\"code\":\"practice\",\"name\":\"연습 보스\",\"hp\":1200,\"attackPower\":8}]}");
-            var session = JObject.Parse("{\"id\":\"local-bullet-practice\",\"statSnapshot\":{\"maxHp\":200,\"attackPower\":8,\"attackSpeed\":240}}");
-            battle = new BattleRun(stage, session);
+            battle = new BattleRun(BattleRun.BuildPracticeStage(), BattleRun.BuildPracticeSession());
             battlePreview = true; battleNetworkFailed = battleFinishing = false;
             draggingPilot = false; visibleShots = 0; muzzleUntil = dodgeUntil = 0;
+            ResetUltimateUi();
             ResetUpgradeState();
             enemyViews.Clear(); bulletViews.Clear(); battleEffects.Clear(); packets.Clear();
             DrawBattle();
@@ -372,6 +408,7 @@ namespace IdleGame
         {
             battle = null; battlePreview = false; draggingPilot = false;
             ResetUpgradeState();
+            ResetUltimateUi();
             enemyViews.Clear(); bulletViews.Clear(); battleEffects.Clear(); packets.Clear();
             ShowLogin();
         }
@@ -466,9 +503,9 @@ namespace IdleGame
             ("attackPower", "공격력", ""), ("attackSpeed", "공격 간격", "ms"), ("moveSpeed", "이동속도", "%"),
             ("maxHp", "최대 HP", ""), ("dashCooldown", "대시 쿨다운", "ms"), ("ultimatePower", "궁극기 위력", "%"),
             ("ultimateCooldown", "궁극기 쿨다운", "ms"), ("projectileSpeed", "투사체 속도", "%"),
-            ("splashRadius", "폭발 범위", ""), ("critRate", "치명타 확률", "%"), ("critDamage", "치명타 피해", "%"),
+            ("splashRadius", "스플래시 범위", ""), ("critRate", "치명타 확률", "%"), ("critDamage", "치명타 피해", "%"),
             ("hpRegenPerSec", "초당 회복", ""), ("shieldHp", "보호막", ""), ("duration", "지속시간", "%"),
-            ("chainTargets", "연쇄 대상", ""), ("bombRadius", "폭탄 범위", ""), ("healAmount", "회복량", "")
+            ("chainTargets", "연쇄 대상", ""), ("bombRadius", "처치 폭발 범위", ""), ("healAmount", "회복량", "")
         };
 
         /// <summary>Up to four signed effect values for a card, e.g. "공격력 +2 · 공격 간격 -20ms".</summary>
@@ -698,6 +735,7 @@ namespace IdleGame
             int kills = battle.Kills;
             battle = null;
             ResetUpgradeState();
+            ResetUltimateUi();
             enemyViews.Clear(); packets.Clear();
             bulletViews.Clear(); battleEffects.Clear(); draggingPilot = false;
             Clear(title);
@@ -722,6 +760,7 @@ namespace IdleGame
                 await api.AbandonBattle(battle.SessionId);
                 battle = null;
                 ResetUpgradeState();
+                ResetUltimateUi();
                 enemyViews.Clear(); packets.Clear();
                 bulletViews.Clear(); battleEffects.Clear(); draggingPilot = false;
                 await ShowStages();

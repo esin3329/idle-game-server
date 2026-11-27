@@ -362,6 +362,270 @@ namespace IdleGame.Editor
             var totals = NewRun();
             totals.ApplyEffectiveStats(JObject.Parse("{\"projectileSpeed\":30}"), JObject.Parse("{\"id\":\"x\",\"effects\":{\"projectileSpeed\":30}}"));
             Check("effectiveStats projectileSpeed is a total, not stacked with the card", Math.Abs(totals.ProjectileSpeedMultiplier - 1.3f) < .0001f);
+
+            // ── Ultimate ──
+            var ultDefault = NewRun();
+            Check("ultimate defaults to 30 power and a 30 second cooldown, ready at the start", ultDefault.UltimatePower == 30 &&
+                Math.Abs(ultDefault.UltimateCooldownDuration - 30) < .0001f && ultDefault.UltimateCooldown == 0 && ultDefault.UltimatesUsed == 0);
+            var ultSnapshot = WithStats("{\"ultimatePower\":50,\"ultimateCooldown\":12000}");
+            Check("session snapshot sets ultimate power and cooldown", ultSnapshot.UltimatePower == 50 &&
+                Math.Abs(ultSnapshot.UltimateCooldownDuration - 12) < .0001f);
+            Check("ultimate cooldown never drops below 3 seconds", Math.Abs(WithStats("{\"ultimateCooldown\":500}").UltimateCooldownDuration - 3) < .0001f);
+
+            var ult = EmptyRun();
+            var ultWeak = Foe(0, 150, 20);
+            var ultBoss = Foe(80, 150, 25); ultBoss.BossId = "ult-boss";
+            var ultTank = Foe(-80, 150, 100);
+            ult.Enemies.Add(ultWeak); ult.Enemies.Add(ultBoss); ult.Enemies.Add(ultTank);
+            Check("ultimate fires when ready", ult.TriggerUltimate() && ult.UltimatesUsed == 1);
+            Check("ultimate damages every enemy and defeats weak ones", ultWeak.Hp <= 0 && ultBoss.Hp <= 0 && ultTank.Hp == 70 &&
+                ult.Kills == 2 && ult.Enemies.Count == 1 && ult.Enemies[0] == ultTank);
+            Check("ultimate can defeat a boss and records it", ult.BossesDefeated.Count == 1 && ult.BossesDefeated[0] == "ult-boss");
+            Check("ultimate starts its cooldown and blocks a second use", !ult.TriggerUltimate() && ult.UltimatesUsed == 1 &&
+                Math.Abs(ult.UltimateCooldown - 30) < .001f);
+            ult.Enemies.Clear();
+            for (int i = 0; i < 299; i++) ult.Tick(.1f);
+            Check("ultimate stays on cooldown until the full duration passes", !ult.TriggerUltimate() && ult.UltimateCooldown > 0);
+            ult.Tick(.1f); ult.Tick(.1f);
+            Check("ultimate is available again after its cooldown", ult.UltimateCooldown == 0 && ult.TriggerUltimate() && ult.UltimatesUsed == 2);
+
+            var ultEnded = EmptyRun();
+            for (int i = 0; i < 610; i++) ultEnded.Tick(.1f);
+            Check("ultimate cannot fire after the battle ended", ultEnded.Ended && !ultEnded.TriggerUltimate() && ultEnded.UltimatesUsed == 0);
+
+            var ultShield = EmptyRun();
+            ultShield.TriggerUltimate();
+            ultShield.Bullets.Add(Shot(0, 100, -2000));
+            ultShield.Tick(.1f);
+            Check("ultimate grants brief invulnerability", ultShield.Hp == 100 && ultShield.HitsTaken == 0);
+            for (int i = 0; i < 3; i++) ultShield.Tick(.1f);
+            ultShield.Bullets.Add(Shot(0, 100, -2000));
+            ultShield.Tick(.1f);
+            Check("ultimate invulnerability expires after 0.35 seconds", ultShield.Hp == 93 && ultShield.HitsTaken == 1);
+
+            var ultUp = Armed("{\"ultimatePower\":45,\"ultimateCooldown\":20000}");
+            var ultVictim = Foe(0, 150, 40);
+            ultUp.Enemies.Add(ultVictim);
+            ultUp.TriggerUltimate();
+            Check("ultimate upgrades raise power and shorten the cooldown", ultUp.UltimatePower == 45 && ultVictim.Hp <= 0 &&
+                Math.Abs(ultUp.UltimateCooldown - 20) < .001f);
+            ultUp.ApplyEffectiveStats(JObject.Parse("{\"ultimateCooldown\":1000}"));
+            Check("upgraded ultimate cooldown keeps the 3 second floor", Math.Abs(ultUp.UltimateCooldownDuration - 3) < .0001f);
+
+            var ultCluster = Armed("{\"bombRadius\":3}");
+            for (int i = 0; i < 6; i++) ultCluster.Enemies.Add(Foe(i * 10, 150, 30));
+            ultCluster.TriggerUltimate();
+            Check("ultimate with kill explosions iterates a snapshot safely", ultCluster.Kills == 6 && ultCluster.Enemies.Count == 0);
+
+            // ── Splash ──
+            var splash = Armed("{\"splashRadius\":2}");
+            var splashHit = Foe(0, 120, 100); var splashNear = Foe(30, 120, 100); var splashFar = Foe(100, 120, 100);
+            splash.Enemies.Add(splashHit); splash.Enemies.Add(splashNear); splash.Enemies.Add(splashFar);
+            Strike(splash, splashHit, 10);
+            splash.Tick(.1f);
+            Check("splash deals half damage to enemies near the impact", splashHit.Hp == 90 && Math.Abs(splashNear.Hp - 95) < .001f);
+            Check("splash leaves enemies outside its radius untouched", splashFar.Hp == 100 && splash.SplashRadius == 2);
+            var splashKill = Armed("{\"splashRadius\":2}");
+            var splashCenter = Foe(0, 120, 100); var splashWeak = Foe(30, 120, 4);
+            splashKill.Enemies.Add(splashCenter); splashKill.Enemies.Add(splashWeak);
+            Strike(splashKill, splashCenter, 10);
+            splashKill.Tick(.1f);
+            Check("splash defeats weakened enemies", splashKill.Kills == 1 && !splashKill.Enemies.Contains(splashWeak) && splashCenter.Hp == 90);
+            var noSplash = EmptyRun();
+            var noSplashHit = Foe(0, 120, 100); var noSplashNear = Foe(30, 120, 100);
+            noSplash.Enemies.Add(noSplashHit); noSplash.Enemies.Add(noSplashNear);
+            Strike(noSplash, noSplashHit, 10);
+            noSplash.Tick(.1f);
+            Check("without splash nearby enemies take no damage", noSplashNear.Hp == 100);
+
+            // ── Chain lightning ──
+            var chain = Armed("{\"chainTargets\":2}");
+            var chainHit = Foe(0, 120, 100); var chainA = Foe(50, 120, 100); var chainB = Foe(0, 200, 100);
+            var chainC = Foe(100, 120, 100); var chainD = Foe(200, 120, 100);
+            chain.Enemies.AddRange(new[] { chainHit, chainA, chainB, chainC, chainD });
+            Strike(chain, chainHit, 10);
+            chain.Tick(.1f);
+            Check("chain hits the nearest enemies for 60% damage", chainHit.Hp == 90 && Math.Abs(chainA.Hp - 94) < .001f && Math.Abs(chainB.Hp - 94) < .001f);
+            Check("chain respects target count and range", chainC.Hp == 100 && chainD.Hp == 100 && chain.ChainTargets == 2);
+            var chainOne = Armed("{\"chainTargets\":1}");
+            var chainOneHit = Foe(0, 120, 100); var chainOneNear = Foe(50, 120, 5); var chainOneBeyond = Foe(100, 120, 100);
+            chainOne.Enemies.AddRange(new[] { chainOneHit, chainOneNear, chainOneBeyond });
+            Strike(chainOne, chainOneHit, 10);
+            chainOne.Tick(.1f);
+            Check("chain defeats weak targets and does not re-chain", chainOne.Kills == 1 && !chainOne.Enemies.Contains(chainOneNear) &&
+                chainOneBeyond.Hp == 100);
+            var chainAlone = Armed("{\"chainTargets\":5}");
+            var chainAloneHit = Foe(0, 120, 100);
+            chainAlone.Enemies.Add(chainAloneHit);
+            Strike(chainAlone, chainAloneHit, 10);
+            chainAlone.Tick(.1f);
+            Check("chain with no other enemies in range is harmless", chainAloneHit.Hp == 90 && chainAlone.Enemies.Count == 1);
+
+            // ── Kill explosion ──
+            var bomb = Armed("{\"bombRadius\":2}");
+            var bombVictim = Foe(0, 120, 1); var bombNear = Foe(40, 120, 100); var bombFar = Foe(300, 120, 100);
+            bomb.Enemies.AddRange(new[] { bombVictim, bombNear, bombFar });
+            Strike(bomb, bombVictim, 10);
+            bomb.Tick(.1f);
+            Check("kill explosion deals 80% attack power around the victim", bomb.Kills == 1 && Math.Abs(bombNear.Hp - 84) < .001f && bombFar.Hp == 100);
+            var bombChain = Armed("{\"bombRadius\":2}");
+            var bombLine = new List<BattleRun.Enemy> { Foe(0, 120, 1) };
+            for (int i = 1; i <= 4; i++) bombLine.Add(Foe(i * 50, 120, 10));
+            bombChain.Enemies.AddRange(bombLine);
+            Strike(bombChain, bombLine[0], 10);
+            bombChain.Tick(.1f);
+            Check("explosion chain reactions stop after three levels", bombChain.Kills == 4 && bombLine[4].Hp == 10 &&
+                bombChain.Enemies.Count == 1 && bombChain.Enemies[0] == bombLine[4]);
+
+            // ── Burn and duration ──
+            var burnHit = Armed("{\"duration\":100}");
+            var burnTarget = Foe(0, 120, 1000);
+            burnHit.Enemies.Add(burnTarget);
+            Strike(burnHit, burnTarget, 10);
+            burnHit.Tick(.1f);
+            Check("direct hit ignites with duration-scaled burn at a quarter of attack power", Math.Abs(burnTarget.BurnDps - 5) < .001f &&
+                Math.Abs(burnTarget.BurnRemaining - 2.9f) < .001f && Math.Abs(burnTarget.Hp - 989.5f) < .01f);
+            var coldHit = EmptyRun();
+            var coldTarget = Foe(0, 120, 1000);
+            coldHit.Enemies.Add(coldTarget);
+            Strike(coldHit, coldTarget, 10);
+            coldHit.Tick(.1f);
+            Check("without duration bonus hits do not burn", coldTarget.BurnRemaining == 0 && coldTarget.Hp == 990);
+            var burnTick = EmptyRun();
+            var burning = Foe(0, 200, 100); burning.BurnRemaining = 1.5f; burning.BurnDps = 5;
+            burnTick.Enemies.Add(burning);
+            for (int i = 0; i < 5; i++) burnTick.Tick(.1f);
+            Check("burn deals damage over time and counts down", Math.Abs(burning.Hp - 97.5f) < .01f && Math.Abs(burning.BurnRemaining - 1) < .001f);
+            var burnEnd = EmptyRun();
+            var embers = Foe(0, 200, 100); embers.BurnRemaining = .2f; embers.BurnDps = 5;
+            burnEnd.Enemies.Add(embers);
+            for (int i = 0; i < 5; i++) burnEnd.Tick(.1f);
+            Check("burn stops after its remaining time", Math.Abs(embers.Hp - 99) < .01f && embers.BurnRemaining == 0);
+            var burnKill = EmptyRun();
+            var scorched = Foe(0, 200, 5); scorched.BurnRemaining = 3; scorched.BurnDps = 10;
+            burnKill.Enemies.Add(scorched);
+            for (int i = 0; i < 6; i++) burnKill.Tick(.1f);
+            Check("burn damage can defeat enemies", burnKill.Kills == 1 && burnKill.Enemies.Count == 0);
+            var dashBase = EmptyRun(); var dashLong = Armed("{\"duration\":100}");
+            foreach (var dasher in new[] { dashBase, dashLong })
+            {
+                dasher.Dodge(1);
+                for (int i = 0; i < 3; i++) dasher.Tick(.1f);
+                dasher.Bullets.Add(Shot(100, 100, -2000));
+                dasher.Tick(.1f);
+            }
+            Check("duration bonus extends dash invulnerability", dashBase.Hp == 93 && dashLong.Hp == 100);
+            var ultLong = Armed("{\"duration\":100}");
+            ultLong.TriggerUltimate();
+            for (int i = 0; i < 4; i++) ultLong.Tick(.1f);
+            ultLong.Bullets.Add(Shot(0, 100, -2000));
+            ultLong.Tick(.1f);
+            Check("duration bonus extends ultimate invulnerability", ultLong.DurationBonus == 100 && ultLong.Hp == 100);
+
+            // ── effectiveStats totals versus old-server selectedUpgrade.effects ──
+            var totalsRun = EmptyRun();
+            var comboCard = JObject.Parse("{\"id\":\"combo\",\"effects\":{\"splashRadius\":3,\"chainTargets\":2,\"bombRadius\":4,\"duration\":25}}");
+            totalsRun.ApplyEffectiveStats(JObject.Parse("{\"splashRadius\":3,\"chainTargets\":2,\"bombRadius\":4,\"duration\":25,\"ultimatePower\":33,\"ultimateCooldown\":27000}"), comboCard);
+            Check("effectiveStats totals are not stacked with the card deltas", totalsRun.SplashRadius == 3 && totalsRun.ChainTargets == 2 &&
+                totalsRun.BombRadius == 4 && totalsRun.DurationBonus == 25 && totalsRun.UltimatePower == 33 &&
+                Math.Abs(totalsRun.UltimateCooldownDuration - 27) < .0001f);
+            totalsRun.ApplyEffectiveStats(JObject.Parse("{\"splashRadius\":5,\"chainTargets\":1,\"bombRadius\":4,\"duration\":0}"), comboCard);
+            Check("later effectiveStats totals replace earlier values", totalsRun.SplashRadius == 5 && totalsRun.ChainTargets == 1 &&
+                totalsRun.BombRadius == 4 && totalsRun.DurationBonus == 0);
+            var legacyRun = EmptyRun();
+            legacyRun.ApplyEffectiveStats(JObject.Parse("{\"attackPower\":22}"), comboCard);
+            legacyRun.ApplyEffectiveStats(JObject.Parse("{\"attackPower\":24}"), comboCard);
+            Check("old servers without effect totals accumulate card deltas", legacyRun.SplashRadius == 6 && legacyRun.ChainTargets == 4 &&
+                legacyRun.BombRadius == 8 && legacyRun.DurationBonus == 50);
+            var mixedRun = EmptyRun();
+            mixedRun.ApplyEffectiveStats(JObject.Parse("{\"splashRadius\":3}"), comboCard);
+            Check("each effect key falls back independently", mixedRun.SplashRadius == 3 && mixedRun.ChainTargets == 2 &&
+                mixedRun.BombRadius == 4 && mixedRun.DurationBonus == 25);
+            var noEffects = EmptyRun();
+            noEffects.ApplyEffectiveStats(null, new JObject { ["id"] = "plain" });
+            Check("combat effects stay off by default", noEffects.SplashRadius == 0 && noEffects.ChainTargets == 0 &&
+                noEffects.BombRadius == 0 && noEffects.DurationBonus == 0);
+
+            var practiceFx = EmptyRun();
+            for (int level = 1; level <= 5; level++)
+                foreach (var option in BattleRun.BuildPracticeOffer(level)["options"])
+                {
+                    var pick = practiceFx.BuildPracticeSelection(option);
+                    practiceFx.ApplyEffectiveStats(pick["effectiveStats"], pick["selectedUpgrade"]);
+                }
+            Check("practice offers cover ultimate splash chain bomb and duration", practiceFx.SplashRadius == 2 && practiceFx.ChainTargets == 2 &&
+                practiceFx.BombRadius == 3 && practiceFx.DurationBonus == 20 && Math.Abs(practiceFx.UltimatePower - 36) < .001f &&
+                Math.Abs(practiceFx.UltimateCooldownDuration - 25) < .0001f);
+
+            // New effects must not consume the spawn random: spawn placement is identical with and without them.
+            List<float> SpawnTrail(bool effects)
+            {
+                var run = NewRun(false, 40);
+                run.ApplyEffectiveStats(JObject.Parse(effects ?
+                    "{\"maxHp\":1000000,\"splashRadius\":3,\"chainTargets\":3,\"bombRadius\":3,\"duration\":50,\"ultimatePower\":500,\"ultimateCooldown\":3000,\"critRate\":50}" :
+                    "{\"maxHp\":1000000}"));
+                var trail = new List<float>();
+                var known = new HashSet<BattleRun.Enemy>();
+                for (int i = 0; i < 450; i++)
+                {
+                    if (effects) run.TriggerUltimate();
+                    run.Tick(.1f);
+                    foreach (var enemy in run.Enemies)
+                        if (known.Add(enemy)) { trail.Add(enemy.X); trail.Add(enemy.Y); }
+                }
+                return trail;
+            }
+            var plainTrail = SpawnTrail(false); var armedTrail = SpawnTrail(true);
+            bool sameTrail = plainTrail.Count > 0 && plainTrail.Count == armedTrail.Count;
+            for (int i = 0; sameTrail && i < plainTrail.Count; i++) sameTrail = plainTrail[i] == armedTrail[i];
+            Check("combat effects leave enemy spawn positions unchanged", sameTrail);
+
+            // ── Dash and ultimate invulnerability never shorten each other ──
+            var ultDash = EmptyRun();
+            ultDash.TriggerUltimate();
+            ultDash.Dodge(1);
+            ultDash.Tick(.1f); ultDash.Tick(.1f);
+            ultDash.Bullets.Add(Shot(100, 100, -2000));
+            ultDash.Tick(.1f);
+            Check("dash right after the ultimate keeps the longer invulnerability", ultDash.PlayerX == 100 && ultDash.IsInvulnerable &&
+                ultDash.Hp == 100 && ultDash.HitsTaken == 0);
+            var dashUlt = EmptyRun();
+            dashUlt.Dodge(1);
+            dashUlt.TriggerUltimate();
+            dashUlt.Tick(.1f); dashUlt.Tick(.1f);
+            dashUlt.Bullets.Add(Shot(100, 100, -2000));
+            dashUlt.Tick(.1f);
+            Check("ultimate right after a dash extends invulnerability to 0.35 seconds", dashUlt.IsInvulnerable &&
+                dashUlt.Hp == 100 && dashUlt.HitsTaken == 0);
+
+            // ── Practice battle: every new effect is reachable through real progress within 60 seconds ──
+            var practiceBattle = new BattleRun(BattleRun.BuildPracticeStage(), BattleRun.BuildPracticeSession());
+            int offersOpened = 0, nextOfferCore = BattleRun.PracticeUpgradeCoreStep;
+            var wantedEffects = new[] { "ultimatePower", "splashRadius", "chainTargets", "bombRadius", "duration" };
+            var gotEffects = new HashSet<string>();
+            int effectsByLevelFive = 0;
+            for (int i = 0; i < 650 && !practiceBattle.Ended; i++)
+            {
+                practiceBattle.Tick(.1f);
+                while (nextOfferCore <= practiceBattle.MaxCore && practiceBattle.Core >= nextOfferCore)
+                {
+                    var practiceOffer = BattleRun.BuildPracticeOffer(++offersOpened);
+                    nextOfferCore += BattleRun.PracticeUpgradeCoreStep;
+                    JToken chosen = practiceOffer["options"][0];
+                    foreach (var candidate in practiceOffer["options"])
+                        foreach (var key in wantedEffects)
+                            if (candidate["effects"]?[key] != null && !gotEffects.Contains(key)) chosen = candidate;
+                    foreach (var key in wantedEffects)
+                        if (chosen["effects"]?[key] != null) gotEffects.Add(key);
+                    var practiceChoice = practiceBattle.BuildPracticeSelection(chosen);
+                    practiceBattle.ApplyEffectiveStats(practiceChoice["effectiveStats"], practiceChoice["selectedUpgrade"]);
+                    if (offersOpened == 5) effectsByLevelFive = gotEffects.Count;
+                }
+            }
+            Check("practice battle reaches the fifth upgrade offer through play", offersOpened >= 5 && practiceBattle.Core >= 250);
+            Check("practice offers 1-5 deliver ultimate splash chain bomb and duration during play", effectsByLevelFive == 5 &&
+                practiceBattle.UltimatePower > 30 && practiceBattle.UltimateCooldownDuration < 30 && practiceBattle.SplashRadius > 0 &&
+                practiceBattle.ChainTargets > 0 && practiceBattle.BombRadius > 0 && practiceBattle.DurationBonus > 0);
             return "BULLET_TESTS_PASS: " + passed.Count + " checks\n" + string.Join("\n", passed);
         }
 
@@ -392,6 +656,33 @@ namespace IdleGame.Editor
         private static BattleRun.Bullet Shot(float x, float y, float velocity)
         {
             return new BattleRun.Bullet { X = x, Y = y, VelocityY = velocity, Damage = 7, Radius = 5 };
+        }
+
+        private static BattleRun.Enemy Foe(float x, float y, float hp)
+        {
+            return new BattleRun.Enemy { X = x, Y = y, Hp = hp, MaxHp = hp, Damage = 3, AttackWait = 10 };
+        }
+
+        // A friendly shot that reaches the target on the next 0.1 second tick.
+        private static void Strike(BattleRun run, BattleRun.Enemy target, float damage)
+        {
+            run.Bullets.Add(new BattleRun.Bullet { X = target.X, Y = target.Y - 60, Friendly = true, Target = target,
+                Damage = damage, Radius = 4 });
+        }
+
+        private static BattleRun Armed(string effectiveStats)
+        {
+            var run = EmptyRun();
+            run.ApplyEffectiveStats(JObject.Parse(effectiveStats));
+            return run;
+        }
+
+        private static BattleRun WithStats(string extraStats)
+        {
+            var snapshot = new JObject { ["maxHp"] = 100, ["attackPower"] = 20, ["attackSpeed"] = 1000 };
+            snapshot.Merge(JObject.Parse(extraStats));
+            var stage = JObject.Parse("{\"name\":\"verification\",\"durationSeconds\":60,\"maxKills\":1}");
+            return new BattleRun(stage, new JObject { ["id"] = "verification", ["statSnapshot"] = snapshot });
         }
 
         private static void Check(string name, bool condition)
