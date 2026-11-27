@@ -158,7 +158,8 @@ namespace IdleGame.Network
         public Task<JToken> Claim() => Send("api/players/" + Session.PlayerId + "/claim", "POST");
         public Task<JToken> UpgradeCost() => Send("api/players/" + Session.PlayerId + "/upgrade");
         public Task<JToken> Upgrade() => Send("api/players/" + Session.PlayerId + "/upgrade", "POST");
-        public Task<JToken> Stages() => Send("api/stages", authenticated: false);
+        public Task<JToken> Stages(bool? authenticated = null) =>
+            Send("api/stages", authenticated: authenticated ?? Session.IsAuthenticated);
         public Task<JToken> Parts() => Send("api/parts/my");
         public Task<JToken> StartBattle(string stageCode) =>
             Send("api/battles/start", "POST", new { stageCode });

@@ -11,7 +11,7 @@ namespace IdleGame
 {
     public sealed partial class ClientApp : MonoBehaviour
     {
-        [SerializeField] private string serverUrl = "http://100.73.115.1:3007";
+        [SerializeField] private string serverUrl = "https://idle-game-server.qlqlf2226.workers.dev";
         private GameApi api;
         private Font font;
         private RectTransform safeArea;
@@ -218,7 +218,7 @@ namespace IdleGame
 
         private async Task ShowStages()
         {
-            var result = await api.Send("api/stages");
+            var result = await api.Stages();
             if (!(result is JArray stages)) throw new ApiException(0, "INVALID_RESPONSE", "스테이지 목록 형식이 올바르지 않습니다.");
             Clear("출격 준비");
             notice.text = "출격 가능한 스테이지를 선택하세요.";
