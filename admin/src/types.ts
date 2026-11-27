@@ -127,6 +127,8 @@ export interface Operator {
 }
 
 export interface AdminHealth {
+  userId?: string;
+  authProvider?: 'local' | 'supabase';
   status: string;
   role: string;
 }

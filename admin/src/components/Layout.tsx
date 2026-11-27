@@ -8,11 +8,15 @@ const navItems = [
   { to: '/grants', label: '재화 지급', icon: '💰' },
   { to: '/security', label: '보안 이벤트', icon: '🔒' },
   { to: '/audit-logs', label: '감사 로그', icon: '📋' },
+];
+
+const adminNavItems = [
   { to: '/operators', label: '운영자 관리', icon: '🛡️' },
 ];
 
 export default function Layout() {
-  const { logout, role } = useAuth();
+  const { logout, role, isAdmin } = useAuth();
+  const visibleNavItems = isAdmin ? [...navItems, ...adminNavItems] : navItems;
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -28,7 +32,7 @@ export default function Layout() {
           )}
         </div>
         <nav className="flex-1 p-3 space-y-1">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

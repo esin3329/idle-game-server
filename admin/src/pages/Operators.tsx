@@ -46,14 +46,24 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function RoleChangeForm({ operator }: { operator: Operator }) {
+function RoleChangeForm({
+  operator,
+  activeAdminCount,
+  isSelf,
+}: {
+  operator: Operator;
+  activeAdminCount: number;
+  isSelf: boolean;
+}) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
-  const [role, setRole] = useState<OperatorRole>(operator.role === 'operator' ? 'admin' : 'operator');
+  // 현재 역할이 operator/admin이면 그대로 선택해 두고, 그 외 특수 역할은 명시적으로 고르게 한다.
+  const currentRole: OperatorRole | '' = operator.role === 'operator' || operator.role === 'admin' ? operator.role : '';
+  const [role, setRole] = useState<OperatorRole | ''>(currentRole);
   const [reason, setReason] = useState('');
 
   const mutation = useMutation({
-    mutationFn: () => updateOperatorRole(operator.id, role, reason.trim()),
+    mutationFn: (newRole: OperatorRole) => updateOperatorRole(operator.id, newRole, reason.trim()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['operators'] });
       setOpen(false);
@@ -69,16 +79,30 @@ function RoleChangeForm({ operator }: { operator: Operator }) {
     );
   }
 
+  const targetIsActiveAdmin = operator.status === 'active' && (operator.role === 'admin' || operator.role === 'administrator');
+  const lastAdminDemotion = targetIsActiveAdmin && role === 'operator' && activeAdminCount <= 1;
+  const changed = role !== '' && role !== operator.role;
+  const canSubmit = changed && reason.trim().length >= 1 && !lastAdminDemotion && !mutation.isPending;
+
   return (
     <div className="space-y-2 min-w-[240px]">
       <ErrorBanner error={mutation.error} />
+      {lastAdminDemotion && (
+        <p role="alert" className="text-xs text-red-600">마지막 활성 관리자는 강등할 수 없습니다.</p>
+      )}
+      {isSelf && (
+        <p role="alert" className="text-xs text-yellow-700">
+          본인 계정입니다. 역할을 변경하면 본인 권한이 즉시 달라질 수 있습니다.
+        </p>
+      )}
       <div className="flex gap-2">
         <select
           value={role}
-          onChange={(e) => setRole(e.target.value as OperatorRole)}
+          onChange={(e) => setRole(e.target.value as OperatorRole | '')}
           aria-label="변경할 역할"
           className="px-2 py-1 border border-gray-300 rounded-lg text-xs outline-none"
         >
+          {currentRole === '' && <option value="">선택</option>}
           <option value="operator">operator</option>
           <option value="admin">admin</option>
         </select>
@@ -92,8 +116,8 @@ function RoleChangeForm({ operator }: { operator: Operator }) {
       </div>
       <div className="flex gap-2">
         <button
-          onClick={() => mutation.mutate()}
-          disabled={reason.trim().length < 1 || mutation.isPending}
+          onClick={() => { if (role !== '') mutation.mutate(role); }}
+          disabled={!canSubmit}
           className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs transition-colors disabled:opacity-50"
         >
           {mutation.isPending ? '처리 중...' : '적용'}
@@ -109,7 +133,7 @@ function RoleChangeForm({ operator }: { operator: Operator }) {
   );
 }
 
-function CreateOperatorForm() {
+function CreateOperatorForm({ disabled }: { disabled: boolean }) {
   const queryClient = useQueryClient();
   const [email, setEmail] = useState('');
   const [nickname, setNickname] = useState('');
@@ -132,18 +156,24 @@ function CreateOperatorForm() {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    if (valid && !mutation.isPending) mutation.mutate();
+    if (!disabled && valid && !mutation.isPending) mutation.mutate();
   };
 
   return (
     <form onSubmit={submit} className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
       <h3 className="text-sm font-semibold mb-3">운영자 추가</h3>
       <ErrorBanner error={mutation.error} />
+      {disabled && (
+        <div role="alert" className="mb-4 px-4 py-3 bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg text-sm">
+          AUTH_PROVIDER=supabase 모드에서는 관리자 UI의 새 운영자 계정 생성이 지원되지 않습니다.
+        </div>
+      )}
       {mutation.isSuccess && (
         <div role="status" className="mb-4 px-4 py-3 bg-green-50 border border-green-200 text-green-700 rounded-lg text-sm">
           운영자가 추가되었습니다.
         </div>
       )}
+      <fieldset disabled={disabled} className="contents">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
         <div>
           <label className="block text-xs text-gray-500 mb-1">이메일</label>
@@ -195,41 +225,53 @@ function CreateOperatorForm() {
       >
         {mutation.isPending ? '처리 중...' : '운영자 추가'}
       </button>
+      </fieldset>
     </form>
   );
 }
 
 export default function Operators() {
-  const { isAdmin } = useAuth();
-  const { data, isLoading, error } = useQuery({
-    queryKey: ['operators'],
+  const { isAuthenticated, isAdmin, userId, authProvider, sessionKey } = useAuth();
+  // 세션/계정 전환 시 이전 계정의 캐시가 보이지 않도록 키를 격리한다.
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['operators', sessionKey, userId],
     queryFn: listOperators,
+    enabled: isAuthenticated && isAdmin,
   });
 
-  const operators = data?.operators ?? [];
+  if (!isAdmin) {
+    return (
+      <div>
+        <h2 className="text-xl font-bold mb-6">🛡️ 운영자 관리</h2>
+        <div role="alert" className="px-4 py-3 bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg text-sm">
+          접근 권한 없음: 운영자 목록 조회 및 관리는 admin/administrator 권한 전용입니다.
+        </div>
+      </div>
+    );
+  }
+
+  // 오류 시 이전 데이터를 렌더링하지 않는다.
+  const operators = isError ? [] : (data?.operators ?? []);
+  const activeAdminCount = operators.filter(
+    (op) => op.status === 'active' && (op.role === 'admin' || op.role === 'administrator'),
+  ).length;
 
   return (
     <div>
       <h2 className="text-xl font-bold mb-6">🛡️ 운영자 관리</h2>
 
-      {!isAdmin && (
-        <div className="mb-4 px-4 py-3 bg-yellow-50 border border-yellow-200 text-yellow-800 rounded-lg text-sm">
-          읽기 전용입니다. 운영자 추가 및 역할 변경은 admin 권한이 필요합니다.
-        </div>
-      )}
-
       <div className="mb-4 px-4 py-3 bg-blue-50 border border-blue-200 text-blue-800 rounded-lg text-sm">
-        운영자 비밀번호 변경은 이 화면에서 지원하지 않습니다. 서버에서 <code className="font-mono">npm run db:seed-operator</code> CLI를 사용하세요.
+        비밀번호 변경은 관리자 웹 UI에서 지원하지 않습니다. 서버 운영 담당자가 계정 역할·상태를 유지하는 전용 비밀번호 재설정 절차(npm run db:reset-operator-password)로 처리해야 합니다.
       </div>
 
-      {isAdmin && <CreateOperatorForm />}
+      <CreateOperatorForm disabled={authProvider === 'supabase'} />
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
         <h3 className="text-sm font-semibold mb-3">운영자 목록</h3>
-        <ErrorBanner error={error} />
+        <ErrorBanner error={isError ? error : null} />
         {isLoading ? (
           <p className="text-sm text-gray-400 py-4 text-center">불러오는 중...</p>
-        ) : operators.length === 0 && !error ? (
+        ) : operators.length === 0 && !isError ? (
           <p className="text-sm text-gray-400 py-4 text-center">운영자가 없습니다</p>
         ) : (
           <div className="overflow-x-auto">
@@ -241,7 +283,7 @@ export default function Operators() {
                   <th className="text-left py-2 px-3 text-gray-500">역할</th>
                   <th className="text-left py-2 px-3 text-gray-500">상태</th>
                   <th className="text-left py-2 px-3 text-gray-500">생성일</th>
-                  {isAdmin && <th className="text-left py-2 px-3 text-gray-500">역할 변경</th>}
+                  <th className="text-left py-2 px-3 text-gray-500">역할 변경</th>
                 </tr>
               </thead>
               <tbody>
@@ -252,9 +294,14 @@ export default function Operators() {
                     <td className="py-2 px-3"><RoleBadge role={op.role} /></td>
                     <td className="py-2 px-3"><StatusBadge status={op.status} /></td>
                     <td className="py-2 px-3 text-xs text-gray-500">{new Date(op.createdAt).toLocaleString()}</td>
-                    {isAdmin && (
-                      <td className="py-2 px-3"><RoleChangeForm operator={op} /></td>
-                    )}
+                    <td className="py-2 px-3">
+                      <RoleChangeForm
+                        key={`${op.id}:${op.role}`}
+                        operator={op}
+                        activeAdminCount={activeAdminCount}
+                        isSelf={userId !== null && op.id === userId}
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>

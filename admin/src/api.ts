@@ -8,8 +8,12 @@ const BASE_URL = '/api';
 
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
+// 로그인/로그아웃(setTokens/clearTokens)마다 증가하는 세션 세대. refresh에 의한 토큰 회전은 올리지 않는다.
+let tokenEpoch = 0;
+let refreshInFlight: Promise<boolean> | null = null;
 
 export function setTokens(access: string, refresh: string) {
+  tokenEpoch++;
   accessToken = access;
   refreshToken = refresh;
   localStorage.setItem('admin_access_token', access);
@@ -28,6 +32,7 @@ export function loadTokens(): boolean {
 }
 
 export function clearTokens() {
+  tokenEpoch++;
   accessToken = null;
   refreshToken = null;
   localStorage.removeItem('admin_access_token');
@@ -43,8 +48,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
   };
-  if (accessToken && path !== '/auth/login') {
-    headers['Authorization'] = `Bearer ${accessToken}`;
+  // 이 요청이 속한 세션과 사용한 토큰을 캡처해, 뒤늦게 도착한 401이 새 세션을 지우지 않게 한다.
+  const epoch = tokenEpoch;
+  const usedToken = accessToken;
+  if (usedToken && path !== '/auth/login') {
+    headers['Authorization'] = `Bearer ${usedToken}`;
   }
 
   // Idempotency-Key for mutation requests
@@ -57,21 +65,28 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, { ...options, headers });
 
   if (res.status === 401 && path !== '/auth/login') {
-    // Try token refresh
-    if (refreshToken) {
-      const refreshed = await tryRefresh();
-      if (refreshed) {
-        headers['Authorization'] = `Bearer ${accessToken}`;
-        const retryRes = await fetch(`${BASE_URL}${path}`, { ...options, headers });
-        if (!retryRes.ok) {
-          const err = await retryRes.json().catch(() => ({ error: retryRes.statusText }));
-          throw new ApiError(err.error || '요청 실패', retryRes.status, err.code);
-        }
-        return retryRes.json();
-      }
+    const unauthorized = () => new ApiError('인증이 필요합니다.', 401, 'UNAUTHORIZED');
+    // 요청 도중 로그인/로그아웃으로 세션이 바뀜: 새 세션을 건드리지 않는다.
+    if (tokenEpoch !== epoch) throw unauthorized();
+
+    // 같은 세션에서 다른 요청이 이미 토큰을 갱신했다면 refresh 없이 새 토큰으로 재시도한다.
+    let refreshed = accessToken !== null && accessToken !== usedToken;
+    if (!refreshed && refreshToken) {
+      refreshed = await tryRefresh(epoch);
+      if (tokenEpoch !== epoch) throw unauthorized();
     }
-    clearTokens();
-    throw new ApiError('인증이 필요합니다.', 401, 'UNAUTHORIZED');
+    if (!refreshed || !accessToken) {
+      clearTokens();
+      throw unauthorized();
+    }
+
+    headers['Authorization'] = `Bearer ${accessToken}`;
+    const retryRes = await fetch(`${BASE_URL}${path}`, { ...options, headers });
+    if (!retryRes.ok) {
+      const err = await retryRes.json().catch(() => ({ error: retryRes.statusText }));
+      throw new ApiError(err.error || '요청 실패', retryRes.status, err.code);
+    }
+    return retryRes.json();
   }
 
   if (!res.ok) {
@@ -141,20 +156,36 @@ export async function getGameOpsRun(id: string, targetUserId: string): Promise<G
   return request(`/admin/ai/runs/${encodeURIComponent(id)}?${q}`);
 }
 
-async function tryRefresh(): Promise<boolean> {
+async function refreshTokens(startEpoch: number): Promise<boolean> {
+  const currentRefresh = refreshToken;
+  if (!currentRefresh) return false;
   try {
     const res = await fetch(`${BASE_URL}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken }),
+      body: JSON.stringify({ refreshToken: currentRefresh }),
     });
     if (!res.ok) return false;
     const data: { accessToken: string; refreshToken: string } = await res.json();
-    setTokens(data.accessToken, data.refreshToken);
+    // 갱신 도중 로그인/로그아웃으로 세션이 바뀌었다면 결과를 버린다.
+    if (tokenEpoch !== startEpoch) return false;
+    // 같은 세션 안의 토큰 회전이므로 tokenEpoch는 올리지 않는다.
+    accessToken = data.accessToken;
+    refreshToken = data.refreshToken;
+    localStorage.setItem('admin_access_token', data.accessToken);
+    localStorage.setItem('admin_refresh_token', data.refreshToken);
     return true;
   } catch {
     return false;
   }
+}
+
+/** 동시에 발생한 401들이 하나의 refresh 요청을 공유한다(refresh 토큰 회전 중복 방지). */
+function tryRefresh(startEpoch: number): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = refreshTokens(startEpoch).finally(() => { refreshInFlight = null; });
+  }
+  return refreshInFlight;
 }
 
 export class ApiError extends Error {

@@ -209,6 +209,67 @@ describe('401 토큰 갱신', () => {
     await expect(listUsers({})).rejects.toMatchObject({ status: 403, code: 'FORBIDDEN', message: '운영자 권한이 필요합니다.' });
     expect(getAccessToken()).toBe('access-new');
   });
+
+  it('동시에 401을 받은 요청들은 /auth/refresh를 1회만 호출하고 모두 새 토큰으로 재시도해 성공한다', async () => {
+    setTokens('expired-access', 'refresh-old');
+    fetchMock.mockImplementation(async (input, init) => {
+      if (String(input) === '/api/auth/refresh') {
+        return jsonResponse(200, { accessToken: 'access-new', refreshToken: 'refresh-new' });
+      }
+      const auth = (init?.headers as Record<string, string>)['Authorization'];
+      return auth === 'Bearer access-new'
+        ? jsonResponse(200, { users: [], limit: 20, offset: 0, total: 0 })
+        : jsonResponse(401, { error: 'expired' });
+    });
+
+    const results = await Promise.all([listUsers({}), listUsers({ search: 'abc' }), getAdminHealth().catch((e: unknown) => e)]);
+
+    const refreshCalls = recorded.filter((c) => c.url === '/api/auth/refresh');
+    expect(refreshCalls).toHaveLength(1);
+    expect(refreshCalls[0].body).toEqual({ refreshToken: 'refresh-old' });
+    expect(results[0]).toMatchObject({ users: [] });
+    expect(results[1]).toMatchObject({ users: [] });
+    // 세 번째 요청은 목 응답 형태와 무관하게 새 토큰으로 재시도되었어야 한다
+    const retried = recorded.filter((c) => c.headers['Authorization'] === 'Bearer access-new');
+    expect(retried).toHaveLength(3);
+    expect(getAccessToken()).toBe('access-new');
+    expect(storage.getItem(REFRESH_KEY)).toBe('refresh-new');
+  });
+
+  it('요청 도중 세션이 바뀐 뒤 도착한 이전 요청의 401은 새 세션 토큰을 지우거나 refresh를 시도하지 않는다', async () => {
+    setTokens('old-access', 'old-refresh');
+    let release!: (res: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { release = resolve; }));
+
+    const pending = listUsers({}).catch((e: unknown) => e);
+    setTokens('new-a', 'new-r');
+    release(jsonResponse(401, { error: 'expired' }));
+
+    const error = await pending;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 401, code: 'UNAUTHORIZED' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(getAccessToken()).toBe('new-a');
+    expect(storage.getItem(ACCESS_KEY)).toBe('new-a');
+    expect(storage.getItem(REFRESH_KEY)).toBe('new-r');
+  });
+
+  it('refresh 진행 중 로그인으로 세션이 바뀌면 refresh 결과를 버리고 새 토큰을 유지한다', async () => {
+    setTokens('expired-access', 'refresh-old');
+    let releaseRefresh!: (res: Response) => void;
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(401, {}))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { releaseRefresh = resolve; }));
+
+    const pending = listUsers({}).catch((e: unknown) => e);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    setTokens('new-a', 'new-r');
+    releaseRefresh(jsonResponse(200, { accessToken: 'stale-access', refreshToken: 'stale-refresh' }));
+
+    await expect(pending).resolves.toMatchObject({ status: 401, code: 'UNAUTHORIZED' });
+    expect(getAccessToken()).toBe('new-a');
+    expect(storage.getItem(REFRESH_KEY)).toBe('new-r');
+  });
 });
 
 // ─── 엔드포인트 계약 ──────────────────────────────────
