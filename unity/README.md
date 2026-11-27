@@ -44,10 +44,24 @@ PR #15 added four meta screens on the base, implemented in [IdleGameClient/Asset
 |---|---|---|
 | 격납고 · 파츠 | `ShowHangar` | Wallet summary, owned parts, parts catalog, mecha part stats. Equip and upgrade each use a stable `Idempotency-Key` per action. |
 | 제작소 · 설계도 | `ShowWorkshop` | Blueprint workshop list, craft start, claim. In-progress crafts show a local timer. |
-| 연구소 | `ShowResearch` | Research nodes and level-up. Only `prod_passive`, `prod_cap`, and `util_idle_reward` are labeled as applied to current electricity production. Other nodes are stored as preview. |
+| 연구소 | `ShowResearch` | Research nodes and level-up. `LiveResearchCodes` (16 codes below) are labeled `[실시간 적용]`. Any other code is preview-only: stored on the server, not applied to production, idle rewards, upgrade cost, battle stats, or scrap rewards. |
 | 랭킹 | `ShowRankings` | Total-wealth ranking (`nickname`, `totalWealth`, `electricityPerSecond`). |
 
-Part equip and research level-up are stored on the server. They are not yet applied automatically to the active battle session stat snapshot (`MetaPreviewNotice` in `ClientMetaScreens.cs`). A refresh failure after a successful mutation locks the screen and offers reload only, so a stale action button is not shown again.
+`ClientMetaScreens.IsLiveResearchEffect` is true only for these 16 codes, matching the server (`getResearchBonus` in `src/routes.ts`, `computeBattleLoadoutStats` and `calcBattleScrapReward` in `src/shared/mecha-stats.ts`):
+
+| Applied to | Codes |
+|---|---|
+| Electricity production | `prod_eff_1`, `prod_eff_2`, `prod_passive` |
+| Idle reward (cap, reward, claim bonus) | `prod_cap`, `util_idle_reward`, `util_claim_bonus` |
+| Production-upgrade cost discount | `econ_upgrade_discount_1`, `econ_upgrade_discount_2` |
+| Battle stats | `combat_atk_1`, `combat_atk_2`, `combat_hp_1`, `combat_hp_2`, `combat_speed`, `combat_ult` |
+| Battle scrap reward | `econ_scrap`, `econ_battle_reward` |
+
+Equipped parts and those research effects are copied when a battle session starts (`startBattleSession` in `src/shared/battle-session.ts`) into that session's `statSnapshot`, `loadoutSnapshot`, and `researchSnapshot`. A session already in progress keeps those snapshots. Changing hangar loadout or research does not rewrite them.
+
+In-battle level-up is a three-card choice. Progress may return `pendingOffer` or `upgradesAvailable`. The client then calls `POST /api/battles/:sessionId/upgrades/offer` and submits the pick with `POST /api/battles/:sessionId/upgrades/select`. If `upgrades/offer` returns HTTP 404 with an empty code or `ROUTE_NOT_FOUND`, the client marks upgrades unsupported, leaves the battle running, and does not open the modal (`ClientBattle.LoadUpgradeOffer`). See [IdleGameClient/BATTLE.md](./IdleGameClient/BATTLE.md).
+
+A refresh failure after a successful meta mutation locks the screen and offers reload only, so a stale action button is not shown again. The hangar reads `GET /api/mecha/stats` for the current `statSnapshot` and still opens if that call fails with a non-401 error.
 
 ## Historical verification (2026-10-04)
 

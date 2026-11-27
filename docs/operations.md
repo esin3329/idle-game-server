@@ -52,7 +52,7 @@ $env:OPERATOR_PASSWORD = "<한 번만 쓰는 초기 비밀번호>"
 npm run db:seed-operator
 ```
 
-`src/db/seed-operator.ts`는 역할(`admin`, `operator`, `viewer`, `support`, `game_master`, `administrator`)과 권한 코드를 만들고, 지정 이메일을 `role=admin`으로 upsert합니다. **재실행하면 그 계정의 비밀번호 해시를 현재 `OPERATOR_PASSWORD`로 덮어씁니다.** 환경변수를 생략하면 `admin@projectcoreforge.local` / `admin-change-me-immediately`가 쓰이므로 운영 DB에서는 둘 다 지정합니다. 로그인 후 비밀번호를 바꿉니다.
+`src/db/seed-operator.ts`는 역할(`admin`, `operator`, `viewer`, `support`, `game_master`, `administrator`)과 권한 코드를 만들고, 지정 이메일을 `role=admin`으로 upsert합니다. 환경변수를 생략하면 `admin@projectcoreforge.local` / `admin-change-me-immediately`가 쓰이므로 운영 DB에서는 둘 다 지정합니다. 비밀번호 변경이 필요하면 새 `OPERATOR_PASSWORD`를 설정한 후 `npm run db:seed-operator`를 재실행합니다. 재실행은 그 계정의 비밀번호 해시를 현재 `OPERATOR_PASSWORD`로 덮어씁니다. 로그인·갱신·로그아웃 API와 관리자 UI에는 비밀번호 변경 화면이 없습니다.
 
 ## 3. Worker 라우팅
 
@@ -101,7 +101,7 @@ Redaction 경로: `req.headers.authorization`, `req.headers.cookie`, `password`,
 
 운영 데이터는 Supabase PostgreSQL `game` 스키마입니다.
 
-1. **플랫폼 백업.** Supabase 대시보드의 Database Backups를 확인합니다. Point-in-Time Recovery는 프로젝트 플랜에서 켜진 경우에만 있습니다. 보존 기간과 복구 대상(새 프로젝트인지, 기존 프로젝트 되돌리기인지)은 대시보드 안내를 따릅니다. 복구본의 `game.schema_migrations`와 애플리케이션 마이그레이션 파일 체크섬이 맞는지 확인한 다음 Hyperdrive 대상만 바꿉니다.
+1. **플랫폼 백업.** Supabase 대시보드의 Database Backups를 확인합니다. Point-in-Time Recovery는 프로젝트 플랜에서 켜진 경우에만 있습니다. 보존 기간과 복구 대상(새 프로젝트인지, 기존 프로젝트 되돌리기인지)은 대시보드 안내를 따릅니다. 마이그레이션 실행기(`npm run db:migrate:postgres`)로 관리하는 DB에서만 `game.schema_migrations`의 이름·체크섬 일치를 요구합니다. MCP로 초기화한 경로 B 운영 DB는 별도 backfill 전까지 이력 부재를 오류로 간주하지 않으며, 원본과 복구본의 기준선 상태(테이블 수·핵심 데이터)가 동일한지 확인합니다. 그 다음 Hyperdrive 대상만 바꿉니다. 경로 구분은 [STAGE_MIGRATION.md](./STAGE_MIGRATION.md)를 따릅니다.
 2. **논리 덤프.** 진행 중 전투·지급이 있으면 쓰기 트래픽을 멈춘 뒤 덤프합니다.
 
 ```powershell
@@ -162,7 +162,7 @@ npx wrangler rollback
 
 - Supabase 백업(및 PITR이 켜져 있으면 최근 복구 지점)이 갱신됐는지 확인합니다.
 - `npx wrangler deployments list`로 의도하지 않은 버전이 최신인지 확인합니다.
-- `game.schema_migrations` 이름이 [supabase/migrations/](../supabase/migrations/)와 일치하는지 확인합니다. 불일치는 [STAGE_MIGRATION.md](./STAGE_MIGRATION.md) 절차로만 해소합니다.
+- 마이그레이션 실행기(`npm run db:migrate:postgres`)로 관리하는 DB에서만 `game.schema_migrations`의 이름·체크섬 일치를 요구합니다. MCP로 초기화한 경로 B 운영 DB는 별도 backfill 전까지 이력 부재를 오류로 간주하지 않으며, 원본과 복구본의 기준선 상태(테이블 수·핵심 데이터)가 동일한지 확인합니다. 실행기를 쓰는 DB의 불일치는 [STAGE_MIGRATION.md](./STAGE_MIGRATION.md) 절차로만 해소합니다.
 - CI `unit` / `postgres` / `worker`가 기본 브랜치에서 녹색인지 확인합니다.
 
 JSON 저장소 기준의 2026-07-30 autocannon 수치는 용량 계획의 현재 PostgreSQL 수치가 아닙니다. [benchmark.md](./benchmark.md)는 그 측정 기록입니다.
