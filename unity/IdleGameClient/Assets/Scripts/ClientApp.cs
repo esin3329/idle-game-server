@@ -212,6 +212,10 @@ namespace IdleGame
             Label($"생산 강화 비용: {cost["cost"] ?? cost["upgradeCost"]} E", 18, Muted, 32);
             ActionButton("생산 시설 강화", () => Run(async () => { await api.Upgrade(); await ShowBase(); }));
             ActionButton("전투 시작 · 스테이지 선택", () => Run(ShowStages));
+            ActionButton("격납고 · 파츠", () => Run(ShowHangar));
+            ActionButton("제작소 · 설계도", () => Run(ShowWorkshop));
+            ActionButton("연구소", () => Run(ShowResearch));
+            ActionButton("랭킹", () => Run(ShowRankings));
             ActionButton("새로고침", () => Run(ShowBase));
             ActionButton("로그아웃", () => Run(async () => { try { await api.Logout(); } finally { ShowLogin(); } }));
         }
