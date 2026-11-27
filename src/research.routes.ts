@@ -12,7 +12,12 @@ const researchRoutes = new Hono<{ Variables: { userId: string } }>();
 // ─── GET /research — 연구 트리 전체 조회 ──────────
 
 researchRoutes.get('/research', (c) => {
-  return c.json({ nodes: RESEARCH_TREE });
+  const nodes = RESEARCH_TREE.map((node) => ({
+    ...node,
+    baseCost: node.costPerLevel(1),
+    baseEffect: node.effectPerLevel(1),
+  }));
+  return c.json({ nodes });
 });
 
 // ─── GET /research/my — 내 연구 현황 (JWT) ────────
@@ -42,6 +47,10 @@ researchRoutes.get('/research/my', jwtAuth, async (c) => {
       completed,
       prereqs,
       canResearch,
+      // costPerLevel/effectPerLevel은 함수라 JSON에서 누락되므로 표시용 값을 계산해 내려준다.
+      nextCost: currentLevel < node.maxLevel ? node.costPerLevel(currentLevel + 1) : null,
+      currentEffect: currentLevel > 0 ? node.effectPerLevel(currentLevel) : null,
+      nextEffect: currentLevel < node.maxLevel ? node.effectPerLevel(currentLevel + 1) : null,
     };
   });
 

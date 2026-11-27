@@ -58,11 +58,13 @@ namespace IdleGame
             safeArea.anchorMax = new Vector2(area.xMax / Screen.width, area.yMax / Screen.height);
             safeArea.offsetMin = safeArea.offsetMax = Vector2.zero;
             TickBattle();
+            TickCraftTimers();
         }
 
         private void Clear(string section)
         {
             loginError = null;
+            craftTimers.Clear();
             foreach (Transform child in safeArea) { child.gameObject.SetActive(false); Destroy(child.gameObject); }
             var scrollRoot = Box(safeArea, "Page", Color.clear);
             Stretch(scrollRoot);
@@ -212,6 +214,10 @@ namespace IdleGame
             Label($"생산 강화 비용: {cost["cost"] ?? cost["upgradeCost"]} E", 18, Muted, 32);
             ActionButton("생산 시설 강화", () => Run(async () => { await api.Upgrade(); await ShowBase(); }));
             ActionButton("전투 시작 · 스테이지 선택", () => Run(ShowStages));
+            ActionButton("격납고 · 파츠", () => Run(ShowHangar));
+            ActionButton("제작소 · 설계도", () => Run(ShowWorkshop));
+            ActionButton("연구소", () => Run(ShowResearch));
+            ActionButton("랭킹", () => Run(ShowRankings));
             ActionButton("새로고침", () => Run(ShowBase));
             ActionButton("로그아웃", () => Run(async () => { try { await api.Logout(); } finally { ShowLogin(); } }));
         }
@@ -331,15 +337,17 @@ namespace IdleGame
             return field;
         }
 
-        private void ActionButton(string caption, Action action, bool primary = false)
+        private Button ActionButton(string caption, Action action, bool primary = false, bool interactable = true)
         {
             var root = Box(content, caption, primary ? Accent : Panel);
             root.gameObject.AddComponent<LayoutElement>().preferredHeight = 62;
             var button = root.gameObject.AddComponent<Button>(); button.onClick.AddListener(() => action());
+            button.interactable = interactable;
             var obj = new GameObject("Caption", typeof(RectTransform), typeof(Text)); obj.transform.SetParent(root, false);
             var label = obj.GetComponent<Text>(); label.font = font; label.text = caption; label.fontSize = 21;
             label.alignment = TextAnchor.MiddleCenter; label.color = primary ? Background : Color.white; label.raycastTarget = false;
             Stretch(label.rectTransform);
+            return button;
         }
 
         private void DrawMecha()
